@@ -131,7 +131,7 @@ Based on your angel images (bg_5.png, num_1.png, num_3.png):
 
 ### Definitive Choices
 
-#### Generation Engine: **ComfyUI + Flux.1-schnell**
+#### Generation Engine: **ComfyUI + SD1.5**
 
 **Why ComfyUI?**
 - Native GPU selection (critical for dual-GPU setup)
@@ -139,17 +139,6 @@ Based on your angel images (bg_5.png, num_1.png, num_3.png):
 - Lower memory overhead
 - Node-based workflow = flexible pipeline modifications
 - Active development, great community
-
-**Why Flux.1-schnell?**
-- **Speed**: 1-2 second generation at 256×512 (vs 3-4s for SD 1.5)
-- **Quality**: Better coherence, fewer artifacts
-- **Efficiency**: Optimized architecture, less VRAM hungry
-- **Aesthetic match**: Excellent at ethereal/technical styles
-- **Modern**: Released 2024, cutting-edge architecture
-
-**Model Size**: ~24GB download (one-time), ~6-8GB VRAM usage
-
-**Alternative Fallback**: SD 1.5 (if Flux has issues on Maxwell)
 
 #### Backend Controller: **Python 3.13**
 
@@ -584,17 +573,7 @@ Updated by Python controller, read by Rainmeter:
 
 **Acceptable Degradation**: 500ms extra per frame (still hits 4-5 sec refresh)
 
-#### Issue 3: VRAM Limitations
-
-**Risk**: 12GB might not be enough for Flux + large cache
-
-**Mitigation**:
-- Monitor VRAM constantly
-- Flux schnell: 6-8GB typical, plenty of headroom
-- If tight: Reduce buffer size, clear cache more aggressively
-- Worst case: Use SD 1.5 (4GB VRAM usage)
-
-#### Issue 4: Mode Collapse (Aesthetic Convergence)
+#### Issue 3: Mode Collapse (Aesthetic Convergence)
 
 **Risk**: Images might converge to similar look after many iterations
 
@@ -606,7 +585,7 @@ Updated by Python controller, read by Rainmeter:
 
 **Detection**: CLIP embedding drift monitoring
 
-#### Issue 5: File Locking (Windows)
+#### Issue 4: File Locking (Windows)
 
 **Risk**: Rainmeter might lock files, preventing writes
 

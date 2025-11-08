@@ -324,6 +324,39 @@ class ComfyUIClient:
             logger.error(f"Failed to clear queue: {e}")
             return False
 
+    def free_memory(self, unload_models: bool = True, free_memory: bool = True) -> bool:
+        """
+        Free GPU VRAM by unloading models
+        
+        This is CRITICAL for game detection! When a game starts, we need to
+        unload models from VRAM to avoid conflicts and crashes.
+        
+        ComfyUI's /free endpoint accepts:
+        - unload_models: Unload all loaded models from VRAM
+        - free_memory: Run garbage collection and free cached memory
+        
+        Args:
+            unload_models: Whether to unload models from VRAM (default: True)
+            free_memory: Whether to free cached memory (default: True)
+        
+        Returns:
+            True if successful
+        """
+        try:
+            payload = {
+                "unload_models": unload_models,
+                "free_memory": free_memory,
+            }
+            response = self.session.post(f"{self.base_url}/free", json=payload)
+            response.raise_for_status()
+            logger.info("Memory freed (models unloaded from VRAM)")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to free memory: {e}")
+            logger.warning("This might not be critical - ComfyUI may not have /free endpoint")
+            # Don't fail hard - older ComfyUI versions might not have this endpoint
+            return False
+
     def close(self) -> None:
         """Close the HTTP session"""
         if self.session:

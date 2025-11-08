@@ -20,11 +20,17 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class FluxWorkflowBuilder:
+class WorkflowBuilder:
     """
-    Build ComfyUI workflows for Flux.1 model
+    Build ComfyUI workflows for multiple models
     
-    Flux.1-schnell is a fast distilled model optimized for:
+    Supports:
+    - SD 1.5 (stable-diffusion-v1-5) - RECOMMENDED for Maxwell GPUs
+    - Flux.1-schnell (fast distilled model) - Requires modern GPU
+    
+    SD1.5 is the primary focus due to VRAM constraints and Maxwell compatibility.
+    
+    SD1.5 characteristics:
     - 4 inference steps
     - Low CFG (guidance scale ~1.0)
     - Euler sampler with simple scheduler
@@ -327,7 +333,7 @@ def test_workflow_builder() -> bool:
     
     if txt2img and "1" in txt2img and "7" in txt2img:
         print(f"✓ txt2img workflow created: {len(txt2img)} nodes")
-        save_workflow(txt2img, "flux_txt2img.json")
+        save_workflow(txt2img, "workflow_txt2img.json")
     else:
         print("✗ txt2img workflow failed")
         return False
@@ -343,7 +349,7 @@ def test_workflow_builder() -> bool:
     
     if img2img and "1" in img2img and "8" in img2img:
         print(f"✓ img2img workflow created: {len(img2img)} nodes")
-        save_workflow(img2img, "flux_img2img.json")
+        save_workflow(img2img, "workflow_img2img.json")
     else:
         print("✗ img2img workflow failed")
         return False

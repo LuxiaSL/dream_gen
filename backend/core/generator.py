@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .comfyui_api import ComfyUIClient
-from .workflow_builder import FluxWorkflowBuilder
+from .workflow_builder import WorkflowBuilder
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ class DreamGenerator:
         self.client = ComfyUIClient(
             base_url=config["system"]["comfyui_url"]
         )
-        self.workflow_builder = FluxWorkflowBuilder(config)
+        self.workflow_builder = WorkflowBuilder(config)
         
         # Paths
         self.output_dir = Path(config["system"]["output_dir"])

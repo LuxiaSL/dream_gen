@@ -27,6 +27,7 @@ from core.generator import DreamGenerator
 from utils.prompt_manager import PromptManager
 from utils.status_writer import StatusWriter
 from utils.file_ops import atomic_write_with_retry
+from utils.game_detector import GameDetector
 from interpolation.hybrid_generator import SimpleHybridGenerator
 
 # Setup logging
@@ -103,6 +104,7 @@ class DreamController:
         self.generator = DreamGenerator(self.config)
         self.prompt_manager = PromptManager(self.config)
         self.status_writer = StatusWriter(self.output_dir)
+        self.game_detector = GameDetector(self.config)
         
         # Initialize hybrid mode if enabled
         self.hybrid_generator = None
@@ -121,6 +123,8 @@ class DreamController:
         self.frame_count = 0
         self.current_image = None
         self.start_time = None
+        self.vram_freed = False  # Track if we've freed VRAM for gaming
+        self.last_game_check = 0  # Timestamp of last game detection check
         
         # Statistics
         self.generation_times = []
@@ -148,6 +152,67 @@ class DreamController:
             raise ValueError(f"No seed images found in {self.seed_dir}")
         
         return random.choice(seed_images)
+    
+    def check_game_state(self) -> bool:
+        """
+        Check if game is running and manage VRAM accordingly
+        
+        This is THE KEY to preventing VRAM conflicts!
+        
+        When game detected:
+        1. Pause generation
+        2. Free VRAM (unload models)
+        3. Wait for game to close
+        
+        When game closes:
+        4. Resume generation
+        5. Model reloads automatically on next generation (~15s penalty)
+        
+        Returns:
+            True if should pause generation (game running)
+        """
+        # Throttle checks to avoid overhead
+        current_time = time.time()
+        if current_time - self.last_game_check < self.game_detector.check_interval:
+            return self.paused
+        
+        self.last_game_check = current_time
+        
+        # Check for running games
+        game_detected = self.game_detector.is_game_running()
+        
+        if game_detected and not self.paused:
+            # Game just started - pause and free VRAM!
+            self.logger.warning(f"🎮 GAME DETECTED: {game_detected}")
+            self.logger.info("Pausing generation and freeing VRAM...")
+            self.paused = True
+            
+            # Free VRAM (unload models)
+            try:
+                success = self.generator.client.free_memory(
+                    unload_models=True,
+                    free_memory=True
+                )
+                if success:
+                    self.vram_freed = True
+                    self.logger.info("✓ VRAM freed - safe for gaming!")
+                else:
+                    self.logger.warning("Could not free VRAM (ComfyUI might not support /free endpoint)")
+                    self.logger.info("Generation paused anyway for safety")
+            except Exception as e:
+                self.logger.error(f"Error freeing VRAM: {e}")
+            
+            return True
+        
+        elif not game_detected and self.paused:
+            # Game closed - resume!
+            self.logger.info("🎮 Game closed - resuming generation")
+            self.logger.info("(Models will reload on next generation - ~15s delay expected)")
+            self.paused = False
+            self.vram_freed = False
+            return False
+        
+        return self.paused
     
     def should_inject_cache(self) -> bool:
         """
@@ -283,6 +348,12 @@ class DreamController:
                 break
             
             try:
+                # Check for game detection (pause + free VRAM if needed)
+                if self.check_game_state():
+                    # Game is running - skip generation
+                    await asyncio.sleep(2.0)
+                    continue
+                
                 # Check for cache injection
                 if self.should_inject_cache():
                     cached_image = self.inject_cached_frame()
@@ -388,6 +459,12 @@ class DreamController:
                 break
             
             try:
+                # Check for game detection (pause + free VRAM if needed)
+                if self.check_game_state():
+                    # Game is running - skip generation
+                    await asyncio.sleep(2.0)
+                    continue
+                
                 # Check for cache injection
                 if self.should_inject_cache():
                     cached_image = self.inject_cached_frame()
