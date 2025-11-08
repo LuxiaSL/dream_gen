@@ -5,8 +5,8 @@ description = "Living AI Dream Window - A continuously morphing desktop aestheti
 authors = [
     {name = "Luxia", email = "mail.luxia@gmail.com"}
 ]
-readme = "README.md"
-requires-python = ">=3.11"
+readme = "docs/README.md"
+requires-python = ">=3.11,<3.13"
 license = {text = "MIT"}
 keywords = ["ai", "generative-art", "stable-diffusion", "desktop-widget", "comfyui"]
 classifiers = [
@@ -15,15 +15,17 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
     "Topic :: Artistic Software",
     "Topic :: Multimedia :: Graphics",
 ]
 
 dependencies = [
-    # Core dependencies
+    # Core ML dependencies (Note: Install PyTorch with CUDA separately)
+    # Use: uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
     "torch>=2.1.0",
-    "numpy>=1.24.0",
+    "torchvision>=0.16.0",
+    "torchaudio>=2.1.0",
+    "numpy>=1.24.0,<2.0.0",
     "pillow>=10.1.0",
     
     # AI/ML
@@ -94,7 +96,7 @@ packages = ["backend"]
 
 [tool.black]
 line-length = 100
-target-version = ['py311']
+target-version = ['py311', 'py312']
 include = '\.pyi?$'
 extend-exclude = '''
 /(
@@ -164,4 +166,16 @@ markers = [
     "integration: marks tests as integration tests",
     "unit: marks tests as unit tests",
 ]
+
+# UV configuration for PyTorch CUDA packages
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
+
+[tool.uv.sources]
+# PyTorch packages should be installed from the CUDA index
+torch = { index = "pytorch-cu121" }
+torchvision = { index = "pytorch-cu121" }
+torchaudio = { index = "pytorch-cu121" }
 
