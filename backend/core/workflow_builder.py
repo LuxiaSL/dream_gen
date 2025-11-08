@@ -38,7 +38,25 @@ class FluxWorkflowBuilder:
             config: Configuration dictionary
         """
         self.config = config
-        self.model_name = "flux1-schnell.safetensors"
+        
+        # Model selection based on config
+        model_type = config.get("generation", {}).get("model", "sd15")
+        
+        if model_type == "sd15":
+            self.model_name = "v1-5-pruned-emaonly.safetensors"
+            self.default_steps = 20
+            self.default_cfg = 7.0
+            self.default_sampler = "euler_a"
+        elif model_type == "sd21-unclip":
+            self.model_name = "sd21-unclip-h.ckpt"
+            self.default_steps = 20
+            self.default_cfg = 7.0
+            self.default_sampler = "euler_a"
+        else:  # flux.1-schnell
+            self.model_name = "flux1-schnell.safetensors"
+            self.default_steps = 4
+            self.default_cfg = 1.0
+            self.default_sampler = "euler"
         self.vae_name = "ae.safetensors"  # Flux VAE
 
     def build_txt2img(
@@ -47,8 +65,8 @@ class FluxWorkflowBuilder:
         negative_prompt: str = "",
         width: int = 256,
         height: int = 512,
-        steps: int = 4,
-        cfg: float = 1.0,
+        steps: Optional[int] = None,
+        cfg: Optional[float] = None,
         seed: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
@@ -77,6 +95,12 @@ class FluxWorkflowBuilder:
         """
         if seed is None:
             seed = random.randint(0, 2**32 - 1)
+        
+        # Use model-specific defaults if not provided
+        if steps is None:
+            steps = self.default_steps
+        if cfg is None:
+            cfg = self.default_cfg
 
         workflow = {
             "1": {  # Load Checkpoint
@@ -110,8 +134,8 @@ class FluxWorkflowBuilder:
                     "seed": seed,
                     "steps": steps,
                     "cfg": cfg,
-                    "sampler_name": "euler",
-                    "scheduler": "simple",
+                    "sampler_name": self.default_sampler,
+                    "scheduler": "simple" if "flux" in self.model_name else "normal",
                     "denoise": 1.0,  # Full generation
                     "model": ["1", 0],  # Model from checkpoint
                     "positive": ["2", 0],  # Positive conditioning
@@ -145,8 +169,8 @@ class FluxWorkflowBuilder:
         prompt: str,
         negative_prompt: str = "",
         denoise: float = 0.4,
-        steps: int = 4,
-        cfg: float = 1.0,
+        steps: Optional[int] = None,
+        cfg: Optional[float] = None,
         seed: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
@@ -182,6 +206,12 @@ class FluxWorkflowBuilder:
         """
         if seed is None:
             seed = random.randint(0, 2**32 - 1)
+        
+        # Use model-specific defaults if not provided
+        if steps is None:
+            steps = self.default_steps
+        if cfg is None:
+            cfg = self.default_cfg
 
         # Extract just the filename for ComfyUI
         image_filename = Path(image_path).name
@@ -221,9 +251,9 @@ class FluxWorkflowBuilder:
                     "seed": seed,
                     "steps": steps,
                     "cfg": cfg,
-                    "sampler_name": "euler",
-                    "scheduler": "simple",
-                    "denoise": denoise,  # KEY PARAMETER!
+                    "sampler_name": self.default_sampler,
+                    "scheduler": "simple" if "flux" in self.model_name else "normal",
+                    "denoise": denoise,
                     "model": ["1", 0],
                     "positive": ["4", 0],
                     "negative": ["5", 0],

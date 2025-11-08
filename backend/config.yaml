@@ -19,16 +19,23 @@ system:
 
 generation:
   # Model selection
-  model: "flux.1-schnell"  # or "sd15" as fallback
-  resolution: [256, 512]    # Width x Height
+  model: "sd15"  # "sd15", "flux.1-schnell", or "sd21-unclip"
+  resolution: [256, 128]    # Width x Height
   mode: "hybrid"            # "interpolate", "img2img", or "hybrid" (recommended)
   
-  # Flux.1 parameters
+  # Flux.1 parameters (when model: "flux.1-schnell")
   flux:
     steps: 4                # Flux schnell is optimized for 4 steps
     cfg_scale: 1.0          # Flux uses low CFG (guidance scale)
     sampler: "euler"
     scheduler: "simple"
+  
+  # SD 1.5 / 2.1 parameters (when model: "sd15" or "sd21-unclip")
+  sd:
+    steps: 20               # SD typically uses 20-30 steps
+    cfg_scale: 3.0          
+    sampler: "euler_ancestral"      # euler_a works well for SD
+    scheduler: "normal"
   
   # Hybrid mode configuration (RECOMMENDED)
   hybrid:
