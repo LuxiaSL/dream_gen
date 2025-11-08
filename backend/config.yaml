@@ -1,0 +1,108 @@
+# Dream Window Configuration
+# Edit this file to customize behavior
+
+system:
+  # ComfyUI server (will be on Windows machine)
+  comfyui_url: "http://127.0.0.1:8188"
+  
+  # Paths (will be Windows paths when deployed, using placeholders for now)
+  output_dir: "./output"
+  cache_dir: "./cache"
+  seed_dir: "./seeds"
+  log_dir: "./logs"
+  
+  # GPU configuration (Windows only)
+  gpu_id: 1  # GPU #2 (0-indexed) for dedicated generation
+  
+  # Logging
+  log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+
+generation:
+  # Model selection
+  model: "flux.1-schnell"  # or "sd15" as fallback
+  resolution: [256, 512]    # Width x Height
+  mode: "hybrid"            # "interpolate", "img2img", or "hybrid" (recommended)
+  
+  # Flux.1 parameters
+  flux:
+    steps: 4                # Flux schnell is optimized for 4 steps
+    cfg_scale: 1.0          # Flux uses low CFG (guidance scale)
+    sampler: "euler"
+    scheduler: "simple"
+  
+  # Hybrid mode configuration (RECOMMENDED)
+  hybrid:
+    interpolation_frames: 7      # Frames between keyframes (higher = smoother)
+    keyframe_denoise: 0.4        # img2img strength at keyframes (0.3-0.5)
+    interpolation_method: "spherical"  # "spherical" (slerp) or "linear"
+  
+  # img2img parameters (for feedback loop mode)
+  img2img:
+    denoise: 0.35               # Lower = slower drift, higher = more variation
+    # 0.3 = very slow evolution (preserves structure)
+    # 0.4 = balanced (recommended)
+    # 0.5 = faster changes
+    # 0.6+ = rapid mutation (might break aesthetic)
+  
+  # Cache system
+  cache:
+    max_size: 75                    # Number of images to cache (LRU eviction)
+    injection_probability: 0.15     # 15% chance to inject cached image
+    similarity_threshold: 0.7       # CLIP similarity threshold (0.7-0.8 recommended)
+    # 0.9-1.0 = nearly identical
+    # 0.8-0.9 = very similar
+    # 0.7-0.8 = similar aesthetic (good for injection)
+    # 0.6-0.7 = related style
+    # < 0.6   = different aesthetic
+
+display:
+  refresh_interval: 4.0           # Seconds between frame updates
+  crossfade_duration: 1.5         # Seconds for transition
+  buffer_size: 5                  # Pre-generate this many frames
+  
+prompts:
+  # Base theme templates (rotate through these)
+  base_themes:
+    - "ethereal digital angel, dissolving into particles, flowing white lines, technical wireframe overlay, monochrome with cyan accents, architectural diagrams, high contrast, abstract geometry"
+    - "abstract geometry, technical wireframe, architectural diagrams, flowing lines, blueprint aesthetic, monochrome with data corruption, cyberpunk overlay, grid patterns, high contrast"
+    - "cyberpunk angel, glitch art aesthetic, digital corruption, technical overlay, particle dissolution, monochrome with red and cyan accents, wireframe structure, abstract form, high contrast"
+    - "ethereal figure in data stream, technical readouts, flowing particles, architectural wireframe, monochrome with blue highlights, digital dissolution, abstract geometry, high contrast"
+  
+  # Prompt modifiers (optional enhancements)
+  modifiers:
+    enabled: true
+    time_based: true              # Inject time-of-day variations
+    system_based: false           # Future: CPU load affects prompt
+  
+  # Rotation strategy
+  rotation_interval: 20           # Frames before switching base theme
+  
+  # Negative prompt (always used)
+  negative: "photorealistic, photograph, 3d render, realistic photo, blurry, low quality, text, watermark, signature, jpeg artifacts, low contrast, muddy colors, brown tones, warm colors"
+
+# Game detection (auto-pause generation)
+game_detection:
+  enabled: true
+  method: "process"               # "process", "gpu_load", or "fullscreen"
+  check_interval: 5.0             # Seconds between checks
+  
+  # Known game executables (add your games here)
+  known_games:
+    - "eldenring.exe"
+    - "cyberpunk2077.exe"
+    - "game.exe"
+  
+  gpu_threshold: 70               # GPU load % to trigger pause (if using gpu_load method)
+  
+performance:
+  max_queue_size: 10              # Max frames in generation queue
+  generation_timeout: 30          # Seconds before considering generation stuck
+  enable_torch_compile: false     # PyTorch 2.0 optimization (experimental)
+  async_file_operations: true     # Non-blocking file writes
+
+# Aesthetic validation (quality control)
+aesthetic:
+  clip_model: "openai/clip-vit-base-patch32"
+  validation_enabled: false       # Future: reject images that drift too far
+  similarity_warning_threshold: 0.5  # Warn if drifting from seed aesthetic
+
