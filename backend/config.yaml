@@ -39,11 +39,38 @@ generation:
     sampler: "euler"      # euler_a works well for SD
     scheduler: "karras"
   
-  # Hybrid mode configuration (RECOMMENDED)
+  # Hybrid mode configuration (RECOMMENDED for best speed/quality balance)
   hybrid:
-    interpolation_frames: 7      # Frames between keyframes (higher = smoother)
-    keyframe_denoise: 0.4        # img2img strength at keyframes (0.3-0.5)
-    interpolation_method: "spherical"  # "spherical" (slerp) or "linear"
+    # Enable VAE-based latent interpolation (requires diffusers library)
+    # If true: Uses SD 1.5 VAE for fast interpolation (~500MB VRAM)
+    # If false: Falls back to SimpleHybridGenerator (varying denoise levels)
+    use_vae_interpolation: true
+    
+    # Number of interpolated frames between keyframes
+    # Lower (5-7) = more frequent keyframes = higher quality, slower overall
+    # Higher (10-15) = fewer keyframes = smoother but less varied, faster overall
+    # Recommended: 7-10 for good balance
+    # This is the PRIMARY control for tuning display FPS vs generation quality
+    interpolation_frames: 7
+    
+    # Keyframe generation strength (0.0-1.0)
+    # Higher = more variation between keyframes, lower = smoother evolution
+    keyframe_denoise: 0.4
+    
+    # PERFORMANCE OPTIMIZATION: Lower-resolution interpolation
+    # Interpolate at lower resolution, then upscale for massive speedup
+    # 1 = full resolution (512x256) - highest quality, ~4 FPS
+    # 2 = half resolution (256x128) - slight softness, ~10 FPS (RECOMMENDED!)
+    # 4 = quarter resolution (128x64) - more blur, ~15+ FPS
+    # Trade-off: Lower values = faster but softer interpolated frames
+    # Note: Keyframes are always generated at full resolution
+    interpolation_resolution_divisor: 2
+    
+    # Upscaling method for lower-res interpolation
+    # "bilinear" - Fast, good quality (RECOMMENDED)
+    # "bicubic" - Slightly better quality, slightly slower
+    # "nearest" - Fastest, pixelated (not recommended)
+    interpolation_upscale_method: "bilinear"
   
   # img2img parameters (for feedback loop mode)
   img2img:
@@ -68,6 +95,7 @@ display:
   refresh_interval: 4.0           # Seconds between frame updates
   crossfade_duration: 1.5         # Seconds for transition
   buffer_size: 5                  # Pre-generate this many frames
+  max_output_frames: 100          # Keep only last N frames (prevents unbounded growth)
   
 prompts:
   # Base theme templates (rotate through these)

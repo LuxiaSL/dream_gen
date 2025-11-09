@@ -115,14 +115,60 @@ class DreamController:
         
         # Initialize hybrid mode if enabled
         self.hybrid_generator = None
+        self.latent_encoder = None
         if self.config['generation']['mode'] == 'hybrid':
             self.logger.info("Initializing hybrid mode...")
-            self.hybrid_generator = SimpleHybridGenerator(
-                generator=self.generator,
-                keyframe_interval=self.config['generation']['hybrid']['interpolation_frames'],
-                keyframe_denoise=self.config['generation']['hybrid']['keyframe_denoise'],
-                fill_denoise=self.config['generation']['img2img']['denoise']
-            )
+            
+            # Check if VAE interpolation is enabled
+            use_vae = self.config['generation']['hybrid'].get('use_vae_interpolation', True)
+            
+            if use_vae:
+                try:
+                    # Try to load VAE for true interpolation
+                    from interpolation.latent_encoder import LatentEncoder
+                    from interpolation.hybrid_generator import HybridGenerator
+                    
+                    self.logger.info("Loading VAE for interpolation...")
+                    # Get interpolation resolution settings from config
+                    resolution_divisor = self.config['generation']['hybrid'].get('interpolation_resolution_divisor', 1)
+                    upscale_method = self.config['generation']['hybrid'].get('interpolation_upscale_method', 'bilinear')
+                    
+                    self.latent_encoder = LatentEncoder(
+                        device="cuda",
+                        auto_load=True,
+                        interpolation_resolution_divisor=resolution_divisor,
+                        upscale_method=upscale_method
+                    )
+                    
+                    # Use full HybridGenerator with VAE interpolation
+                    self.hybrid_generator = HybridGenerator(
+                        generator=self.generator,
+                        latent_encoder=self.latent_encoder,
+                        interpolation_frames=self.config['generation']['hybrid']['interpolation_frames']
+                    )
+                    self.logger.info("[OK] VAE interpolation enabled")
+                    
+                except Exception as e:
+                    # Fallback to SimpleHybridGenerator
+                    self.logger.error(f"Failed to load VAE: {e}")
+                    self.logger.warning("Falling back to SimpleHybridGenerator (no VAE)")
+                    from interpolation.hybrid_generator import SimpleHybridGenerator
+                    self.hybrid_generator = SimpleHybridGenerator(
+                        generator=self.generator,
+                        keyframe_interval=self.config['generation']['hybrid']['interpolation_frames'],
+                        keyframe_denoise=self.config['generation']['hybrid']['keyframe_denoise'],
+                        fill_denoise=self.config['generation']['img2img']['denoise']
+                    )
+            else:
+                # VAE disabled in config - use SimpleHybridGenerator
+                self.logger.info("VAE interpolation disabled in config")
+                from interpolation.hybrid_generator import SimpleHybridGenerator
+                self.hybrid_generator = SimpleHybridGenerator(
+                    generator=self.generator,
+                    keyframe_interval=self.config['generation']['hybrid']['interpolation_frames'],
+                    keyframe_denoise=self.config['generation']['hybrid']['keyframe_denoise'],
+                    fill_denoise=self.config['generation']['img2img']['denoise']
+                )
         
         # State
         self.running = False
@@ -137,11 +183,46 @@ class DreamController:
         self.generation_times = []
         self.cache_injections = 0
         
+        # Frame management
+        self.max_output_frames = self.config.get('display', {}).get('max_output_frames', 100)
+        
         self.logger.info("[OK] Initialization complete")
         self.logger.info(f"Mode: {self.config['generation']['mode']}")
         self.logger.info(f"Resolution: {self.config['generation']['resolution']}")
         self.logger.info(f"Model: {self.config['generation']['model']}")
         self.logger.info("=" * 70)
+    
+    def cleanup_old_frames(self):
+        """
+        Clean up old numbered frames to prevent unbounded storage growth
+        
+        Keeps only the most recent N frames (configured in display.max_output_frames).
+        Preserves special files: current_frame.png, previous_frame.png, next_frame.png, status.json
+        
+        This runs periodically during generation to maintain a rolling window of frames.
+        """
+        try:
+            # Get all numbered frames
+            frame_files = sorted(self.output_dir.glob("frame_*.png"))
+            
+            if len(frame_files) <= self.max_output_frames:
+                return  # Nothing to clean
+            
+            # Calculate how many to delete
+            num_to_delete = len(frame_files) - self.max_output_frames
+            files_to_delete = frame_files[:num_to_delete]
+            
+            # Delete oldest frames
+            for frame_file in files_to_delete:
+                try:
+                    frame_file.unlink()
+                except Exception as e:
+                    self.logger.warning(f"Failed to delete {frame_file.name}: {e}")
+            
+            self.logger.info(f"Cleaned up {num_to_delete} old frames (keeping last {self.max_output_frames})")
+            
+        except Exception as e:
+            self.logger.error(f"Error during frame cleanup: {e}")
     
     def get_random_seed_image(self) -> Path:
         """
@@ -179,6 +260,10 @@ class DreamController:
             if embedding is None:
                 self.logger.warning(f"Failed to encode image for cache: {frame_path.name}")
                 return False
+            
+            # Convert numpy array to list for JSON serialization
+            if hasattr(embedding, 'tolist'):
+                embedding = embedding.tolist()
             
             # Add to cache
             generation_params = {
@@ -332,13 +417,18 @@ class DreamController:
                 return None
             
             # Weighted random selection from similar images
-            selected_cache_id, similarity = self.aesthetic_matcher.weighted_random_selection(similar)
+            selected_cache_id = self.aesthetic_matcher.weighted_random_selection(similar)
+            
+            if not selected_cache_id:
+                return None
             
             # Get the cached image path
             cached_entry = self.cache.get(selected_cache_id)
             if cached_entry:
                 self.cache_injections += 1
-                self.logger.info(f"[CACHE] INJECTION #{self.cache_injections}: {selected_cache_id} (similarity: {similarity:.3f})")
+                # Log with similarity info from similar list
+                similarity_score = next((s for cid, s in similar if cid == selected_cache_id), 0.0)
+                self.logger.info(f"[CACHE] INJECTION #{self.cache_injections}: {selected_cache_id} (similarity: {similarity_score:.3f})")
                 return cached_entry.image_path
             
         except Exception as e:
@@ -520,7 +610,10 @@ class DreamController:
             return
         
         self.logger.info("Starting hybrid generation loop")
-        self.logger.info(f"Keyframe interval: {self.hybrid_generator.keyframe_interval}")
+        # Use interpolation_frames for both HybridGenerator and SimpleHybridGenerator
+        interval = getattr(self.hybrid_generator, 'interpolation_frames', 
+                          getattr(self.hybrid_generator, 'keyframe_interval', 7))
+        self.logger.info(f"Keyframe interval: {interval}")
         self.logger.info(f"Target: {'infinite' if max_frames is None else max_frames} frames")
         
         # Clear any stale jobs from queue before starting
@@ -580,11 +673,28 @@ class DreamController:
                 
                 start_time = time.time()
                 
-                new_frame = self.hybrid_generator.generate_next_frame(
-                    current_image=self.current_image,
-                    prompt=prompt,
-                    frame_number=self.frame_count
-                )
+                # Check if using full HybridGenerator (VAE) or SimpleHybridGenerator
+                if hasattr(self.hybrid_generator, 'generate_next_frame'):
+                    # Full HybridGenerator with proper signature
+                    if self.latent_encoder:
+                        # VAE-based interpolation
+                        new_frame = self.hybrid_generator.generate_next_frame(
+                            current_image=self.current_image,
+                            prompt=prompt,
+                            frame_number=self.frame_count,
+                            denoise=self.config['generation']['hybrid']['keyframe_denoise']
+                        )
+                    else:
+                        # SimpleHybridGenerator
+                        new_frame = self.hybrid_generator.generate_next_frame(
+                            current_image=self.current_image,
+                            prompt=prompt,
+                            frame_number=self.frame_count
+                        )
+                else:
+                    # Fallback (shouldn't happen)
+                    self.logger.error("Hybrid generator missing generate_next_frame method")
+                    new_frame = None
                 
                 elapsed = time.time() - start_time
                 
@@ -595,18 +705,31 @@ class DreamController:
                     
                     self.write_current_frame(new_frame)
                     
-                    is_keyframe = ((self.frame_count - 1) % self.hybrid_generator.keyframe_interval == 0)
+                    # Determine if this was a keyframe (for both generator types)
+                    is_keyframe = False
+                    if hasattr(self.hybrid_generator, 'interpolation_frames'):
+                        # Full HybridGenerator
+                        is_keyframe = ((self.frame_count - 1) % (self.hybrid_generator.interpolation_frames + 1) == 0)
+                    elif hasattr(self.hybrid_generator, 'keyframe_interval'):
+                        # SimpleHybridGenerator  
+                        is_keyframe = ((self.frame_count - 1) % self.hybrid_generator.keyframe_interval == 0)
+                    
                     mode = "hybrid_keyframe" if is_keyframe else "hybrid_fill"
                     self.update_status(elapsed, mode, prompt)
                     
                     # Add keyframes to cache (not fill frames to save processing time)
                     if is_keyframe:
-                        denoise = self.hybrid_generator.keyframe_denoise
+                        # Get denoise value from appropriate generator
+                        denoise = getattr(self.hybrid_generator, 'keyframe_denoise', 0.4)
                         self.add_frame_to_cache(new_frame, prompt, denoise)
                     
                     avg_time = sum(self.generation_times[-10:]) / min(10, len(self.generation_times))
                     self.logger.info(f"[OK] Generated in {elapsed:.2f}s (avg: {avg_time:.2f}s)")
                     self.logger.info(f"Cache: {self.cache.size()}/{self.config['generation']['cache']['max_size']}")
+                    
+                    # Periodic cleanup every 20 frames
+                    if self.frame_count % 20 == 0:
+                        self.cleanup_old_frames()
                     
                     await asyncio.sleep(1.0)
                 else:

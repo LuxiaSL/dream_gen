@@ -2,27 +2,32 @@
 Spherical linear interpolation (slerp) for latent space
 
 Provides smooth, magnitude-preserving interpolation between latent vectors.
+Optimized for speed with pre-computation and GPU acceleration.
 """
 
 import torch
 import numpy as np
-from typing import Union
+from typing import Union, Optional, Tuple
 
 
 def spherical_lerp(
     latent_a: torch.Tensor,
     latent_b: torch.Tensor,
     t: float,
-    epsilon: float = 1e-6
+    epsilon: float = 1e-6,
+    precomputed: Optional[Tuple] = None
 ) -> torch.Tensor:
     """
-    Spherical linear interpolation (slerp) between two latent tensors
+    Spherical linear interpolation (slerp) between two latent tensors (OPTIMIZED)
     
     Why slerp over linear interpolation?
     - Preserves magnitude (important for latent spaces)
     - Smoother, more natural transitions
     - Avoids "dead zones" in middle of interpolation
     - Better for high-dimensional spaces
+    
+    OPTIMIZATION: Supports pre-computed values to avoid redundant calculations
+    when interpolating between the same two latents multiple times.
     
     Algorithm:
     1. Flatten latents to vectors
@@ -37,6 +42,8 @@ def spherical_lerp(
         latent_b: Ending latent tensor (same shape as latent_a)
         t: Interpolation factor (0.0 = latent_a, 1.0 = latent_b)
         epsilon: Threshold for near-identical vectors
+        precomputed: Optional tuple of (a_norm, b_norm, omega, sin_omega, mag_a, mag_b, original_shape)
+                     from precompute_slerp_params() for faster repeated interpolations
     
     Returns:
         Interpolated latent tensor (same shape as inputs)
@@ -58,7 +65,32 @@ def spherical_lerp(
     if t == 1.0:
         return latent_b.clone()
     
-    # Store original shape for later
+    # Use pre-computed values if available (OPTIMIZATION)
+    if precomputed is not None:
+        a_norm, b_norm, omega, sin_omega, mag_a, mag_b, original_shape = precomputed
+        
+        # If vectors are nearly identical, fall back to linear
+        if torch.abs(omega) < epsilon:
+            result_magnitude = (1.0 - t) * mag_a + t * mag_b
+            result_norm = (1.0 - t) * a_norm + t * b_norm
+            result_flat = result_norm * result_magnitude
+        else:
+            # Compute interpolation weights (only depends on t, omega, sin_omega)
+            weight_a = torch.sin((1.0 - t) * omega) / sin_omega
+            weight_b = torch.sin(t * omega) / sin_omega
+            
+            # Interpolate on unit sphere
+            result_norm = weight_a * a_norm + weight_b * b_norm
+            
+            # Scale back to interpolated magnitude
+            result_magnitude = (1.0 - t) * mag_a + t * mag_b
+            result_flat = result_norm * result_magnitude
+        
+        # Reshape back
+        result = result_flat.reshape(original_shape)
+        return result
+    
+    # Standard path (no pre-computed values)
     original_shape = latent_a.shape
     
     # Flatten to 1D vectors for interpolation
@@ -105,6 +137,45 @@ def spherical_lerp(
     result = result_flat.reshape(original_shape)
     
     return result
+
+
+def precompute_slerp_params(latent_a: torch.Tensor, latent_b: torch.Tensor, epsilon: float = 1e-6) -> Tuple:
+    """
+    Pre-compute slerp parameters for faster repeated interpolations
+    
+    When you need to interpolate multiple times between the same two latents
+    (e.g., generating 7 frames between two keyframes), pre-computing these values
+    and reusing them is much faster than recalculating for each frame.
+    
+    Args:
+        latent_a: Starting latent
+        latent_b: Ending latent
+        epsilon: Threshold for near-identical vectors
+    
+    Returns:
+        Tuple of (a_norm, b_norm, omega, sin_omega, mag_a, mag_b, original_shape)
+    """
+    original_shape = latent_a.shape
+    
+    # Flatten
+    a_flat = latent_a.reshape(-1)
+    b_flat = latent_b.reshape(-1)
+    
+    # Compute magnitudes
+    mag_a = torch.norm(a_flat)
+    mag_b = torch.norm(b_flat)
+    
+    # Normalize
+    a_norm = a_flat / (mag_a + epsilon)
+    b_norm = b_flat / (mag_b + epsilon)
+    
+    # Compute angle
+    dot_product = torch.dot(a_norm, b_norm)
+    dot_product = torch.clamp(dot_product, -1.0, 1.0)
+    omega = torch.acos(dot_product)
+    sin_omega = torch.sin(omega)
+    
+    return (a_norm, b_norm, omega, sin_omega, mag_a, mag_b, original_shape)
 
 
 def linear_lerp(
