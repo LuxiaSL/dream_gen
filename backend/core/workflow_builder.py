@@ -48,21 +48,27 @@ class WorkflowBuilder:
         # Model selection based on config
         model_type = config.get("generation", {}).get("model", "sd15")
         
+        # Get config sections
+        gen_config = config.get("generation", {})
+        
         if model_type == "sd15":
             self.model_name = "v1-5-pruned-emaonly.safetensors"
-            self.default_steps = 20
-            self.default_cfg = 7.0
-            self.default_sampler = "euler_a"
+            sd_config = gen_config.get("sd", {})
+            self.default_steps = sd_config.get("steps", 20)
+            self.default_cfg = sd_config.get("cfg_scale", 7.0)
+            self.default_sampler = sd_config.get("sampler", "euler_ancestral")
         elif model_type == "sd21-unclip":
             self.model_name = "sd21-unclip-h.ckpt"
-            self.default_steps = 20
-            self.default_cfg = 7.0
-            self.default_sampler = "euler_a"
+            sd_config = gen_config.get("sd", {})
+            self.default_steps = sd_config.get("steps", 20)
+            self.default_cfg = sd_config.get("cfg_scale", 7.0)
+            self.default_sampler = sd_config.get("sampler", "euler_ancestral")
         else:  # flux.1-schnell
             self.model_name = "flux1-schnell.safetensors"
-            self.default_steps = 4
-            self.default_cfg = 1.0
-            self.default_sampler = "euler"
+            flux_config = gen_config.get("flux", {})
+            self.default_steps = flux_config.get("steps", 4)
+            self.default_cfg = flux_config.get("cfg_scale", 1.0)
+            self.default_sampler = flux_config.get("sampler", "euler")
         self.vae_name = "ae.safetensors"  # Flux VAE
 
     def build_txt2img(
@@ -83,7 +89,7 @@ class WorkflowBuilder:
         2. CLIPTextEncode (positive) - Encode prompt
         3. CLIPTextEncode (negative) - Encode negative prompt
         4. EmptyLatentImage - Create latent canvas
-        5. KSampler - Generate in latent space
+        5. FSampler Advanced - Generate in latent space (faster than KSampler)
         6. VAEDecode - Decode to image
         7. SaveImage - Save output
         
@@ -135,24 +141,40 @@ class WorkflowBuilder:
                 },
                 "class_type": "EmptyLatentImage",
             },
-            "5": {  # KSampler (main generation)
+            "5": {  # FSampler Advanced (faster than KSampler with extra control)
                 "inputs": {
                     "seed": seed,
                     "steps": steps,
                     "cfg": cfg,
-                    "sampler_name": self.default_sampler,
+                    "sampler": self.default_sampler,
                     "scheduler": "simple" if "flux" in self.model_name else "normal",
                     "denoise": 1.0,  # Full generation
                     "model": ["1", 0],  # Model from checkpoint
                     "positive": ["2", 0],  # Positive conditioning
                     "negative": ["3", 0],  # Negative conditioning
                     "latent_image": ["4", 0],  # Empty latent
+                    # FSampler Advanced specific parameters (good defaults)
+                    "protect_first_steps": 2,  # Warmup steps never skipped
+                    "protect_last_steps": 2,  # Quality safeguard
+                    "adaptive_mode": "none",  # Can enable later: "learning"
+                    "smoothing_beta": 0.9990,
+                    "skip_mode": "none",  # Can enable: "h2/s3" or "adaptive"
+                    "skip_indices": "",  # Empty = use skip_mode
+                    "anchor_interval": 4,
+                    "max_consecutive_skips": 4,
+                    "start_at_step": -1,  # -1 = start from 0
+                    "end_at_step": -1,  # -1 = full schedule
+                    "add_noise": 0.0,  # 0 = deterministic
+                    "noise_type": "whitened",
+                    "verbose": False,
+                    "no_grad": True,
+                    "official_comfy": True,
                 },
-                "class_type": "KSampler",
+                "class_type": "FSamplerAdvanced",
             },
             "6": {  # VAE Decode
                 "inputs": {
-                    "samples": ["5", 0],  # Latent from KSampler
+                    "samples": ["5", 0],  # Latent from FSampler Advanced
                     "vae": ["1", 2],  # VAE from checkpoint
                 },
                 "class_type": "VAEDecode",
@@ -194,7 +216,7 @@ class WorkflowBuilder:
         3. VAEEncode - Encode image to latent space
         4. CLIPTextEncode (positive) - Encode prompt
         5. CLIPTextEncode (negative) - Encode negative prompt
-        6. KSampler - Generate in latent space (with denoise)
+        6. FSampler Advanced - Generate in latent space (faster than KSampler, with denoise)
         7. VAEDecode - Decode to image
         8. SaveImage - Save output
         
@@ -252,20 +274,36 @@ class WorkflowBuilder:
                 },
                 "class_type": "CLIPTextEncode",
             },
-            "6": {  # KSampler
+            "6": {  # FSampler Advanced (faster than KSampler with extra control)
                 "inputs": {
                     "seed": seed,
                     "steps": steps,
                     "cfg": cfg,
-                    "sampler_name": self.default_sampler,
+                    "sampler": self.default_sampler,
                     "scheduler": "simple" if "flux" in self.model_name else "normal",
                     "denoise": denoise,
                     "model": ["1", 0],
                     "positive": ["4", 0],
                     "negative": ["5", 0],
                     "latent_image": ["3", 0],  # Encoded latent from input
+                    # FSampler Advanced specific parameters (good defaults)
+                    "protect_first_steps": 2,  # Warmup steps never skipped
+                    "protect_last_steps": 2,  # Quality safeguard
+                    "adaptive_mode": "none",  # Can enable later: "learning"
+                    "smoothing_beta": 0.9990,
+                    "skip_mode": "none",  # Can enable: "h2/s3" or "adaptive"
+                    "skip_indices": "",  # Empty = use skip_mode
+                    "anchor_interval": 4,
+                    "max_consecutive_skips": 4,
+                    "start_at_step": -1,  # -1 = start from 0
+                    "end_at_step": -1,  # -1 = full schedule
+                    "add_noise": 0.0,  # 0 = deterministic
+                    "noise_type": "whitened",
+                    "verbose": False,
+                    "no_grad": True,
+                    "official_comfy": True,
                 },
-                "class_type": "KSampler",
+                "class_type": "FSamplerAdvanced",
             },
             "7": {  # VAE Decode
                 "inputs": {
@@ -320,7 +358,7 @@ def test_workflow_builder() -> bool:
     print("=" * 60)
     
     config = {}  # Empty config for testing
-    builder = FluxWorkflowBuilder(config)
+    builder = WorkflowBuilder(config)
     
     # Test 1: txt2img workflow
     print("\nTest 1: txt2img workflow")
@@ -332,10 +370,10 @@ def test_workflow_builder() -> bool:
     )
     
     if txt2img and "1" in txt2img and "7" in txt2img:
-        print(f"✓ txt2img workflow created: {len(txt2img)} nodes")
+        print(f"[OK] txt2img workflow created: {len(txt2img)} nodes")
         save_workflow(txt2img, "workflow_txt2img.json")
     else:
-        print("✗ txt2img workflow failed")
+        print("[FAIL] txt2img workflow failed")
         return False
     
     # Test 2: img2img workflow
@@ -348,10 +386,10 @@ def test_workflow_builder() -> bool:
     )
     
     if img2img and "1" in img2img and "8" in img2img:
-        print(f"✓ img2img workflow created: {len(img2img)} nodes")
+        print(f"[OK] img2img workflow created: {len(img2img)} nodes")
         save_workflow(img2img, "workflow_img2img.json")
     else:
-        print("✗ img2img workflow failed")
+        print("[FAIL] img2img workflow failed")
         return False
     
     # Test 3: Different denoise values
@@ -364,13 +402,13 @@ def test_workflow_builder() -> bool:
         )
         actual_denoise = workflow["6"]["inputs"]["denoise"]
         if actual_denoise == denoise:
-            print(f"✓ Denoise {denoise}: correct")
+            print(f"[OK] Denoise {denoise}: correct")
         else:
-            print(f"✗ Denoise {denoise}: got {actual_denoise}")
+            print(f"[FAIL] Denoise {denoise}: got {actual_denoise}")
             return False
     
     print("\n" + "=" * 60)
-    print("Workflow builder test PASSED ✓")
+    print("Workflow builder test PASSED [OK]")
     print("=" * 60)
     
     return True

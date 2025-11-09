@@ -60,7 +60,11 @@ class AestheticMatcher:
             model_name = "openai/clip-vit-base-patch32"
 
             self.processor = CLIPProcessor.from_pretrained(model_name)
-            self.model = CLIPModel.from_pretrained(model_name).to(self.device)
+            # Use safetensors format (modern, safer, and doesn't require torch 2.6+)
+            self.model = CLIPModel.from_pretrained(
+                model_name,
+                use_safetensors=True  # Force safetensors format
+            ).to(self.device)
             self.model.eval()  # Inference mode
 
             logger.info(f"CLIP model loaded on {self.device}")

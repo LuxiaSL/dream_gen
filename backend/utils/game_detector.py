@@ -170,9 +170,9 @@ def test_game_detector():
     game = detector.is_game_running()
     
     if game:
-        print(f"✓ Game detected: {game}")
+        print(f"[OK] Game detected: {game}")
     else:
-        print("✗ No games detected")
+        print("[X] No games detected")
     
     print("\n" + "=" * 60)
     print("Test complete")

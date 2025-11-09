@@ -349,13 +349,14 @@ if __name__ == "__main__":
     class MockGenerator:
         """Mock generator for testing"""
         def __init__(self):
-            self.output_dir = Path("/tmp")
+            import tempfile
+            self.output_dir = Path(tempfile.gettempdir())
             self.frame_count = 0
         
         def generate_from_image(self, image_path, prompt, denoise):
             self.frame_count += 1
             print(f"   Mock generation: denoise={denoise}")
-            return Path(f"/tmp/mock_frame_{self.frame_count}.png")
+            return self.output_dir / f"mock_frame_{self.frame_count}.png"
     
     mock_gen = MockGenerator()
     simple_hybrid = SimpleHybridGenerator(
@@ -369,7 +370,8 @@ if __name__ == "__main__":
     
     # Test frame generation pattern
     print("\n2. Generation pattern test")
-    mock_image = Path("/tmp/test.png")
+    import tempfile
+    mock_image = Path(tempfile.gettempdir()) / "test.png"
     for i in range(15):
         result = simple_hybrid.generate_next_frame(
             current_image=mock_image,

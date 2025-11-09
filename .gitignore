@@ -89,3 +89,5 @@ secrets/
 Thumbs.db
 Desktop.ini
 
+# Diffusion Server
+diffusion/

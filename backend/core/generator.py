@@ -12,6 +12,7 @@ import shutil
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
+from PIL import Image
 
 from .comfyui_api import ComfyUIClient
 from .workflow_builder import WorkflowBuilder
@@ -51,11 +52,56 @@ class DreamGenerator:
         self.output_dir = Path(config["system"]["output_dir"])
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
+        # Create temp directory for resized images
+        self.temp_dir = self.output_dir / ".temp"
+        self.temp_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Get target resolution from config
+        self.target_width, self.target_height = config["generation"]["resolution"]
+        
         # State
         self.frame_count = 0
         self.generation_times: list[float] = []
         
         logger.info("DreamGenerator initialized")
+
+    def _resize_image_for_generation(self, image_path: Path) -> Path:
+        """
+        Resize image to target resolution before uploading to ComfyUI.
+        
+        This is CRITICAL to prevent processing huge images that cause:
+        - Excessive VRAM usage
+        - Very slow generation times
+        - System crashes
+        
+        Args:
+            image_path: Path to original image
+            
+        Returns:
+            Path to resized temp image (ready for upload)
+        """
+        # Open and check current size
+        img = Image.open(image_path)
+        current_w, current_h = img.size
+        
+        # If already correct size, just return original
+        if current_w == self.target_width and current_h == self.target_height:
+            logger.debug(f"Image already correct size: {current_w}x{current_h}")
+            return image_path
+        
+        # Resize to target resolution
+        logger.info(f"Resizing image from {current_w}x{current_h} to {self.target_width}x{self.target_height}")
+        img_resized = img.resize(
+            (self.target_width, self.target_height),
+            Image.Resampling.LANCZOS  # High-quality downsampling
+        )
+        
+        # Save to temp directory with unique name
+        temp_path = self.temp_dir / f"resized_{image_path.name}"
+        img_resized.save(temp_path, format='PNG', optimize=True)
+        
+        logger.debug(f"Resized image saved to: {temp_path}")
+        return temp_path
 
     def generate_from_prompt(
         self,
@@ -83,14 +129,21 @@ class DreamGenerator:
         
         logger.info(f"Generating from prompt: {prompt[:60]}...")
         
+        # Get model-specific config
+        model_type = self.config.get("generation", {}).get("model", "sd15")
+        if model_type == "flux.1-schnell":
+            model_config = self.config["generation"]["flux"]
+        else:  # sd15 or sd21-unclip
+            model_config = self.config["generation"]["sd"]
+        
         # Build workflow
         workflow = self.workflow_builder.build_txt2img(
             prompt=prompt,
             negative_prompt=negative_prompt,
             width=self.config["generation"]["resolution"][0],
             height=self.config["generation"]["resolution"][1],
-            steps=self.config["generation"]["flux"]["steps"],
-            cfg=self.config["generation"]["flux"]["cfg_scale"],
+            steps=model_config["steps"],
+            cfg=model_config["cfg_scale"],
             seed=seed,
         )
         
@@ -98,9 +151,9 @@ class DreamGenerator:
         result_path = self._execute_workflow(workflow, start_time)
         
         if result_path:
-            logger.info(f"✓ txt2img generation complete: {result_path.name}")
+            logger.info(f"[OK] txt2img generation complete: {result_path.name}")
         else:
-            logger.error("✗ txt2img generation failed")
+            logger.error("[FAIL] txt2img generation failed")
         
         return result_path
 
@@ -144,47 +197,52 @@ class DreamGenerator:
         logger.info(f"Generating from image: {image_path.name} (denoise={denoise})")
         logger.debug(f"Prompt: {prompt[:60]}...")
         
-        # Copy image to ComfyUI input directory
-        # (In production, this will be the ComfyUI installation)
-        # For now, we'll prepare but won't actually copy since ComfyUI isn't running
-        comfyui_input = Path("./comfyui_input_mock")  # Mock for dev
-        comfyui_input.mkdir(exist_ok=True)
+        # CRITICAL: Resize image to target resolution before uploading
+        # This prevents processing huge images that cause crashes/slowdowns
+        resized_image_path = self._resize_image_for_generation(image_path)
         
-        input_filename = f"input_{int(time.time() * 1000)}.png"
-        input_copy = comfyui_input / input_filename
+        # Upload image to ComfyUI via API
+        upload_result = self.client.upload_image(
+            image_path=resized_image_path,
+            subfolder="",
+            image_type="input",
+            overwrite=False,  # Allow duplicate detection
+        )
         
-        try:
-            shutil.copy(image_path, input_copy)
-            logger.debug(f"Copied input to: {input_copy}")
-        except Exception as e:
-            logger.error(f"Failed to copy input image: {e}")
+        if not upload_result:
+            logger.error("Failed to upload image to ComfyUI")
             return None
         
+        # Get the uploaded filename (may be different if deduplicated)
+        input_filename = upload_result["name"]
+        logger.debug(f"Uploaded image as: {input_filename}")
+        
+        # Get model-specific config
+        model_type = self.config.get("generation", {}).get("model", "sd15")
+        if model_type == "flux.1-schnell":
+            model_config = self.config["generation"]["flux"]
+        else:  # sd15 or sd21-unclip
+            model_config = self.config["generation"]["sd"]
+        
         # Build workflow
+        # Pass the uploaded filename to the workflow builder
         workflow = self.workflow_builder.build_img2img(
-            image_path=str(input_filename),  # ComfyUI needs just the filename
+            image_path=input_filename,  # Use the uploaded filename from ComfyUI
             prompt=prompt,
             negative_prompt=negative_prompt,
             denoise=denoise,
-            steps=self.config["generation"]["flux"]["steps"],
-            cfg=self.config["generation"]["flux"]["cfg_scale"],
+            steps=model_config["steps"],
+            cfg=model_config["cfg_scale"],
             seed=seed,
         )
         
         # Execute workflow
         result_path = self._execute_workflow(workflow, start_time)
         
-        # Clean up input copy
-        try:
-            if input_copy.exists():
-                input_copy.unlink()
-        except Exception as e:
-            logger.warning(f"Failed to clean up input copy: {e}")
-        
         if result_path:
-            logger.info(f"✓ img2img generation complete: {result_path.name}")
+            logger.info(f"[OK] img2img generation complete: {result_path.name}")
         else:
-            logger.error("✗ img2img generation failed")
+            logger.error("[FAIL] img2img generation failed")
         
         return result_path
 
@@ -216,20 +274,37 @@ class DreamGenerator:
             logger.error("Failed to queue workflow")
             return None
         
-        # Wait for completion
+        # Wait for completion (use polling instead of async)
         try:
-            success = asyncio.run(
-                self.client.wait_for_completion(
-                    prompt_id,
-                    timeout=self.config["performance"]["generation_timeout"],
-                )
-            )
+            import time
+            timeout = self.config["performance"]["generation_timeout"]
+            start_time = time.time()
+            
+            while True:
+                # Check queue status
+                queue = self.client.get_queue()
+                if not queue:
+                    logger.error("Failed to get queue status")
+                    return None
+                
+                # Check if our prompt is still in queue
+                running = [item for item in queue.get("queue_running", []) if item[1] == prompt_id]
+                pending = [item for item in queue.get("queue_pending", []) if item[1] == prompt_id]
+                
+                if not running and not pending:
+                    # Prompt completed
+                    break
+                
+                # Check timeout
+                if time.time() - start_time > timeout:
+                    logger.error(f"Generation timeout ({timeout}s)")
+                    return None
+                
+                # Wait a bit before checking again
+                time.sleep(0.5)
+                
         except Exception as e:
             logger.error(f"Error waiting for completion: {e}", exc_info=True)
-            return None
-        
-        if not success:
-            logger.error(f"Workflow {prompt_id} did not complete successfully")
             return None
         
         # Get output images
@@ -241,29 +316,24 @@ class DreamGenerator:
         # Get first output (we only generate one image at a time)
         output_filename = output_files[0]
         
-        # In production, this would be the ComfyUI output directory
-        # For now, mock it
-        comfyui_output = Path("./comfyui_output_mock")
-        comfyui_output.mkdir(exist_ok=True)
-        source_file = comfyui_output / output_filename
-        
-        # For development without ComfyUI, we'll create a placeholder
-        if not source_file.exists():
-            logger.warning(f"Output file not found (dev mode): {source_file}")
-            # In production, this would be an error
-            # For now, we'll just return None
+        # Get image data directly from ComfyUI API (no file system access needed!)
+        image_data = self.client.get_image_data(output_filename)
+        if not image_data:
+            logger.error(f"Failed to retrieve image data for: {output_filename}")
             return None
         
-        # Copy to our output directory
+        # Save to our output directory
         self.frame_count += 1
         dest_filename = f"frame_{self.frame_count:05d}.png"
         dest_path = self.output_dir / dest_filename
         
         try:
-            shutil.copy(source_file, dest_path)
-            logger.debug(f"Copied output to: {dest_path}")
+            # Write image bytes directly
+            with open(dest_path, 'wb') as f:
+                f.write(image_data)
+            logger.debug(f"Saved output to: {dest_path}")
         except Exception as e:
-            logger.error(f"Failed to copy output: {e}")
+            logger.error(f"Failed to save output: {e}")
             return None
         
         # Track performance
@@ -312,7 +382,8 @@ async def test_generator() -> bool:
     """
     Test generator interface
     
-    Note: This requires ComfyUI to be running with Flux model loaded.
+    Note: This requires ComfyUI to be running with the configured model loaded.
+    By default uses SD1.5, but respects config.yaml model setting.
     For development without ComfyUI, this will fail gracefully.
     """
     import yaml
@@ -324,7 +395,7 @@ async def test_generator() -> bool:
     # Load config
     config_path = Path("backend/config.yaml")
     if not config_path.exists():
-        print("✗ config.yaml not found")
+        print("[FAIL] config.yaml not found")
         return False
     
     with open(config_path, "r") as f:
@@ -333,7 +404,7 @@ async def test_generator() -> bool:
     # Create generator
     print("\n1. Creating generator...")
     gen = DreamGenerator(config)
-    print("✓ Generator created")
+    print("[OK] Generator created")
     
     # Test txt2img (will fail without ComfyUI)
     print("\n2. Testing txt2img generation...")
@@ -343,9 +414,9 @@ async def test_generator() -> bool:
     )
     
     if result:
-        print(f"✓ Generated: {result}")
+        print(f"[OK] Generated: {result}")
     else:
-        print("✗ Generation failed (ComfyUI not running)")
+        print("[FAIL] Generation failed (ComfyUI not running)")
         print("   This is expected in development without ComfyUI")
     
     # Print stats

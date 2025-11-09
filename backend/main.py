@@ -26,9 +26,11 @@ from PIL import Image
 from core.generator import DreamGenerator
 from utils.prompt_manager import PromptManager
 from utils.status_writer import StatusWriter
-from utils.file_ops import atomic_write_with_retry
+from utils.file_ops import atomic_write_image_with_retry
 from utils.game_detector import GameDetector
 from interpolation.hybrid_generator import SimpleHybridGenerator
+from cache.manager import CacheManager
+from cache.aesthetic_matcher import AestheticMatcher
 
 # Setup logging
 def setup_logging(log_dir: Path, log_level: str = "INFO"):
@@ -105,6 +107,11 @@ class DreamController:
         self.prompt_manager = PromptManager(self.config)
         self.status_writer = StatusWriter(self.output_dir)
         self.game_detector = GameDetector(self.config)
+        self.cache = CacheManager(self.config)
+        
+        # Initialize aesthetic matcher for cache similarity
+        self.logger.info("Initializing aesthetic matcher...")
+        self.aesthetic_matcher = AestheticMatcher()
         
         # Initialize hybrid mode if enabled
         self.hybrid_generator = None
@@ -130,7 +137,7 @@ class DreamController:
         self.generation_times = []
         self.cache_injections = 0
         
-        self.logger.info("✓ Initialization complete")
+        self.logger.info("[OK] Initialization complete")
         self.logger.info(f"Mode: {self.config['generation']['mode']}")
         self.logger.info(f"Resolution: {self.config['generation']['resolution']}")
         self.logger.info(f"Model: {self.config['generation']['model']}")
@@ -152,6 +159,48 @@ class DreamController:
             raise ValueError(f"No seed images found in {self.seed_dir}")
         
         return random.choice(seed_images)
+    
+    def add_frame_to_cache(self, frame_path: Path, prompt: str, denoise: float) -> bool:
+        """
+        Add a generated frame to the cache with CLIP embedding
+        
+        Args:
+            frame_path: Path to generated frame
+            prompt: Generation prompt used
+            denoise: Denoise value used
+            
+        Returns:
+            True if successfully added to cache
+        """
+        try:
+            # Encode image to CLIP embedding
+            embedding = self.aesthetic_matcher.encode_image(frame_path)
+            
+            if embedding is None:
+                self.logger.warning(f"Failed to encode image for cache: {frame_path.name}")
+                return False
+            
+            # Add to cache
+            generation_params = {
+                "denoise": denoise,
+                "prompt": prompt,
+                "model": self.config["generation"]["model"],
+                "resolution": self.config["generation"]["resolution"]
+            }
+            
+            cache_id = self.cache.add(
+                image_path=frame_path,
+                prompt=prompt,
+                generation_params=generation_params,
+                embedding=embedding
+            )
+            
+            self.logger.debug(f"Added to cache: {cache_id} (total: {self.cache.size()})")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to add frame to cache: {e}", exc_info=True)
+            return False
     
     def check_game_state(self) -> bool:
         """
@@ -183,7 +232,7 @@ class DreamController:
         
         if game_detected and not self.paused:
             # Game just started - pause and free VRAM!
-            self.logger.warning(f"🎮 GAME DETECTED: {game_detected}")
+            self.logger.warning(f"[GAME] DETECTED: {game_detected}")
             self.logger.info("Pausing generation and freeing VRAM...")
             self.paused = True
             
@@ -195,7 +244,7 @@ class DreamController:
                 )
                 if success:
                     self.vram_freed = True
-                    self.logger.info("✓ VRAM freed - safe for gaming!")
+                    self.logger.info("[OK] VRAM freed - safe for gaming!")
                 else:
                     self.logger.warning("Could not free VRAM (ComfyUI might not support /free endpoint)")
                     self.logger.info("Generation paused anyway for safety")
@@ -206,7 +255,7 @@ class DreamController:
         
         elif not game_detected and self.paused:
             # Game closed - resume!
-            self.logger.info("🎮 Game closed - resuming generation")
+            self.logger.info("[GAME] Game closed - resuming generation")
             self.logger.info("(Models will reload on next generation - ~15s delay expected)")
             self.paused = False
             self.vram_freed = False
@@ -227,7 +276,7 @@ class DreamController:
             return False  # Never inject on first frame
         
         # Check cache has entries
-        if self.generator.cache.size() == 0:
+        if self.cache.size() == 0:
             return False
         
         # Random probability check
@@ -246,20 +295,51 @@ class DreamController:
         
         try:
             # Encode current frame
-            current_embedding = self.generator.aesthetic_matcher.encode_image(
-                self.current_image
-            )
+            current_embedding = self.aesthetic_matcher.encode_image(self.current_image)
             
             if current_embedding is None:
+                self.logger.warning("Failed to encode current frame for cache injection")
                 return None
             
-            # Find similar cached image
-            cached_image = self.generator.get_cached_injection(current_embedding)
+            # Get all cached entries
+            cache_entries = self.cache.get_all()
+            if not cache_entries:
+                self.logger.debug("Cache is empty, no injection possible")
+                return None
             
-            if cached_image:
+            # Prepare candidates (cache_id, embedding) pairs
+            candidates = [
+                (entry.cache_id, entry.embedding)
+                for entry in cache_entries
+                if entry.embedding is not None
+            ]
+            
+            if not candidates:
+                self.logger.debug("No cache entries with embeddings")
+                return None
+            
+            # Find similar cached images
+            threshold = self.config['generation']['cache']['similarity_threshold']
+            similar = self.aesthetic_matcher.find_similar(
+                target_embedding=current_embedding,
+                candidate_embeddings=candidates,
+                threshold=threshold,
+                top_k=5
+            )
+            
+            if not similar:
+                self.logger.debug(f"No similar images found (threshold: {threshold})")
+                return None
+            
+            # Weighted random selection from similar images
+            selected_cache_id, similarity = self.aesthetic_matcher.weighted_random_selection(similar)
+            
+            # Get the cached image path
+            cached_entry = self.cache.get(selected_cache_id)
+            if cached_entry:
                 self.cache_injections += 1
-                self.logger.info(f"💉 CACHE INJECTION ({self.cache_injections} total)")
-                return cached_image
+                self.logger.info(f"[CACHE] INJECTION #{self.cache_injections}: {selected_cache_id} (similarity: {similarity:.3f})")
+                return cached_entry.image_path
             
         except Exception as e:
             self.logger.error(f"Cache injection failed: {e}", exc_info=True)
@@ -280,7 +360,7 @@ class DreamController:
         try:
             # Use atomic write with retry
             image = Image.open(frame_path)
-            success = atomic_write_with_retry(
+            success = atomic_write_image_with_retry(
                 image,
                 output_file,
                 max_retries=3
@@ -310,7 +390,7 @@ class DreamController:
                 "status": "paused" if self.paused else "live",
                 "current_mode": mode,
                 "current_prompt": prompt[:100],  # Truncate long prompts
-                "cache_size": self.generator.cache.size(),
+                "cache_size": self.cache.size(),
                 "cache_injections": self.cache_injections,
                 "uptime_minutes": round((time.time() - self.start_time) / 60, 1) if self.start_time else 0
             }
@@ -402,8 +482,8 @@ class DreamController:
                     
                     # Log stats
                     avg_time = sum(self.generation_times[-10:]) / min(10, len(self.generation_times))
-                    self.logger.info(f"✓ Generated in {elapsed:.2f}s (avg: {avg_time:.2f}s)")
-                    self.logger.info(f"Cache: {self.generator.cache.size()}/{self.config['generation']['cache']['max_size']}")
+                    self.logger.info(f"[OK] Generated in {elapsed:.2f}s (avg: {avg_time:.2f}s)")
+                    self.logger.info(f"Cache: {self.cache.size()}/{self.config['generation']['cache']['max_size']}")
                     
                     # Small pause
                     await asyncio.sleep(1.0)
@@ -413,7 +493,7 @@ class DreamController:
                     await asyncio.sleep(5.0)
                     
             except KeyboardInterrupt:
-                self.logger.info("\n⚠️  Interrupted by user")
+                self.logger.info("\n[!]  Interrupted by user")
                 break
             except Exception as e:
                 self.logger.error(f"Error in loop: {e}", exc_info=True)
@@ -442,6 +522,20 @@ class DreamController:
         self.logger.info("Starting hybrid generation loop")
         self.logger.info(f"Keyframe interval: {self.hybrid_generator.keyframe_interval}")
         self.logger.info(f"Target: {'infinite' if max_frames is None else max_frames} frames")
+        
+        # Clear any stale jobs from queue before starting
+        self.logger.info("Clearing ComfyUI queue...")
+        queue_status = self.generator.client.get_queue()
+        if queue_status:
+            running_count = len(queue_status.get("queue_running", []))
+            pending_count = len(queue_status.get("queue_pending", []))
+            if running_count > 0 or pending_count > 0:
+                self.logger.warning(f"Found stale jobs: {running_count} running, {pending_count} pending")
+                self.generator.client.interrupt_execution()
+                self.generator.client.clear_queue()
+                self.logger.info("Queue cleared successfully")
+            else:
+                self.logger.info("Queue is empty - ready to start")
         
         # Start with random seed
         self.current_image = self.get_random_seed_image()
@@ -505,9 +599,14 @@ class DreamController:
                     mode = "hybrid_keyframe" if is_keyframe else "hybrid_fill"
                     self.update_status(elapsed, mode, prompt)
                     
+                    # Add keyframes to cache (not fill frames to save processing time)
+                    if is_keyframe:
+                        denoise = self.hybrid_generator.keyframe_denoise
+                        self.add_frame_to_cache(new_frame, prompt, denoise)
+                    
                     avg_time = sum(self.generation_times[-10:]) / min(10, len(self.generation_times))
-                    self.logger.info(f"✓ Generated in {elapsed:.2f}s (avg: {avg_time:.2f}s)")
-                    self.logger.info(f"Cache: {self.generator.cache.size()}/{self.config['generation']['cache']['max_size']}")
+                    self.logger.info(f"[OK] Generated in {elapsed:.2f}s (avg: {avg_time:.2f}s)")
+                    self.logger.info(f"Cache: {self.cache.size()}/{self.config['generation']['cache']['max_size']}")
                     
                     await asyncio.sleep(1.0)
                 else:
@@ -515,7 +614,7 @@ class DreamController:
                     await asyncio.sleep(5.0)
                     
             except KeyboardInterrupt:
-                self.logger.info("\n⚠️  Interrupted by user")
+                self.logger.info("\n[!]  Interrupted by user")
                 break
             except Exception as e:
                 self.logger.error(f"Error in loop: {e}", exc_info=True)
@@ -540,13 +639,13 @@ class DreamController:
         
         # Setup signal handlers for graceful shutdown
         def signal_handler(sig, frame):
-            self.logger.info("\n⚠️  Shutdown signal received")
+            self.logger.info("\n[!]  Shutdown signal received")
             self.running = False
         
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
         
-        self.logger.info("\n🌀 DREAM WINDOW STARTING...")
+        self.logger.info("\n[*] DREAM WINDOW STARTING...")
         self.logger.info(f"Mode: {self.config['generation']['mode']}")
         self.logger.info(f"Press Ctrl+C to stop\n")
         
@@ -560,7 +659,7 @@ class DreamController:
                 asyncio.run(self.run_img2img_loop(max_frames))
                 
         except KeyboardInterrupt:
-            self.logger.info("\n⚠️  Stopped by user")
+            self.logger.info("\n[!]  Stopped by user")
         except Exception as e:
             self.logger.error(f"\n❌ Fatal error: {e}", exc_info=True)
         finally:
@@ -582,9 +681,9 @@ class DreamController:
             self.logger.info(f"Total generation time: {total_time/60:.1f} minutes")
             self.logger.info(f"Average per frame: {avg_time:.2f}s")
             self.logger.info(f"Cache injections: {self.cache_injections}")
-            self.logger.info(f"Final cache size: {self.generator.cache.size()}")
+            self.logger.info(f"Final cache size: {self.cache.size()}")
         
-        self.logger.info("✓ Shutdown complete")
+        self.logger.info("[OK] Shutdown complete")
         self.logger.info("="*70)
 
 
@@ -615,7 +714,7 @@ def main():
     # Override for test mode
     if args.test:
         args.max_frames = 10
-        print("🧪 TEST MODE: Generating 10 frames")
+        print("[TEST MODE] Generating 10 frames")
     
     # Create and run controller
     controller = DreamController(config_path=args.config)

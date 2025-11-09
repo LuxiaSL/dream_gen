@@ -121,6 +121,13 @@ class ComfyUIClient:
             return None
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to queue prompt: {e}")
+            # Log response body if available for debugging
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    error_detail = e.response.json()
+                    logger.error(f"ComfyUI error details: {error_detail}")
+                except:
+                    logger.error(f"ComfyUI response text: {e.response.text[:500]}")
             return None
         except Exception as e:
             logger.error(f"Unexpected error queueing prompt: {e}", exc_info=True)
@@ -290,6 +297,104 @@ class ComfyUIClient:
         else:
             logger.error(f"Image not found: {image_path}")
             return None
+    
+    def upload_image(
+        self,
+        image_path: Path,
+        subfolder: str = "",
+        image_type: str = "input",
+        overwrite: bool = False,
+    ) -> Optional[Dict[str, str]]:
+        """
+        Upload an image to ComfyUI's input directory via API
+        
+        This is the proper way to send images to ComfyUI for img2img workflows.
+        
+        Args:
+            image_path: Path to local image file
+            subfolder: Optional subfolder in the upload directory
+            image_type: Type of upload ("input", "temp", "output")
+            overwrite: Whether to overwrite existing file with same name
+        
+        Returns:
+            Dictionary with 'name', 'subfolder', and 'type' if successful, None otherwise
+            Example: {"name": "image.png", "subfolder": "", "type": "input"}
+        """
+        if not image_path.exists():
+            logger.error(f"Image file not found: {image_path}")
+            return None
+        
+        try:
+            # Prepare multipart form data
+            with open(image_path, "rb") as f:
+                files = {
+                    "image": (image_path.name, f, "image/png"),
+                }
+                data = {
+                    "subfolder": subfolder,
+                    "type": image_type,
+                    "overwrite": "true" if overwrite else "false",
+                }
+                
+                response = self.session.post(
+                    f"{self.base_url}/upload/image",
+                    files=files,
+                    data=data,
+                    timeout=30.0,
+                )
+                response.raise_for_status()
+                
+                result = response.json()
+                logger.info(f"Image uploaded: {result['name']} (type: {result['type']})")
+                return result
+                
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to upload image: {e}")
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    logger.error(f"Server response: {e.response.text[:500]}")
+                except:
+                    pass
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error uploading image: {e}", exc_info=True)
+            return None
+    
+    def get_image_data(self, filename: str, subfolder: str = "", folder_type: str = "output") -> Optional[bytes]:
+        """
+        Get image data directly from ComfyUI API (no file system access needed)
+        
+        Args:
+            filename: Image filename
+            subfolder: Subfolder in output directory  
+            folder_type: Type of folder ("output", "input", "temp")
+        
+        Returns:
+            Image bytes if successful, None otherwise
+        """
+        try:
+            params = {
+                "filename": filename,
+                "subfolder": subfolder,
+                "type": folder_type,
+            }
+            
+            response = self.session.get(
+                f"{self.base_url}/view",
+                params=params,
+                timeout=10.0,
+            )
+            response.raise_for_status()
+            
+            # Return raw image bytes
+            return response.content
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to get image data: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error getting image data: {e}", exc_info=True)
+            return None
 
     def interrupt_execution(self) -> bool:
         """
@@ -390,7 +495,7 @@ async def test_api() -> bool:
     stats = client.get_system_stats()
     if stats:
         system_info = stats.get("system", {})
-        print(f"✓ System stats: OS={system_info.get('os', 'unknown')}")
+        print(f"[OK] System stats: OS={system_info.get('os', 'unknown')}")
         print(f"  Python: {system_info.get('python_version', 'unknown')}")
         
         devices = stats.get("devices", [])
@@ -399,7 +504,7 @@ async def test_api() -> bool:
             for i, device in enumerate(devices):
                 print(f"    GPU {i}: {device.get('name', 'unknown')}")
     else:
-        print("✗ Failed to get system stats (is ComfyUI running?)")
+        print("[FAIL] Failed to get system stats (is ComfyUI running?)")
         return False
     
     # Test 2: Queue status
@@ -408,13 +513,13 @@ async def test_api() -> bool:
     if queue:
         running = len(queue.get("queue_running", []))
         pending = len(queue.get("queue_pending", []))
-        print(f"✓ Queue: {running} running, {pending} pending")
+        print(f"[OK] Queue: {running} running, {pending} pending")
     else:
-        print("✗ Failed to get queue status")
+        print("[FAIL] Failed to get queue status")
         return False
     
     print("\n" + "=" * 60)
-    print("API connection test PASSED ✓")
+    print("API connection test PASSED [OK]")
     print("=" * 60)
     
     client.close()
