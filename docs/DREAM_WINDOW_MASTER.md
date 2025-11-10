@@ -374,6 +374,22 @@ Frame 7:  interpolate (B → C, t=0.16)
 - Cache injection (every 10-15 frames) prevents mode collapse
 - Total: 70% interpolated (fast), 30% generated (diverse)
 
+### Interpolation Performance Modes
+
+> **Note**: These are tested configurations for matching interpolation speed with diffusion generation timing (~2.1 seconds per ComfyUI-generated keyframe).
+
+Three performance modes to choose from based on your quality/speed preference:
+
+| Mode | Resolution Divisor | Avg FPS | Frames Per Cycle | Use Case |
+|------|-------------------|---------|------------------|----------|
+| **High Quality** | 1 (full res) | ~4 FPS | **10 frames** | Maximum visual quality |
+| **Balanced** | 1.5 (bicubic+nearest) | ~8-9 FPS | **20 frames** | **Recommended** sweet spot |
+| **Fast** | 2 (half res) | ~15 FPS | **40 frames** | Maximum smoothness |
+
+**Frame count rationale**: Each cycle should generate enough interpolated frames to "cover" the time it takes ComfyUI to generate the next keyframe. With ~2.1s generation time, these frame counts provide a small buffer to ensure the next keyframe is ready before interpolation completes.
+
+**Configuration**: Currently requires manual config.yaml editing. Future enhancement: runtime mode switching will be added.
+
 ### Aesthetic Cache Injection
 
 **Purpose**: Prevent visual convergence, maintain variety

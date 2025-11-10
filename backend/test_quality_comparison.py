@@ -13,6 +13,7 @@ import torch
 import time
 import sys
 import json
+import statistics
 from pathlib import Path
 from PIL import Image
 from datetime import datetime
@@ -350,6 +351,9 @@ def main():
     parser.add_argument('--exclude-div8', action='store_true', help='Exclude divisor 8 (focus on div1-4)')
     parser.add_argument('--focused-post-upscale', action='store_true', help='Add post-upscaling for promising configs only')
     parser.add_argument('--configs-only', nargs='+', help='Test only specific configs (e.g., div2_bicubicdown_nearestup)')
+    parser.add_argument('--image-a', type=str, help='Path to first image (default: first image in seeds/)')
+    parser.add_argument('--image-b', type=str, help='Path to second image (default: second image in seeds/)')
+    parser.add_argument('--sequences', type=int, default=1, help='Number of times to repeat the test (for long-run profiling)')
     args = parser.parse_args()
     
     print("="*70)
@@ -393,7 +397,29 @@ def main():
     # Load test images
     seed_dir = Path("../seeds") if Path("../seeds").exists() else Path("seeds")
     
-    if args.use_output_frames:
+    # Check for explicit image paths
+    if args.image_a and args.image_b:
+        image_a_path = Path(args.image_a)
+        image_b_path = Path(args.image_b)
+        
+        if not image_a_path.exists():
+            print(f"[ERROR] Image A not found: {image_a_path}")
+            return
+        if not image_b_path.exists():
+            print(f"[ERROR] Image B not found: {image_b_path}")
+            return
+        
+        print(f"\nUsing specified images:")
+        print(f"  Image A: {image_a_path}")
+        print(f"  Image B: {image_b_path}")
+        
+        image_a = Image.open(image_a_path).convert('RGB')
+        image_b = Image.open(image_b_path).convert('RGB')
+        
+        # Store paths for later reference
+        test_image_paths = [str(image_a_path), str(image_b_path)]
+        
+    elif args.use_output_frames:
         # Use real generated frames from output folder
         output_dir = Path("../output") if Path("../output").exists() else Path("output")
         potential_frames = list(output_dir.glob("frame_*.png"))
@@ -412,29 +438,46 @@ def main():
             print(f"\nUsing real generated frames:")
             print(f"  Frame A: {seed_images[0].name}")
             print(f"  Frame B: {seed_images[1].name}")
+        
+        # Store paths for later reference
+        test_image_paths = [str(seed_images[0]), str(seed_images[1])]
+        
     else:
         seed_images = list(seed_dir.glob("*.png"))
+        
+        if len(seed_images) < 2:
+            print("[ERROR] Need at least 2 images in seeds/")
+            return
+        
+        print(f"\nLoading test images from seeds/...")
+        image_a = Image.open(seed_images[0]).convert('RGB')
+        image_b = Image.open(seed_images[1]).convert('RGB')
+        
+        # Store paths for later reference
+        test_image_paths = [str(seed_images[0]), str(seed_images[1])]
     
-    if len(seed_images) < 2:
-        print("[ERROR] Need at least 2 images")
-        return
-    
-    print(f"\nLoading test images...")
-    image_a = Image.open(seed_images[0]).convert('RGB')
-    image_b = Image.open(seed_images[1]).convert('RGB')
-    
-    # Resize to standard resolution
+    # Always resize to standard resolution for consistent testing
     target_size = (512, 256)
     if image_a.size != target_size:
+        print(f"  Resizing Image A from {image_a.size} to {target_size}")
         image_a = image_a.resize(target_size, Image.Resampling.LANCZOS)
     if image_b.size != target_size:
+        print(f"  Resizing Image B from {image_b.size} to {target_size}")
         image_b = image_b.resize(target_size, Image.Resampling.LANCZOS)
     
-    print(f"  Image A: {seed_images[0].name} ({image_a.size})")
-    print(f"  Image B: {seed_images[1].name} ({image_b.size})")
+    print(f"  Final Image A: {image_a.size}")
+    print(f"  Final Image B: {image_b.size}")
     
     # Configs were already generated above - use them!
     print(f"\nUsing {len(configs)} test configurations")
+    
+    # Check if we're doing multiple sequences
+    if args.sequences > 1:
+        print(f"\n{'='*70}")
+        print(f"LONG-RUN MODE: {args.sequences} sequences")
+        print(f"{'='*70}")
+        print(f"Total frames: {args.sequences * args.frames * len(configs)}")
+        print()
     
     # Run baseline first to get reference frames
     print("\n" + "="*70)
@@ -442,6 +485,8 @@ def main():
     print("="*70)
     
     baseline_config = configs[0]  # First config is always baseline
+    
+    # Run baseline once for reference (don't repeat in sequences)
     baseline_results = run_test_config(
         baseline_config,
         image_a,
@@ -456,33 +501,73 @@ def main():
         frame_path = output_root / baseline_config['name'] / f"frame_{i:03d}.png"
         baseline_frames.append(Image.open(frame_path))
     
-    # Store all results
+    # Store all results - baseline stored separately
     all_results = [baseline_results]
     
-    # Run remaining tests
+    # Run remaining tests (with sequences if specified)
     print("\n" + "="*70)
     print("RUNNING SCALED RESOLUTION TESTS")
+    if args.sequences > 1:
+        print(f"({args.sequences} sequences per config)")
     print("="*70)
     
     for i, config in enumerate(configs[1:], 1):
-        print(f"\nTest {i}/{len(configs)-1}")
+        print(f"\nTest {i}/{len(configs)-1}: {config['name']}")
         
+        # Aggregate results across sequences
+        sequence_fps_values = []
+        
+        for seq_num in range(args.sequences):
+            if args.sequences > 1:
+                print(f"  Sequence {seq_num + 1}/{args.sequences}...")
+            
+            # Determine output directory for this sequence
+            if args.sequences > 1:
+                output_dir = output_root / f"{config['name']}_seq{seq_num:03d}"
+            else:
+                output_dir = output_root / config['name']
+            
+            try:
+                results = run_test_config(
+                    config,
+                    image_a,
+                    image_b,
+                    output_dir,
+                    num_frames=args.frames,
+                    baseline_frames=baseline_frames
+                )
+                
+                # Track FPS for this sequence
+                sequence_fps_values.append(results['performance']['fps'])
+                
+                # Only store first sequence results in all_results (for compatibility)
+                if seq_num == 0:
+                    all_results.append(results)
+                
+            except Exception as e:
+                print(f"  [ERROR] Failed sequence {seq_num + 1}: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+        
+        # Print sequence summary if multiple sequences
         try:
-            results = run_test_config(
-                config,
-                image_a,
-                image_b,
-                output_root / config['name'],
-                num_frames=args.frames,
-                baseline_frames=baseline_frames
-            )
-            all_results.append(results)
+            if args.sequences > 1 and sequence_fps_values:
+                avg_fps = statistics.mean(sequence_fps_values)
+                min_fps = min(sequence_fps_values)
+                max_fps = max(sequence_fps_values)
+                stdev_fps = statistics.stdev(sequence_fps_values) if len(sequence_fps_values) > 1 else 0
+                
+                print(f"\n  Sequence Summary for {config['name']}:")
+                print(f"    Average FPS: {avg_fps:.2f} (±{stdev_fps:.2f})")
+                print(f"    Range:       {min_fps:.2f} - {max_fps:.2f} FPS")
+                print(f"    Stability:   {(stdev_fps/avg_fps*100):.1f}% CV")
         except Exception as e:
-            print(f"[ERROR] Failed to run config {config['name']}: {e}")
+            print(f"  [ERROR] Failed to print sequence summary: {e}")
             import traceback
             traceback.print_exc()
             continue
-    
+        
     # Save comprehensive metrics
     print("\n" + "="*70)
     print("SAVING RESULTS")
@@ -494,7 +579,7 @@ def main():
             "test_info": {
                 "timestamp": timestamp,
                 "total_configs": len(all_results),
-                "test_images": [str(seed_images[0]), str(seed_images[1])],
+                "test_images": test_image_paths,
                 "target_fps": 15.0
             },
             "results": all_results

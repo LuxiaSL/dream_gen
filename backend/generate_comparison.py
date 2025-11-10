@@ -295,6 +295,95 @@ def generate_card_css() -> str:
         .config-card img:hover {
             border-color: #667eea;
             box-shadow: 0 0 20px rgba(102, 126, 234, 0.5);
+        }
+        
+        .animation-card {
+            background: #2d3748;
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+            transition: all 0.3s;
+            border: 2px solid transparent;
+            position: relative;
+        }
+        
+        .animation-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.4);
+            border-color: #667eea;
+        }
+        
+        .animation-card h3 {
+            font-size: 1.2em;
+            margin-bottom: 12px;
+            color: #667eea;
+            word-wrap: break-word;
+        }
+        
+        .animation-container {
+            position: relative;
+            width: 100%;
+            background: #1a202c;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        
+        .animation-canvas {
+            width: 100%;
+            height: auto;
+            display: block;
+            border-radius: 10px;
+            border: 3px solid #4a5568;
+        }
+        
+        .animation-controls {
+            margin-top: 15px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        
+        .animation-buttons {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+        }
+        
+        .anim-btn {
+            padding: 10px 20px;
+            background: #667eea;
+            border: none;
+            border-radius: 8px;
+            color: white;
+            font-size: 1em;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: bold;
+        }
+        
+        .anim-btn:hover {
+            background: #764ba2;
+            transform: scale(1.05);
+        }
+        
+        .anim-btn:disabled {
+            background: #4a5568;
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+        
+        .animation-info {
+            text-align: center;
+            font-size: 0.9em;
+            color: #a0aec0;
+            padding: 8px;
+            background: #1a202c;
+            border-radius: 8px;
+        }
+        
+        .animation-status {
+            font-weight: bold;
+            color: #667eea;
         }"""
 
 
@@ -835,6 +924,173 @@ def generate_utility_js() -> str:
         filterConfigs();"""
 
 
+def generate_animation_js() -> str:
+    """Generate animation playback JavaScript"""
+    return """
+        // Animation player class
+        class AnimationPlayer {
+            constructor(canvasId, configName, fps, numFrames) {
+                this.canvas = document.getElementById(canvasId);
+                this.ctx = this.canvas.getContext('2d');
+                this.configName = configName;
+                this.fps = fps;
+                this.numFrames = numFrames;
+                this.currentFrame = 0;
+                this.isPlaying = false;
+                this.frameInterval = 1000 / fps;
+                this.lastFrameTime = 0;
+                this.frames = [];
+                this.loadedFrames = 0;
+                this.animationId = null;
+                
+                // UI elements
+                this.playBtn = document.getElementById(`play-${canvasId}`);
+                this.pauseBtn = document.getElementById(`pause-${canvasId}`);
+                this.resetBtn = document.getElementById(`reset-${canvasId}`);
+                this.statusSpan = document.getElementById(`status-${canvasId}`);
+                this.frameSpan = document.getElementById(`frame-${canvasId}`);
+                
+                this.init();
+            }
+            
+            async init() {
+                this.updateStatus('Loading frames...');
+                await this.loadFrames();
+                this.updateStatus('Ready');
+                this.updateFrameDisplay();
+                this.enableControls();
+            }
+            
+            async loadFrames() {
+                const loadPromises = [];
+                
+                for (let i = 0; i < this.numFrames; i++) {
+                    const promise = new Promise((resolve, reject) => {
+                        const img = new Image();
+                        const frameNum = String(i).padStart(3, '0');
+                        img.src = `${this.configName}/frame_${frameNum}.png`;
+                        
+                        img.onload = () => {
+                            this.frames[i] = img;
+                            this.loadedFrames++;
+                            
+                            // Set canvas size on first frame
+                            if (i === 0) {
+                                this.canvas.width = img.width;
+                                this.canvas.height = img.height;
+                                this.drawFrame(0);
+                            }
+                            
+                            this.updateStatus(`Loading: ${this.loadedFrames}/${this.numFrames}`);
+                            resolve();
+                        };
+                        
+                        img.onerror = () => {
+                            console.error(`Failed to load frame ${i} for ${this.configName}`);
+                            reject();
+                        };
+                    });
+                    
+                    loadPromises.push(promise);
+                }
+                
+                await Promise.all(loadPromises);
+            }
+            
+            drawFrame(frameIndex) {
+                if (this.frames[frameIndex]) {
+                    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                    this.ctx.drawImage(this.frames[frameIndex], 0, 0);
+                }
+            }
+            
+            play() {
+                if (this.isPlaying) return;
+                this.isPlaying = true;
+                this.lastFrameTime = performance.now();
+                this.playBtn.disabled = true;
+                this.pauseBtn.disabled = false;
+                this.updateStatus('Playing');
+                this.animate(performance.now());
+            }
+            
+            pause() {
+                this.isPlaying = false;
+                this.playBtn.disabled = false;
+                this.pauseBtn.disabled = true;
+                this.updateStatus('Paused');
+                if (this.animationId) {
+                    cancelAnimationFrame(this.animationId);
+                }
+            }
+            
+            reset() {
+                this.pause();
+                this.currentFrame = 0;
+                this.drawFrame(0);
+                this.updateFrameDisplay();
+                this.updateStatus('Ready');
+            }
+            
+            animate(currentTime) {
+                if (!this.isPlaying) return;
+                
+                const elapsed = currentTime - this.lastFrameTime;
+                
+                if (elapsed >= this.frameInterval) {
+                    this.currentFrame = (this.currentFrame + 1) % this.numFrames;
+                    this.drawFrame(this.currentFrame);
+                    this.updateFrameDisplay();
+                    this.lastFrameTime = currentTime;
+                }
+                
+                this.animationId = requestAnimationFrame((t) => this.animate(t));
+            }
+            
+            updateStatus(text) {
+                if (this.statusSpan) {
+                    this.statusSpan.textContent = text;
+                }
+            }
+            
+            updateFrameDisplay() {
+                if (this.frameSpan) {
+                    this.frameSpan.textContent = `Frame ${this.currentFrame + 1}/${this.numFrames} | ${this.fps.toFixed(2)} FPS`;
+                }
+            }
+            
+            enableControls() {
+                this.playBtn.disabled = false;
+                this.resetBtn.disabled = false;
+            }
+        }
+        
+        // Store animation players globally
+        window.animationPlayers = {};
+        
+        function initAnimationPlayer(canvasId, configName, fps, numFrames) {
+            window.animationPlayers[canvasId] = new AnimationPlayer(canvasId, configName, fps, numFrames);
+        }
+        
+        function playAnimation(canvasId) {
+            if (window.animationPlayers[canvasId]) {
+                window.animationPlayers[canvasId].play();
+            }
+        }
+        
+        function pauseAnimation(canvasId) {
+            if (window.animationPlayers[canvasId]) {
+                window.animationPlayers[canvasId].pause();
+            }
+        }
+        
+        function resetAnimation(canvasId) {
+            if (window.animationPlayers[canvasId]) {
+                window.animationPlayers[canvasId].reset();
+            }
+        }"""
+
+
 def build_color_map(unique_divisors: list) -> dict:
     """Build a dynamic color map for divisors"""
     base_colors = [
@@ -964,6 +1220,7 @@ def generate_comparison_html(test_dir: Path, output_path: Path = None):
     builder.add_js(generate_fps_chart_js())
     builder.add_js(generate_divisor_chart_js())
     builder.add_js(generate_quality_charts_js())
+    builder.add_js(generate_animation_js())
     builder.add_js(generate_utility_js())
     
     # Build HTML content
@@ -1008,6 +1265,7 @@ def generate_comparison_html(test_dir: Path, output_path: Path = None):
             <button class="tab active" onclick="showTab('overview')">📊 Overview</button>
             <button class="tab" onclick="showTab('performance')">⚡ Performance Charts</button>
             <button class="tab" onclick="showTab('quality')">🎯 Quality Analysis</button>
+            <button class="tab" onclick="showTab('animation')">🎬 Animation Playback</button>
             <button class="tab" onclick="showTab('comparison')">🖼️ Visual Comparison</button>
             <button class="tab" onclick="showTab('data')">📋 Data Table</button>
         </div>"""
@@ -1072,6 +1330,136 @@ def generate_comparison_html(test_dir: Path, output_path: Path = None):
             </div>
         </div>"""
     builder.add_html(quality_html)
+    
+    # Animation Tab - show animations at actual FPS
+    animation_html = """
+        <div id="animation" class="tab-content">
+            <div class="section">
+                <h2>🎬 Real-Time Animation Preview</h2>
+                <p style="font-size: 1.1em; color: #a0aec0; margin-bottom: 20px;">
+                    Watch the interpolations play at their actual generation FPS for an honest performance comparison. 
+                    This lets you see how smooth the animation actually feels rather than just looking at static frames.
+                </p>
+                
+                <div class="filter-controls">
+                    <select id="divisor-filter-anim" onchange="filterAnimations()">
+                        <option value="all">All Divisors</option>"""
+    
+    # Add divisor filter options
+    for divisor in unique_divisors:
+        selected = 'selected' if divisor == 4 else ''
+        label = f"Divisor {divisor}"
+        if divisor == 1:
+            label += " (baseline)"
+        elif divisor == 4:
+            label += " (recommended)"
+        animation_html += f'\n                        <option value="{divisor}" {selected}>{label}</option>'
+    
+    animation_html += """
+                    </select>
+                </div>
+            </div>
+            
+            <div class="comparison-grid" id="animation-grid">"""
+    
+    builder.add_html(animation_html)
+    
+    # Add animation cards for each configuration
+    animation_init_calls = []
+    for i, result in enumerate(results):
+        config = result['config']
+        perf = result['performance']
+        quality = result['quality']
+        
+        # Determine badges
+        badges = []
+        if config['divisor'] == 1:
+            badges.append('<span class="badge badge-baseline">BASELINE</span>')
+        if config.get('multi_upscale'):
+            badges.append(f'<span class="badge badge-multi">MULTI-UPSCALE {config["multi_upscale"]}x</span>')
+        if recommended_configs and config['name'] == recommended_configs[0]['config']['name']:
+            badges.append('<span class="badge badge-recommended">⭐ RECOMMENDED</span>')
+        elif perf['fps'] >= target_fps:
+            badges.append('<span class="badge badge-target">HITS TARGET</span>')
+        
+        # Canvas ID
+        canvas_id = f"anim-canvas-{i}"
+        
+        # FPS and quality classes
+        fps_class = 'fps-excellent' if perf['fps'] >= 20 else ('fps-good' if perf['fps'] >= 15 else ('fps-medium' if perf['fps'] >= 10 else 'fps-low'))
+        
+        ssim = quality['avg_ssim'] if quality['avg_ssim'] else 0
+        quality_class = 'quality-excellent' if ssim >= 0.8 else ('quality-good' if ssim >= 0.7 else ('quality-medium' if ssim >= 0.6 else 'quality-poor'))
+        
+        anim_card_html = f"""
+                <div class="animation-card" data-divisor="{config['divisor']}">
+                    <h3>{config['name']}</h3>
+                    {''.join(badges)}
+                    
+                    <div class="animation-container">
+                        <canvas id="{canvas_id}" class="animation-canvas"></canvas>
+                    </div>
+                    
+                    <div class="animation-controls">
+                        <div class="animation-buttons">
+                            <button class="anim-btn" id="play-{canvas_id}" onclick="playAnimation('{canvas_id}')" disabled>▶ Play</button>
+                            <button class="anim-btn" id="pause-{canvas_id}" onclick="pauseAnimation('{canvas_id}')" disabled>⏸ Pause</button>
+                            <button class="anim-btn" id="reset-{canvas_id}" onclick="resetAnimation('{canvas_id}')" disabled>⏹ Reset</button>
+                        </div>
+                        <div class="animation-info">
+                            <div><span class="animation-status" id="status-{canvas_id}">Initializing...</span></div>
+                            <div id="frame-{canvas_id}">-</div>
+                        </div>
+                    </div>
+                    
+                    <div class="metrics">
+                        <div><span class="label">Actual FPS:</span> <span class="value {fps_class}">{perf['fps']:.2f}</span></div>
+                        <div><span class="label">Frame Time:</span> <span class="value">{perf['avg_total_time_ms']:.1f}ms</span></div>
+                        <div><span class="label">Divisor:</span> <span class="value">1/{config['divisor']}</span></div>"""
+        
+        if quality['avg_psnr']:
+            anim_card_html += f"""
+                        <div><span class="label">SSIM:</span> <span class="value {quality_class}">{quality['avg_ssim']:.4f}</span></div>"""
+        
+        anim_card_html += """
+                    </div>
+                </div>"""
+        
+        builder.add_html(anim_card_html)
+        
+        # Collect initialization call
+        animation_init_calls.append(f"initAnimationPlayer('{canvas_id}', '{config['name']}', {perf['fps']:.2f}, {num_frames});")
+    
+    # Close animation grid and tab
+    builder.add_html("""
+            </div>
+        </div>""")
+    
+    # Add JavaScript to initialize all animation players
+    init_animations_js = "\n        ".join(animation_init_calls)
+    builder.add_js(f"""
+        // Initialize animation players when DOM is ready
+        document.addEventListener('DOMContentLoaded', function() {{
+            {init_animations_js}
+        }});
+        
+        // Filter animations by divisor
+        function filterAnimations() {{
+            const filter = document.getElementById('divisor-filter-anim').value;
+            const cards = document.querySelectorAll('.animation-card');
+            
+            cards.forEach(card => {{
+                if (filter === 'all' || String(card.dataset.divisor) === String(filter)) {{
+                    card.style.display = 'block';
+                }} else {{
+                    card.style.display = 'none';
+                }}
+            }});
+        }}
+        
+        // Initialize filter
+        setTimeout(() => filterAnimations(), 100);
+    """)
     
     # Visual Comparison Tab
     comparison_html = f"""
