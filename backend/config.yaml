@@ -59,18 +59,27 @@ generation:
     
     # PERFORMANCE OPTIMIZATION: Lower-resolution interpolation
     # Interpolate at lower resolution, then upscale for massive speedup
+    # TESTED CONFIGURATIONS (2025-11-09):
     # 1 = full resolution (512x256) - highest quality, ~4 FPS
-    # 2 = half resolution (256x128) - slight softness, ~10 FPS (RECOMMENDED!)
-    # 4 = quarter resolution (128x64) - more blur, ~15+ FPS
-    # Trade-off: Lower values = faster but softer interpolated frames
+    # 2 = half resolution (256x128) - ~14 FPS (below target)
+    # 3 = third resolution (170x85) - ~23 FPS, SSIM 0.68
+    # 4 = quarter resolution (128x64) - ~32 FPS, SSIM 0.76 (RECOMMENDED!)
+    # 8 = eighth resolution (64x32) - ~52 FPS, SSIM 0.59 (too degraded)
+    # Trade-off: Divisor=4 provides 2x FPS headroom while maintaining quality
     # Note: Keyframes are always generated at full resolution
-    interpolation_resolution_divisor: 2
+    interpolation_resolution_divisor: 4
     
     # Upscaling method for lower-res interpolation
     # "bilinear" - Fast, good quality (RECOMMENDED)
     # "bicubic" - Slightly better quality, slightly slower
     # "nearest" - Fastest, pixelated (not recommended)
     interpolation_upscale_method: "bilinear"
+    
+    # Downsampling method before VAE encoding (for lower-res interpolation)
+    # "bilinear" - Fast, good quality (RECOMMENDED)
+    # "bicubic" - Middle ground, slight quality improvement
+    # "lanczos" - Best quality, slightly slower (~10ms overhead)
+    interpolation_downsample_method: "bilinear"
   
   # img2img parameters (for feedback loop mode)
   img2img:

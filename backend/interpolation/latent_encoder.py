@@ -52,7 +52,8 @@ class LatentEncoder:
     """
     
     def __init__(self, vae_path: Optional[Path] = None, device: str = "cuda", auto_load: bool = False,
-                 interpolation_resolution_divisor: int = 1, upscale_method: str = "bilinear"):
+                 interpolation_resolution_divisor: int = 1, upscale_method: str = "bilinear",
+                 downsample_method: str = "bilinear"):
         """
         Initialize VAE encoder/decoder
         
@@ -62,6 +63,7 @@ class LatentEncoder:
             auto_load: If True and vae_path is None, automatically loads SD 1.5 VAE from HuggingFace
             interpolation_resolution_divisor: Divide resolution by this for interpolation (1=full res, 2=half, 4=quarter)
             upscale_method: Method for upscaling after decode ("bilinear", "bicubic", "nearest")
+            downsample_method: Method for downsampling before encode ("bilinear", "bicubic", "lanczos")
         """
         self.device = device if torch.cuda.is_available() else "cpu"
         self.vae = None
@@ -74,6 +76,7 @@ class LatentEncoder:
         # Lower-resolution interpolation settings
         self.interpolation_resolution_divisor = interpolation_resolution_divisor
         self.upscale_method = upscale_method
+        self.downsample_method = downsample_method
         self.target_resolution = None  # Will be set when we see first image
         
         if interpolation_resolution_divisor > 1:
@@ -205,10 +208,13 @@ class LatentEncoder:
         # Apply resolution divisor for interpolation speedup
         if for_interpolation and self.interpolation_resolution_divisor > 1:
             original_size = image.size
-            new_width = original_size[0] // self.interpolation_resolution_divisor
-            new_height = original_size[1] // self.interpolation_resolution_divisor
-            image = image.resize((new_width, new_height), Image.Resampling.BILINEAR)
-            logger.debug(f"Downsampled for interpolation: {original_size} → {image.size}")
+            new_width = int(original_size[0] // self.interpolation_resolution_divisor)
+            new_height = int(original_size[1] // self.interpolation_resolution_divisor)
+            
+            # Use configurable downsample method
+            resample_method = getattr(Image.Resampling, self.downsample_method.upper())
+            image = image.resize((new_width, new_height), resample_method)
+            logger.debug(f"Downsampled for interpolation ({self.downsample_method}): {original_size} → {image.size}")
         
         if self.vae is None:
             logger.warning("VAE not loaded - returning mock latent")
