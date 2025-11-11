@@ -69,7 +69,7 @@ class DreamGenerator:
         """
         Resize image to target resolution before uploading to ComfyUI.
         
-        This is CRITICAL to prevent processing huge images that cause:
+        This prevents processing oversized images that can cause:
         - Excessive VRAM usage
         - Very slow generation times
         - System crashes
@@ -197,7 +197,7 @@ class DreamGenerator:
         logger.info(f"Generating from image: {image_path.name} (denoise={denoise})")
         logger.debug(f"Prompt: {prompt[:60]}...")
         
-        # CRITICAL: Resize image to target resolution before uploading
+        # Resize image to target resolution before uploading
         # This prevents processing huge images that cause crashes/slowdowns
         resized_image_path = self._resize_image_for_generation(image_path)
         
@@ -269,35 +269,61 @@ class DreamGenerator:
             Path to generated image in our output directory
         """
         # Queue prompt
+        logger.debug("Queueing workflow to ComfyUI...")
         prompt_id = self.client.queue_prompt(workflow)
         if not prompt_id:
             logger.error("Failed to queue workflow")
             return None
         
+        logger.info(f"Workflow queued with prompt_id: {prompt_id}")
+        
         # Wait for completion (use polling instead of async)
         try:
             import time
             timeout = self.config["performance"]["generation_timeout"]
-            start_time = time.time()
+            poll_start = time.time()
+            poll_count = 0
+            last_log_time = poll_start
+            
+            logger.debug(f"Polling for completion (timeout: {timeout}s)...")
             
             while True:
+                poll_count += 1
+                
                 # Check queue status
                 queue = self.client.get_queue()
                 if not queue:
-                    logger.error("Failed to get queue status")
+                    logger.error("Failed to get queue status - ComfyUI may be unresponsive")
                     return None
                 
                 # Check if our prompt is still in queue
                 running = [item for item in queue.get("queue_running", []) if item[1] == prompt_id]
                 pending = [item for item in queue.get("queue_pending", []) if item[1] == prompt_id]
                 
+                # Log progress every 5 seconds
+                current_time = time.time()
+                if current_time - last_log_time >= 5.0:
+                    elapsed = current_time - poll_start
+                    total_running = len(queue.get("queue_running", []))
+                    total_pending = len(queue.get("queue_pending", []))
+                    logger.info(f"Still waiting... ({elapsed:.1f}s) - Queue: {total_running} running, {total_pending} pending")
+                    if running or pending:
+                        logger.debug(f"Our prompt {prompt_id}: {'in running' if running else ''} {'in pending' if pending else ''}")
+                    else:
+                        logger.debug(f"Our prompt {prompt_id} not found in queue - may have completed")
+                    last_log_time = current_time
+                
                 if not running and not pending:
-                    # Prompt completed
+                    # Prompt completed (or was never in queue)
+                    elapsed = current_time - poll_start
+                    logger.info(f"Prompt no longer in queue after {elapsed:.1f}s ({poll_count} polls)")
                     break
                 
                 # Check timeout
-                if time.time() - start_time > timeout:
-                    logger.error(f"Generation timeout ({timeout}s)")
+                if current_time - poll_start > timeout:
+                    logger.error(f"Generation timeout ({timeout}s) - prompt appears stuck")
+                    logger.error(f"Last queue state: {len(running)} running, {len(pending)} pending")
+                    logger.error(f"Prompt ID: {prompt_id}")
                     return None
                 
                 # Wait a bit before checking again

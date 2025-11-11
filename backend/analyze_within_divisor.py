@@ -640,7 +640,7 @@ def print_within_divisor_report(data: Dict, output_file: Optional[Path] = None):
             break
     
     if not any_significant:
-        add_line("✗ CRITICAL: No divisor shows statistically significant method effects")
+        add_line("✗ WARNING: No divisor shows statistically significant method effects")
         add_line("  → FPS differences between methods are within measurement noise")
         add_line("  → Choose based on VISUAL QUALITY, not performance metrics")
     else:

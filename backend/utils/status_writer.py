@@ -61,6 +61,17 @@ class StatusWriter:
             "cache_hits": 0,
             "uptime_hours": 0.0,
             "last_update": datetime.now().isoformat(),
+            # Daemon status fields
+            "daemon_status": "unknown",
+            "comfyui_status": "unknown",
+            "controller_status": "unknown",
+            "daemon_uptime_hours": 0.0,
+            "comfyui_restarts": 0,
+            "controller_restarts": 0,
+            # Buffer status fields (for loading state)
+            "buffer_filled": 0,
+            "buffer_target": 1,
+            "is_buffering": True,
         }
         self._write_json(initial_status)
 
@@ -90,6 +101,8 @@ class StatusWriter:
         mode: str = "img2img",
         cache_size: int = 0,
         cache_hits: int = 0,
+        buffer_filled: int = None,
+        buffer_target: int = None,
     ) -> bool:
         """
         Write generation status (convenience method)
@@ -101,6 +114,8 @@ class StatusWriter:
             mode: Generation mode (img2img/interpolate/hybrid)
             cache_size: Current cache size
             cache_hits: Total cache hits
+            buffer_filled: Number of frames buffered (optional)
+            buffer_target: Target buffer size (optional)
         
         Returns:
             True if successful
@@ -114,6 +129,13 @@ class StatusWriter:
             "cache_size": cache_size,
             "cache_hits": cache_hits,
         }
+        
+        # Add buffer status if provided
+        if buffer_filled is not None and buffer_target is not None:
+            status["buffer_filled"] = buffer_filled
+            status["buffer_target"] = buffer_target
+            status["is_buffering"] = buffer_filled < buffer_target
+        
         return self.write_status(status)
 
     def write_paused_status(self, reason: str = "game_detected") -> bool:
@@ -147,6 +169,39 @@ class StatusWriter:
             "error_message": error_message,
         }
         return self.write_status(status)
+
+    def write_daemon_status(
+        self,
+        daemon_status: str = "running",
+        comfyui_status: str = "unknown",
+        controller_status: str = "unknown",
+        daemon_uptime_hours: float = 0.0,
+        comfyui_restarts: int = 0,
+        controller_restarts: int = 0,
+    ) -> bool:
+        """
+        Write daemon status (for daemon mode)
+        
+        Args:
+            daemon_status: Daemon state (starting/running/stopping/error)
+            comfyui_status: ComfyUI state (starting/ready/crashed/stopped)
+            controller_status: Controller state (starting/generating/paused/crashed/stopped)
+            daemon_uptime_hours: Hours since daemon started
+            comfyui_restarts: Number of ComfyUI restarts
+            controller_restarts: Number of controller restarts
+        
+        Returns:
+            True if successful
+        """
+        daemon_data = {
+            "daemon_status": daemon_status,
+            "comfyui_status": comfyui_status,
+            "controller_status": controller_status,
+            "daemon_uptime_hours": round(daemon_uptime_hours, 2),
+            "comfyui_restarts": comfyui_restarts,
+            "controller_restarts": controller_restarts,
+        }
+        return self.write_status(daemon_data)
 
     def _write_json(self, data: Dict[str, Any]) -> bool:
         """

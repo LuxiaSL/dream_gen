@@ -18,6 +18,7 @@ import logging
 
 from .spherical_lerp import spherical_lerp, batch_spherical_lerp, precompute_slerp_params
 from .latent_encoder import LatentEncoder
+from .frame_sequence_manager import FrameSequenceManager, FrameType, FrameState
 
 logger = logging.getLogger(__name__)
 
@@ -57,17 +58,15 @@ class HybridGenerator:
         self.latent_encoder = latent_encoder
         self.interpolation_frames = interpolation_frames
         
-        # Keyframe tracking
-        self.last_keyframe_path = None
-        self.last_keyframe_latent = None
-        self.next_keyframe_path = None
-        self.next_keyframe_latent = None
+        # Frame sequence manager for explicit tracking
+        self.frame_manager = FrameSequenceManager(
+            interpolation_frames=interpolation_frames,
+            output_dir=generator.output_dir
+        )
         
         # OPTIMIZATION: Pre-computed slerp parameters
-        self.slerp_precomputed = None
-        
-        # Frame counter
-        self.frames_since_keyframe = 0
+        # Maps keyframe pair (start, end) to precomputed params
+        self.slerp_precomputed: dict = {}
         
         logger.info(f"Hybrid generator initialized with VAE interpolation")
         logger.info(f"  Interpolation frames: {interpolation_frames}")
@@ -83,9 +82,11 @@ class HybridGenerator:
         """
         Generate next frame using hybrid strategy with VAE interpolation
         
+        Uses FrameSequenceManager to track keyframes and interpolations explicitly.
+        
         Strategy:
-        - Frame 0, 7, 14, ... → img2img keyframes (slow, diverse)
-        - Frames 1-6, 8-13, ... → interpolate between keyframes (fast, smooth)
+        - Keyframes → img2img generation (slow, diverse)
+        - Interpolated frames → VAE latent lerp (fast, smooth)
         
         Args:
             current_image: Current frame path
@@ -96,12 +97,17 @@ class HybridGenerator:
         Returns:
             Path to generated frame
         """
-        # Determine if this is a keyframe
-        is_keyframe = (frame_number % (self.interpolation_frames + 1) == 0)
+        # Get frame specification from manager
+        frame_spec = self.frame_manager.get_or_create_frame_spec(frame_number)
         
-        if is_keyframe:
+        logger.info(f"Generating: {frame_spec}")
+        
+        # Mark as generating
+        self.frame_manager.mark_generating(frame_number)
+        
+        if frame_spec.is_keyframe():
             # Generate keyframe via img2img
-            logger.info(f"Frame {frame_number}: KEYFRAME (img2img)")
+            logger.info(f"  -> Generating KEYFRAME via img2img (denoise={denoise})")
             
             keyframe = self.generator.generate_from_image(
                 image_path=current_image,
@@ -113,19 +119,29 @@ class HybridGenerator:
                 logger.error("Keyframe generation failed")
                 return None
             
+            # Mark as ready
+            self.frame_manager.mark_ready(frame_number, keyframe, prompt)
+            
             # Encode keyframe to latent if we have VAE
             if self.latent_encoder and self.latent_encoder.vae is not None:
                 try:
-                    # Update keyframe tracking
-                    self.last_keyframe_path = keyframe
-                    # Encode keyframe at FULL resolution (not downsampled)
-                    self.last_keyframe_latent = self.latent_encoder.encode(keyframe, for_interpolation=False)
-                    # Clear next keyframe to force regeneration
-                    self.next_keyframe_latent = None
-                    self.next_keyframe_path = None
-                    # Clear pre-computed slerp params
-                    self.slerp_precomputed = None
-                    logger.debug(f"  Encoded keyframe to latent: {self.last_keyframe_latent.shape}")
+                    # Synchronize CUDA after ComfyUI generation
+                    import torch
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize()
+                        logger.debug(f"  CUDA synchronized after img2img generation")
+                    
+                    # Encode at interpolation resolution to maintain consistency with other keyframes
+                    latent = self.latent_encoder.encode(keyframe, for_interpolation=True)
+                    
+                    # Store in frame manager
+                    self.frame_manager.store_keyframe_data(
+                        frame_number=frame_number,
+                        latent=latent,
+                        image_path=keyframe
+                    )
+                    
+                    logger.debug(f"  Encoded and stored keyframe latent: {latent.shape}")
                 except Exception as e:
                     logger.error(f"Failed to encode keyframe: {e}", exc_info=True)
             
@@ -133,85 +149,113 @@ class HybridGenerator:
         
         else:
             # Interpolate between keyframes
-            logger.info(f"Frame {frame_number}: interpolation")
+            logger.info(f"  -> Interpolating (t={frame_spec.interpolation_t:.3f})")
             
             # Check if we have VAE and latents
             if not self.latent_encoder or self.latent_encoder.vae is None:
                 logger.warning("No VAE available - falling back to img2img")
-                return self.generator.generate_from_image(
+                keyframe = self.generator.generate_from_image(
                     image_path=current_image,
                     prompt=prompt,
                     denoise=denoise * 0.6  # Lower denoise for fill frames
                 )
-            
-            # Ensure we have last keyframe
-            if self.last_keyframe_latent is None:
-                logger.warning("No last keyframe latent - generating fresh keyframe")
-                keyframe = self.generator.generate_from_image(
-                    image_path=current_image,
-                    prompt=prompt,
-                    denoise=denoise
-                )
                 if keyframe:
-                    # Encode at FULL resolution (not downsampled)
-                    self.last_keyframe_latent = self.latent_encoder.encode(keyframe, for_interpolation=False)
-                    self.last_keyframe_path = keyframe
+                    self.frame_manager.mark_ready(frame_number, keyframe, prompt)
                 return keyframe
             
-            # Generate next keyframe latent if needed
-            # OPTIMIZATION: This happens on the FIRST interpolated frame, so while
-            # we're outputting frames 1-6, the next keyframe (frame 7) is already ready!
-            # This is essentially parallel buffering.
-            if self.next_keyframe_latent is None:
-                logger.debug("  Pre-generating next keyframe for interpolation...")
-                try:
-                    next_keyframe = self.generator.generate_from_image(
+            # Get keyframe pair data
+            keyframe_pair_data = self.frame_manager.get_keyframe_pair_data(frame_number)
+            
+            if keyframe_pair_data is None:
+                # Need to generate next keyframe first
+                logger.info("  -> Next keyframe not ready, generating it now...")
+                
+                start_keyframe, end_keyframe = frame_spec.keyframe_pair
+                
+                # Check if we have the start keyframe
+                if start_keyframe not in self.frame_manager.keyframe_latents:
+                    logger.error(f"Missing start keyframe {start_keyframe}")
+                    # Fallback: generate keyframe
+                    keyframe = self.generator.generate_from_image(
                         image_path=current_image,
                         prompt=prompt,
                         denoise=denoise
                     )
-                    if next_keyframe and next_keyframe.exists():
-                        # Encode for interpolation (may be at lower resolution)
-                        self.next_keyframe_latent = self.latent_encoder.encode(next_keyframe, for_interpolation=True)
-                        self.next_keyframe_path = next_keyframe
-                        logger.debug(f"  Next keyframe encoded: {self.next_keyframe_latent.shape}")
-                        
-                        # OPTIMIZATION: Pre-compute slerp parameters for all interpolations
-                        # This will be reused for all 6-7 interpolated frames
-                        self.slerp_precomputed = precompute_slerp_params(
-                            self.last_keyframe_latent,
-                            self.next_keyframe_latent
-                        )
-                        logger.debug("  Slerp parameters pre-computed")
-                    else:
-                        logger.error("Next keyframe generation failed")
-                        return None
+                    if keyframe:
+                        # Encode and store
+                        latent = self.latent_encoder.encode(keyframe, for_interpolation=True)
+                        self.frame_manager.store_keyframe_data(start_keyframe, latent, keyframe)
+                        self.frame_manager.mark_ready(frame_number, keyframe, prompt)
+                    return keyframe
+                
+                # Generate the end keyframe
+                next_keyframe = self.generator.generate_from_image(
+                    image_path=current_image,
+                    prompt=prompt,
+                    denoise=denoise
+                )
+                
+                if not next_keyframe or not next_keyframe.exists():
+                    logger.error("Next keyframe generation failed")
+                    return None
+                
+                # Encode and store
+                try:
+                    # Synchronize CUDA to ensure ComfyUI generation completes before proceeding
+                    import torch
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize()
+                        logger.debug(f"  CUDA synchronized after next keyframe generation")
+                    
+                    next_latent = self.latent_encoder.encode(next_keyframe, for_interpolation=True)
+                    self.frame_manager.store_keyframe_data(
+                        frame_number=end_keyframe,
+                        latent=next_latent,
+                        image_path=next_keyframe
+                    )
+                    logger.debug(f"  Next keyframe generated and stored: frame {end_keyframe}")
+                    
+                    # Get keyframe pair data again
+                    keyframe_pair_data = self.frame_manager.get_keyframe_pair_data(frame_number)
+                    
                 except Exception as e:
-                    logger.error(f"Failed to generate/encode next keyframe: {e}", exc_info=True)
+                    logger.error(f"Failed to encode next keyframe: {e}", exc_info=True)
                     return None
             
-            # Calculate interpolation factor
-            frame_in_sequence = frame_number % (self.interpolation_frames + 1)
-            t = frame_in_sequence / (self.interpolation_frames + 1)
-            logger.debug(f"  Interpolation t={t:.3f} (frame {frame_in_sequence}/{self.interpolation_frames})")
+            # Now we have both keyframes, perform interpolation
+            (start_frame_num, start_latent, start_path), (end_frame_num, end_latent, end_path) = keyframe_pair_data
+            
+            logger.debug(f"  Interpolating between keyframes {start_frame_num} and {end_frame_num}")
             
             try:
-                # Perform spherical lerp with pre-computed parameters (OPTIMIZED!)
+                # Check if we have precomputed slerp params for this pair
+                pair_key = (start_frame_num, end_frame_num)
+                if pair_key not in self.slerp_precomputed:
+                    # Precompute for this keyframe pair
+                    self.slerp_precomputed[pair_key] = precompute_slerp_params(
+                        start_latent,
+                        end_latent
+                    )
+                    logger.debug(f"  Precomputed slerp params for pair {pair_key}")
+                
+                # Perform spherical lerp with pre-computed parameters
                 interpolated_latent = spherical_lerp(
-                    self.last_keyframe_latent,
-                    self.next_keyframe_latent,
-                    t,
-                    precomputed=self.slerp_precomputed
+                    start_latent,
+                    end_latent,
+                    frame_spec.interpolation_t,
+                    precomputed=self.slerp_precomputed[pair_key]
                 )
                 
                 # Decode to image (with upscaling if lower-res interpolation is enabled)
                 interpolated_image = self.latent_encoder.decode(interpolated_latent, upscale_to_target=True)
                 
                 # Save to output (OPTIMIZED: no optimize flag for speed)
-                output_path = self.generator.output_dir / f"frame_{frame_number:05d}.png"
+                output_path = frame_spec.output_path
                 # Save without compression optimization (trades file size for speed)
-                # This can save 50-100ms per save
                 interpolated_image.save(output_path, "PNG", optimize=False, compress_level=1)
+                
+                # Mark as ready
+                self.frame_manager.mark_ready(frame_number, output_path)
                 
                 logger.debug(f"  Saved interpolated frame: {output_path.name}")
                 return output_path
@@ -220,11 +264,14 @@ class HybridGenerator:
                 logger.error(f"Interpolation failed: {e}", exc_info=True)
                 # Fallback to img2img
                 logger.warning("Falling back to img2img")
-                return self.generator.generate_from_image(
+                keyframe = self.generator.generate_from_image(
                     image_path=current_image,
                     prompt=prompt,
                     denoise=denoise * 0.6
                 )
+                if keyframe:
+                    self.frame_manager.mark_ready(frame_number, keyframe, prompt)
+                return keyframe
     
     def generate_sequence(
         self,
@@ -409,11 +456,30 @@ class HybridGenerator:
         Returns:
             Dictionary with generation stats
         """
+        frame_stats = self.frame_manager.get_stats()
+        
         return {
-            "interpolation_frames": self.interpolation_frames,
+            **frame_stats,
             "has_latent_encoder": self.latent_encoder is not None,
-            "frames_since_keyframe": self.frames_since_keyframe
         }
+    
+    def print_buffer_status(self, lookahead: int = 10) -> None:
+        """
+        Print buffer status (delegates to frame manager)
+        
+        Args:
+            lookahead: Number of frames ahead to show
+        """
+        self.frame_manager.print_buffer_status(lookahead)
+    
+    def cleanup_old_keyframes(self, keep_recent: int = 5) -> None:
+        """
+        Clean up old keyframe latents to save memory
+        
+        Args:
+            keep_recent: Number of recent keyframes to keep
+        """
+        self.frame_manager.cleanup_old_keyframes(keep_recent)
 
 
 class SimpleHybridGenerator:

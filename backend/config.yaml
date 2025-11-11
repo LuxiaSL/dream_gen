@@ -35,7 +35,7 @@ generation:
   # SD 1.5 / 2.1 parameters (when model: "sd15" or "sd21-unclip")
   sd:
     steps: 10               # SD typically uses 20-30 steps (reduced to 10 for faster testing)
-    cfg_scale: 5.0          
+    cfg_scale: 6.0          
     sampler: "euler"      # euler_a works well for SD
     scheduler: "karras"
   
@@ -46,16 +46,29 @@ generation:
     # If false: Falls back to SimpleHybridGenerator (varying denoise levels)
     use_vae_interpolation: true
     
-    # Number of interpolated frames between keyframes
-    # Lower (5-7) = more frequent keyframes = higher quality, slower overall
-    # Higher (10-15) = fewer keyframes = smoother but less varied, faster overall
-    # Recommended: 7-10 for good balance
-    # This is the PRIMARY control for tuning display FPS vs generation quality
-    interpolation_frames: 7
+    # === FRAME GENERATION ARCHITECTURE ===
+    # The system works in a loop:
+    # 1. Generate KEYFRAME (full SD diffusion, ~2.1s)
+    # 2. Create N INTERPOLATION FRAMES between keyframes (VAE latent lerp)
+    # 3. Display all frames at target FPS
+    # 4. Repeat with next keyframe
+    
+    # Number of interpolated frames between each keyframe
+    # More frames = smoother animation but longer wait between keyframes
+    # Example: 10 frames @ 10fps = 1 second of smooth playback per keyframe
+    interpolation_frames: 10
+    
+    # Target playback framerate (fps) for interpolated frames
+    # This controls how fast interpolation frames are displayed
+    # TESTED PERFORMANCE:
+    # - Full res (512x256): ~4 FPS max
+    # - Half res (256x128): ~15 FPS max
+    # Set this based on your interpolation_resolution_divisor
+    target_interpolation_fps: 4
     
     # Keyframe generation strength (0.0-1.0)
     # Higher = more variation between keyframes, lower = smoother evolution
-    keyframe_denoise: 0.4
+    keyframe_denoise: 0.3
     
     # PERFORMANCE OPTIMIZATION: Lower-resolution interpolation
     # Interpolate at lower resolution, then upscale for massive speedup
@@ -63,13 +76,13 @@ generation:
     # 1 = full resolution (512x256) - highest quality, ~4 FPS
     # 1.5 = 3/4 resolution (384x192) - ~8 FPS
     # 2 = half resolution (256x128) - ~15 FPS
-    interpolation_resolution_divisor: 4
+    interpolation_resolution_divisor: 1
     
     # Upscaling method for lower-res interpolation
     # "bilinear" - Fast, good quality (RECOMMENDED)
     # "bicubic" - Slightly better quality, slightly slower
     # "nearest" - Fastest, pixelated (not recommended)
-    interpolation_upscale_method: "nearest"
+    interpolation_upscale_method: "bilinear"
     
     # Downsampling method before VAE encoding (for lower-res interpolation)
     # "bilinear" - Fast, good quality (RECOMMENDED)
@@ -79,7 +92,7 @@ generation:
   
   # img2img parameters (for feedback loop mode)
   img2img:
-    denoise: 0.5               # Lower = slower drift, higher = more variation
+    denoise: 0.35               # Lower = slower drift, higher = more variation
     # 0.3 = very slow evolution (preserves structure)
     # 0.4 = balanced (recommended)
     # 0.5 = faster changes
@@ -87,9 +100,9 @@ generation:
   
   # Cache system
   cache:
-    max_size: 75                    # Number of images to cache (LRU eviction)
-    injection_probability: 0.3      # 30% chance to inject cached image
-    similarity_threshold: 0.7       # CLIP similarity threshold (0.7-0.8 recommended)
+    max_size: 50                    # Number of images to cache (LRU eviction)
+    injection_probability: 0.15     # 15% chance to inject cached image
+    similarity_threshold: 0.8       # CLIP similarity threshold (0.7-0.8 recommended)
     # 0.9-1.0 = nearly identical
     # 0.8-0.9 = very similar
     # 0.7-0.8 = similar aesthetic (good for injection)
@@ -97,10 +110,11 @@ generation:
     # < 0.6   = different aesthetic
 
 display:
-  refresh_interval: 4.0           # Seconds between frame updates
-  crossfade_duration: 1.5         # Seconds for transition
-  buffer_size: 5                  # Pre-generate this many frames
-  max_output_frames: 100          # Keep only last N frames (prevents unbounded growth)
+  # NOTE: Frame timing is controlled by hybrid.target_interpolation_fps
+  # These settings are for buffering and output management only
+  
+  buffer_size: 5                  # Pre-generate this many frames ahead (smooths playback)
+  max_output_frames: 100          # Keep only last N frames in output dir (prevents unbounded growth)
   
 prompts:
   # Base theme templates (rotate through these)
@@ -116,8 +130,10 @@ prompts:
     time_based: true              # Inject time-of-day variations
     system_based: false           # Future: CPU load affects prompt
   
-  # Rotation strategy
-  rotation_interval: 20           # Frames before switching base theme
+  # Rotation strategy - KEYFRAME based (not interpolation frames!)
+  # Prompts rotate when generating new keyframes, not during interpolation
+  rotation_interval: 20           # Number of KEYFRAMES before switching base theme
+                                  # Example: 20 keyframes = 20 theme cycles before rotation
   
   # Negative prompt (always used)
   negative: "colors, red, blue, green, yellow, orange, purple, pink, brown, black, white, gray, silver, gold, platinum, rainbow, multicolor, psychedelic, trippy, fractal, glitch, noise, blur, low quality, text, watermark, signature, jpeg artifacts, low contrast, muddy colors, brown tones, warm colors"
@@ -137,7 +153,7 @@ game_detection:
   gpu_threshold: 80               # GPU load % to trigger pause (if using gpu_load method)
   
 performance:
-  max_queue_size: 10              # Max frames in generation queue
+  max_queue_size: 60              # Max frames in generation queue
   generation_timeout: 120          # Seconds before considering generation stuck (increased for Maxwell GPUs)
   enable_torch_compile: false     # PyTorch 2.0 optimization (experimental)
   async_file_operations: true     # Non-blocking file writes
@@ -147,4 +163,66 @@ aesthetic:
   clip_model: "openai/clip-vit-base-patch32"
   validation_enabled: false       # Future: reject images that drift too far
   similarity_warning_threshold: 0.5  # Warn if drifting from seed aesthetic
+
+# Daemon service (for Rainmeter auto-launch and process management)
+daemon:
+  enabled: true                   # Enable daemon mode (vs manual launch)
+  
+  # ComfyUI Backend Configuration
+  # IMPORTANT: Customize these paths for your setup!
+  comfyui:
+    # Path to ComfyUI startup script (relative to project root or absolute)
+    # The .bat file handles ComfyUI's own virtual environment
+    # Windows: Use .bat file (recommended)
+    # Linux/Mac: Use .sh file or python command
+    startup_script: "diffusion/ComfyUI/run_nvidia_gpu_gpu1_fast.bat"
+    
+    # Alternative examples:
+    # startup_script: "diffusion/ComfyUI/run_nvidia_gpu.bat"
+    # startup_script: "python diffusion/ComfyUI/main.py --listen 127.0.0.1 --port 8188"
+    
+    # How long to wait for ComfyUI to become responsive (seconds)
+    startup_timeout: 300
+    
+    # Health check: URL to verify ComfyUI is ready
+    health_check_url: "http://127.0.0.1:8188/system_stats"
+    health_check_interval: 2      # Seconds between checks during startup
+  
+  # DreamController Configuration
+  controller:
+    # Python executable for running the controller
+    # Options:
+    #   "auto" - Use current Python (same as daemon)
+    #   ".venv/Scripts/python.exe" - Explicit venv path (Windows)
+    #   ".venv/bin/python" - Explicit venv path (Linux/Mac)
+    #   "C:/path/to/python.exe" - Absolute path
+    python_executable: ".venv/Scripts/python.exe"
+    
+    # Script to run
+    main_script: "backend/main.py"
+    
+  # Process Management
+  auto_restart:
+    comfyui: true                 # Auto-restart ComfyUI if it crashes
+    controller: true              # Auto-restart dream_gen loop if it crashes
+    max_restarts: 5               # Max restarts before giving up (per hour)
+    restart_delay: 10             # Seconds to wait before restart attempt
+    
+  # Control Interface
+  control_file: "output/daemon_control.txt"   # File for pause/resume/shutdown commands
+  control_check_interval: 2       # Seconds between checking control file
+  
+  # Status & Monitoring
+  pid_file: "output/daemon.pid"   # PID file for daemon process tracking
+  status_update_interval: 5       # Seconds between daemon status updates
+  
+  # Graceful Shutdown
+  shutdown:
+    comfyui_grace_period: 30      # Seconds to wait for ComfyUI clean exit
+    controller_grace_period: 10   # Seconds to wait for controller clean exit
+    force_kill_after_timeout: true # Force kill if grace period expires
+    
+  # Logging
+  log_file: "logs/daemon.log"     # Daemon-specific log file
+  log_level: "INFO"               # DEBUG, INFO, WARNING, ERROR
 

@@ -37,9 +37,19 @@ class AestheticMatcher:
     Result: Variety without losing coherence!
     """
 
-    def __init__(self):
-        """Initialize aesthetic matcher with CLIP model"""
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+    def __init__(self, device: str = None):
+        """
+        Initialize aesthetic matcher with CLIP model
+        
+        Args:
+            device: Device to use (e.g., "cuda:0", "cuda:1", "cpu").
+                   If None, uses "cuda" if available, else "cpu"
+        """
+        if device is None:
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        else:
+            self.device = device
+        
         self.model = None
         self.processor = None
         self._load_model()

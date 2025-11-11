@@ -22,6 +22,7 @@ from typing import Optional
 import yaml
 import random
 from PIL import Image
+import torch
 
 from core.generator import DreamGenerator
 from utils.prompt_manager import PromptManager
@@ -111,7 +112,11 @@ class DreamController:
         
         # Initialize aesthetic matcher for cache similarity
         self.logger.info("Initializing aesthetic matcher...")
-        self.aesthetic_matcher = AestheticMatcher()
+        # Get GPU ID from config (same GPU as ComfyUI for consistency)
+        gpu_id = self.config.get('system', {}).get('gpu_id', 0)
+        device = f"cuda:{gpu_id}" if torch.cuda.is_available() else "cuda"
+        self.logger.info(f"Using GPU {gpu_id} for CLIP/VAE (matching ComfyUI)")
+        self.aesthetic_matcher = AestheticMatcher(device=device)
         
         # Initialize hybrid mode if enabled
         self.hybrid_generator = None
@@ -133,11 +138,19 @@ class DreamController:
                     resolution_divisor = self.config['generation']['hybrid'].get('interpolation_resolution_divisor', 1)
                     upscale_method = self.config['generation']['hybrid'].get('interpolation_upscale_method', 'bilinear')
                     
+                    # Use same GPU as ComfyUI for consistency
+                    gpu_id = self.config.get('system', {}).get('gpu_id', 0)
+                    device = f"cuda:{gpu_id}" if torch.cuda.is_available() else "cuda"
+                    
+                    # Get target resolution from config to force resize
+                    target_resolution = tuple(self.config['generation']['resolution'])  # [width, height]
+                    
                     self.latent_encoder = LatentEncoder(
-                        device="cuda",
+                        device=device,
                         auto_load=True,
                         interpolation_resolution_divisor=resolution_divisor,
-                        upscale_method=upscale_method
+                        upscale_method=upscale_method,
+                        target_resolution=target_resolution
                     )
                     
                     # Use full HybridGenerator with VAE interpolation
@@ -146,6 +159,13 @@ class DreamController:
                         latent_encoder=self.latent_encoder,
                         interpolation_frames=self.config['generation']['hybrid']['interpolation_frames']
                     )
+                    
+                    # Synchronize CUDA after loading models to ensure context is fully initialized
+                    # This prevents CUDA context errors during the first encode operation
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize()
+                        self.logger.debug("CUDA synchronized after model loading")
+                    
                     self.logger.info("[OK] VAE interpolation enabled")
                     
                 except Exception as e:
@@ -474,6 +494,10 @@ class DreamController:
             prompt: Current prompt
         """
         try:
+            # Calculate buffer status (for widget loading indicator)
+            buffer_target = self.config.get('display', {}).get('buffer_size', 5)
+            buffer_filled = min(self.frame_count, buffer_target)
+            
             status_data = {
                 "frame_number": self.frame_count,
                 "generation_time": round(generation_time, 2),
@@ -482,7 +506,11 @@ class DreamController:
                 "current_prompt": prompt[:100],  # Truncate long prompts
                 "cache_size": self.cache.size(),
                 "cache_injections": self.cache_injections,
-                "uptime_minutes": round((time.time() - self.start_time) / 60, 1) if self.start_time else 0
+                "uptime_minutes": round((time.time() - self.start_time) / 60, 1) if self.start_time else 0,
+                # Buffer status for widget
+                "buffer_filled": buffer_filled,
+                "buffer_target": buffer_target,
+                "is_buffering": buffer_filled < buffer_target,
             }
             
             self.status_writer.write_status(status_data)
@@ -638,6 +666,42 @@ class DreamController:
         dest = self.output_dir / f"frame_{self.frame_count:05d}.png"
         Image.open(self.current_image).save(dest)
         self.write_current_frame(dest)
+        
+        # Register frame 0 as a keyframe in the frame manager
+        if hasattr(self.hybrid_generator, 'frame_manager'):
+            self.hybrid_generator.frame_manager.mark_ready(self.frame_count, dest)
+            
+            # Encode frame 0 as a keyframe if using VAE
+            if self.latent_encoder:
+                try:
+                    self.logger.info("  Encoding seed frame 0 as initial keyframe...")
+                    self.logger.debug(f"    Image path: {dest}")
+                    self.logger.debug(f"    VAE device: {self.latent_encoder.device}")
+                    self.logger.debug(f"    Image exists: {dest.exists()}")
+                    self.logger.debug(f"    Image size: {Image.open(dest).size}")
+                    
+                    # Ensure CUDA is synchronized before encoding
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize()
+                        self.logger.debug(f"    CUDA memory allocated: {torch.cuda.memory_allocated() / 1024**2:.1f} MB")
+                    
+                    latent = self.latent_encoder.encode(dest, for_interpolation=True)
+                    
+                    self.logger.debug(f"    Latent shape: {latent.shape}")
+                    self.logger.debug(f"    Latent device: {latent.device}")
+                    
+                    self.hybrid_generator.frame_manager.store_keyframe_data(
+                        frame_number=self.frame_count,
+                        latent=latent,
+                        image_path=dest
+                    )
+                    self.logger.info("  [OK] Seed frame 0 registered as keyframe with latent")
+                except Exception as e:
+                    self.logger.error(f"  [FAIL] Could not encode seed frame 0: {e}")
+                    self.logger.error(f"    Error type: {type(e).__name__}")
+                    import traceback
+                    self.logger.error(f"    Traceback:\n{traceback.format_exc()}")
+        
         self.frame_count += 1
         
         # Main generation loop
@@ -669,6 +733,11 @@ class DreamController:
                 # Generate next frame via hybrid mode
                 prompt = self.prompt_manager.get_next_prompt()
                 self.logger.info(f"\n{'='*70}")
+                
+                # Show buffer status every 10 frames for debugging
+                if self.frame_count % 10 == 0 and hasattr(self.hybrid_generator, 'print_buffer_status'):
+                    self.hybrid_generator.print_buffer_status(lookahead=15)
+                
                 self.logger.info(f"Frame {self.frame_count}")
                 
                 start_time = time.time()
@@ -730,6 +799,9 @@ class DreamController:
                     # Periodic cleanup every 20 frames
                     if self.frame_count % 20 == 0:
                         self.cleanup_old_frames()
+                        # Also cleanup old keyframes from memory
+                        if hasattr(self.hybrid_generator, 'cleanup_old_keyframes'):
+                            self.hybrid_generator.cleanup_old_keyframes(keep_recent=5)
                     
                     await asyncio.sleep(1.0)
                 else:

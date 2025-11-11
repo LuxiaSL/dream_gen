@@ -433,8 +433,8 @@ class ComfyUIClient:
         """
         Free GPU VRAM by unloading models
         
-        This is CRITICAL for game detection! When a game starts, we need to
-        unload models from VRAM to avoid conflicts and crashes.
+        This is essential for game detection. When a game starts, models
+        must be unloaded from VRAM to avoid conflicts and crashes.
         
         ComfyUI's /free endpoint accepts:
         - unload_models: Unload all loaded models from VRAM

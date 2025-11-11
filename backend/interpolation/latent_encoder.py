@@ -9,7 +9,7 @@ import torch
 import numpy as np
 from PIL import Image
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Tuple
 import logging
 import time
 from contextlib import contextmanager
@@ -53,7 +53,7 @@ class LatentEncoder:
     
     def __init__(self, vae_path: Optional[Path] = None, device: str = "cuda", auto_load: bool = False,
                  interpolation_resolution_divisor: int = 1, upscale_method: str = "bilinear",
-                 downsample_method: str = "bilinear"):
+                 downsample_method: str = "bilinear", target_resolution: Optional[Tuple[int, int]] = None):
         """
         Initialize VAE encoder/decoder
         
@@ -64,6 +64,7 @@ class LatentEncoder:
             interpolation_resolution_divisor: Divide resolution by this for interpolation (1=full res, 2=half, 4=quarter)
             upscale_method: Method for upscaling after decode ("bilinear", "bicubic", "nearest")
             downsample_method: Method for downsampling before encode ("bilinear", "bicubic", "lanczos")
+            target_resolution: Force resize to this resolution (width, height) to avoid CUDA issues
         """
         self.device = device if torch.cuda.is_available() else "cpu"
         self.vae = None
@@ -77,7 +78,8 @@ class LatentEncoder:
         self.interpolation_resolution_divisor = interpolation_resolution_divisor
         self.upscale_method = upscale_method
         self.downsample_method = downsample_method
-        self.target_resolution = None  # Will be set when we see first image
+        self.forced_resolution = target_resolution  # Force resize to avoid CUDA issues
+        self.target_resolution = target_resolution  # Also use as default target for upscaling
         
         if interpolation_resolution_divisor > 1:
             logger.info(f"Lower-res interpolation enabled: {interpolation_resolution_divisor}x downscale")
@@ -201,8 +203,27 @@ class LatentEncoder:
         if isinstance(image, Path):
             image = Image.open(image).convert('RGB')
         
-        # Store target resolution from first image
-        if self.target_resolution is None:
+        # Force resize to configured resolution if specified
+        # This ensures dimensions are compatible with the model and GPU
+        if self.forced_resolution is not None:
+            width, height = image.size
+            target_width, target_height = self.forced_resolution
+            if (width, height) != self.forced_resolution:
+                logger.info(f"Force resizing from {width}x{height} to {target_width}x{target_height} (configured resolution)")
+                image = image.resize(self.forced_resolution, Image.Resampling.LANCZOS)
+        else:
+            # Fallback: Ensure dimensions are divisible by 8 for VAE compatibility
+            width, height = image.size
+            if width % 8 != 0 or height % 8 != 0:
+                # Round to nearest multiple of 8
+                new_width = (width // 8) * 8
+                new_height = (height // 8) * 8
+                logger.warning(f"Image dimensions {width}x{height} not divisible by 8!")
+                logger.info(f"Auto-resizing to {new_width}x{new_height} for VAE compatibility")
+                image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        
+        # Store target resolution from first image if not forced
+        if self.target_resolution is None and self.forced_resolution is None:
             self.target_resolution = image.size
         
         # Apply resolution divisor for interpolation speedup
