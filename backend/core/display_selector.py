@@ -96,18 +96,23 @@ class DisplayFrameSelector:
         logger.info("Waiting for initial buffer to fill...")
         logger.info(f"Target: {self.min_buffer_seconds}s")
         
+        # HACKY WORKAROUND: Use much smaller minimum buffer (2 seconds) to let it run free
+        # TODO: Replace with proper async/non-blocking implementation
+        actual_min_buffer = min(2.0, self.min_buffer_seconds)
+        logger.info(f"[WORKAROUND] Using reduced min buffer: {actual_min_buffer}s instead of {self.min_buffer_seconds}s")
+        
         while self.running:
             status = self.buffer.get_buffer_status()
             seconds_buffered = status['seconds_buffered']
             percentage = status['buffer_percentage']
             
-            if seconds_buffered >= self.min_buffer_seconds:
+            if seconds_buffered >= actual_min_buffer:
                 logger.info(f"[OK] Buffer ready: {seconds_buffered:.1f}s ({percentage:.1f}%)")
                 return True
             
             # Log progress
             if int(time.time()) % 5 == 0:  # Log every 5 seconds
-                logger.info(f"Buffering... {seconds_buffered:.1f}s / {self.min_buffer_seconds}s ({percentage:.1f}%)")
+                logger.info(f"Buffering... {seconds_buffered:.1f}s / {actual_min_buffer}s ({percentage:.1f}%)")
             
             await asyncio.sleep(check_interval)
         

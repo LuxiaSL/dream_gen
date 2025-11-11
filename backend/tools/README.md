@@ -109,6 +109,60 @@ uv run backend/tools/generate_comparison.py output/quality_tests/run_TIMESTAMP -
 
 ---
 
+## 🎬 Animation & Visualization
+
+### `generate_animation.py`
+
+**Purpose**: Generate looping animation from keyframes and interpolations
+
+Creates a WebP or GIF animation from the generated keyframes and interpolation frames. Automatically sequences frames as: keyframe → interpolations → keyframe → interpolations → ... creating a smooth looping animation.
+
+**Usage**:
+```bash
+# Generate WebP at 5 FPS (default)
+uv run backend/tools/generate_animation.py
+
+# Generate GIF at 4 FPS
+uv run backend/tools/generate_animation.py --format gif --fps 4
+
+# Custom output path
+uv run backend/tools/generate_animation.py --output my_animation.webp
+
+# Use custom input directory
+uv run backend/tools/generate_animation.py --input-dir path/to/output
+
+# Disable looping (play once)
+uv run backend/tools/generate_animation.py --no-loop
+
+# Fast mode (faster encoding, slightly larger file)
+uv run backend/tools/generate_animation.py --fast
+```
+
+**Features**:
+- Automatically discovers and sequences keyframes + interpolations
+- Parses filenames to determine proper frame order
+- **Automatic frame resizing** to match config resolution (handles mixed sizes)
+- **Parallel processing** for fast image loading (up to 8 threads)
+- **Smart resampling** (Lanczos for large downscaling, Bilinear for minor adjustments)
+- **Progress indication** during processing
+- Loads target resolution from `backend/config.yaml`
+- Manual resolution override support
+- Supports WebP (better compression) and GIF formats
+- Configurable frame rate (1-60 FPS)
+- Looping or single-play animations
+- Fast mode option for quicker encoding
+- Shows animation statistics (duration, file size, frame count)
+- Reports size mismatches with warnings
+
+**Frame Sequencing**:
+- Keyframes: `keyframe_001.png`, `keyframe_002.png`, etc.
+- Interpolations: `001-002_001.png` through `001-002_010.png` (between keyframes 1 and 2)
+- Result: `[keyframe_1, interp_1, interp_2, ..., interp_10, keyframe_2, interp_1, ..., keyframe_3, ...]`
+
+**Output**: `output/finished_product.webp` (or `.gif`)
+
+---
+
 ## 🧪 Testing Scripts
 
 ### `test_quality_comparison.py`
@@ -268,12 +322,19 @@ uv run backend/tools/profile_interpolation.py --iterations 50
 
 ## 🎯 Typical Workflow
 
+### Development & Optimization Workflow
 1. **Initial Testing**: Run `test_quality_comparison.py` to generate baseline data
 2. **Analysis**: Use `analyze_performance_correlations.py` and `analyze_within_divisor.py` to understand results
 3. **Visual Review**: Open generated HTML comparison to visually inspect quality
 4. **Optimization**: Use `profile_interpolation.py` to identify bottlenecks
 5. **Verification**: Use `test_interpolation_speed.py` for quick checks
 6. **Iteration**: Repeat with different configurations
+
+### Animation Generation Workflow
+1. **Generate Keyframes**: Create initial keyframes using your generation system
+2. **Generate Interpolations**: Run interpolation between consecutive keyframes
+3. **Create Animation**: Use `generate_animation.py` to preview the full sequence as a looping animation
+4. **Review**: Check the animation to verify smooth transitions and visual quality
 
 ---
 

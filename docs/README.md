@@ -1,4 +1,4 @@
-# 🌀 Dream Window - Documentation
+# 🌀 Dream Window - Documentation (OUT OF DATE)
 
 **A living AI dream window for your desktop: continuously morphing ethereal technical aesthetics**
 

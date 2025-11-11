@@ -1,4 +1,4 @@
-# 🌀 DREAM WINDOW - MASTER IMPLEMENTATION PLAN v2.0
+# 🌀 DREAM WINDOW - MASTER IMPLEMENTATION PLAN v2.0 (OUT OF DATE)
 
 **A Living AI Dream Window for Your Desktop**
 

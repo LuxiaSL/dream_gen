@@ -688,6 +688,12 @@ class DreamController:
         # Set seed in generation coordinator
         self.generation_coordinator.set_seed_image(target_path)
         
+        # Mark keyframe 1 as already generated (the seed)
+        # This prevents the coordinator from regenerating keyframe 1
+        self.generation_coordinator.current_keyframe_num = 1
+        self.generation_coordinator.keyframes_generated = 1
+        self.logger.info("  [OK] Keyframe 1 registered (seed frame preserved)")
+        
         # Clear ComfyUI queue
         self.logger.info("Clearing ComfyUI queue...")
         queue_status = self.generator.client.get_queue()
