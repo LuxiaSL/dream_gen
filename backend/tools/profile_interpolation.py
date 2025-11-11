@@ -5,8 +5,8 @@ This script profiles each component of the interpolation pipeline to identify
 bottlenecks and measure optimization improvements.
 
 Usage:
-    python backend/profile_interpolation.py
-    python backend/profile_interpolation.py --iterations 10
+    uv run backend/tools/profile_interpolation.py
+    uv run backend/tools/profile_interpolation.py --iterations 10
 """
 
 import torch
@@ -20,8 +20,8 @@ import numpy as np
 from PIL import Image
 import argparse
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent))
+# Add backend directory to path for imports (we're in backend/tools/)
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from interpolation.latent_encoder import LatentEncoder
 from interpolation.spherical_lerp import spherical_lerp

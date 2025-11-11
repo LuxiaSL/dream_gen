@@ -11,12 +11,12 @@ Sends commands to the daemon via control file for:
 - Status checking
 
 Usage:
-    python daemon_control.py pause
-    python daemon_control.py resume
-    python daemon_control.py shutdown
-    python daemon_control.py restart-comfyui
-    python daemon_control.py restart-controller
-    python daemon_control.py status
+    uv run daemon_control.py pause
+    uv run daemon_control.py resume
+    uv run daemon_control.py shutdown
+    uv run daemon_control.py restart-comfyui
+    uv run daemon_control.py restart-controller
+    uv run daemon_control.py status
 """
 
 import argparse
@@ -299,9 +299,9 @@ Commands:
   status             Show detailed daemon status
 
 Examples:
-  python daemon_control.py pause
-  python daemon_control.py status
-  python daemon_control.py shutdown
+  uv run daemon_control.py pause
+  uv run daemon_control.py status
+  uv run daemon_control.py shutdown
         """
     )
     

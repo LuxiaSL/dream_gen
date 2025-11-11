@@ -10,8 +10,8 @@ import sys
 from pathlib import Path
 from PIL import Image
 
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent))
+# Add backend directory to path for imports (we're in backend/tools/)
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from interpolation.latent_encoder import LatentEncoder
 from interpolation.spherical_lerp import spherical_lerp, precompute_slerp_params

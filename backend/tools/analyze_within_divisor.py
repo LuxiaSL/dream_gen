@@ -714,8 +714,8 @@ def main():
             
             if not quality_tests_dir.exists():
                 print("[ERROR] No quality tests found")
-                print("Usage: python analyze_within_divisor.py [path/to/performance_metrics.json]")
-                print("       python analyze_within_divisor.py --all-runs")
+                print("Usage: uv run backend/tools/analyze_within_divisor.py [path/to/performance_metrics.json]")
+                print("       uv run backend/tools/analyze_within_divisor.py --all-runs")
                 return
             
             # Find most recent run

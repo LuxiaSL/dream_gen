@@ -34,18 +34,13 @@ generation:
   
   # SD 1.5 / 2.1 parameters (when model: "sd15" or "sd21-unclip")
   sd:
-    steps: 10               # SD typically uses 20-30 steps (reduced to 10 for faster testing)
+    steps: 10               # SD typically uses 20-30 steps, but 10 is fine for drifting and faster
     cfg_scale: 6.0          
     sampler: "euler"      # euler_a works well for SD
     scheduler: "karras"
   
   # Hybrid mode configuration (RECOMMENDED for best speed/quality balance)
   hybrid:
-    # Enable VAE-based latent interpolation (requires diffusers library)
-    # If true: Uses SD 1.5 VAE for fast interpolation (~500MB VRAM)
-    # If false: Falls back to SimpleHybridGenerator (varying denoise levels)
-    use_vae_interpolation: true
-    
     # === FRAME GENERATION ARCHITECTURE ===
     # The system works in a loop:
     # 1. Generate KEYFRAME (full SD diffusion, ~2.1s)
@@ -110,10 +105,20 @@ generation:
     # < 0.6   = different aesthetic
 
 display:
-  # NOTE: Frame timing is controlled by hybrid.target_interpolation_fps
-  # These settings are for buffering and output management only
+  # === BUFFERED DISPLAY SYSTEM ===
+  # New architecture: Fill buffer with frames before starting playback
+  # This ensures smooth, uninterrupted visual experience
   
-  buffer_size: 5                  # Pre-generate this many frames ahead (smooths playback)
+  # Buffer target in seconds (30s = "crumple zone" for smooth playback)
+  # System will generate this many seconds worth of frames before displaying
+  buffer_target_seconds: 30.0
+  
+  # Minimum buffer before starting playback (can be lower than target for faster startup)
+  min_buffer_seconds: 10.0
+  
+  # NOTE: Display FPS is controlled by hybrid.target_interpolation_fps
+  
+  # Output management
   max_output_frames: 100          # Keep only last N frames in output dir (prevents unbounded growth)
   
 prompts:
@@ -179,7 +184,7 @@ daemon:
     
     # Alternative examples:
     # startup_script: "diffusion/ComfyUI/run_nvidia_gpu.bat"
-    # startup_script: "python diffusion/ComfyUI/main.py --listen 127.0.0.1 --port 8188"
+    # startup_script: "uv run diffusion/ComfyUI/main.py --listen 127.0.0.1 --port 8188"
     
     # How long to wait for ComfyUI to become responsive (seconds)
     startup_timeout: 300

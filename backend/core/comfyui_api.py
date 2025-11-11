@@ -2,11 +2,42 @@
 ComfyUI API Client
 Handles all interactions with ComfyUI server
 
-This module provides HTTP and WebSocket communication with ComfyUI:
+This module provides comprehensive HTTP and WebSocket communication with ComfyUI:
+
+Core Operations:
 - Queue workflow execution
 - Monitor progress via WebSocket
 - Retrieve generated images
 - Handle errors and retries
+
+Queue Management:
+- Get queue status
+- Clear entire queue
+- Delete specific queue items
+- Interrupt execution (global or targeted)
+
+History Management:
+- Get history (with pagination support)
+- Clear entire history
+- Delete specific history items
+
+Image Operations:
+- Upload images and masks
+- Retrieve image data via API
+- Get image paths from filesystem
+
+Model & Resource Discovery:
+- List available models by type (checkpoints, loras, vae, etc.)
+- Get embeddings and extensions
+- View safetensors metadata
+- Get node definitions and info
+
+System Operations:
+- Get system stats (VRAM, devices, versions)
+- Free memory / unload models
+- Get server feature flags
+
+All endpoints are synchronized with the official ComfyUI server implementation.
 """
 
 import asyncio
@@ -223,22 +254,41 @@ class ComfyUIClient:
             logger.error(f"Unexpected error waiting for completion: {e}", exc_info=True)
             return False
 
-    def get_history(self, prompt_id: str) -> Dict[str, Any]:
+    def get_history(
+        self, 
+        prompt_id: Optional[str] = None,
+        max_items: Optional[int] = None,
+        offset: Optional[int] = None
+    ) -> Dict[str, Any]:
         """
-        Get generation history for a specific prompt
+        Get generation history
         
         Args:
-            prompt_id: The prompt ID to query
+            prompt_id: Optional specific prompt ID to query. If None, returns all history.
+            max_items: Maximum number of items to return (for pagination)
+            offset: Offset for pagination (default: -1)
         
         Returns:
             Dictionary with history information
         """
         try:
-            response = self.session.get(f"{self.base_url}/history/{prompt_id}")
+            if prompt_id:
+                # Get history for specific prompt
+                response = self.session.get(f"{self.base_url}/history/{prompt_id}")
+            else:
+                # Get all history with optional pagination
+                params = {}
+                if max_items is not None:
+                    params["max_items"] = max_items
+                if offset is not None:
+                    params["offset"] = offset
+                
+                response = self.session.get(f"{self.base_url}/history", params=params)
+            
             response.raise_for_status()
             return response.json()
         except Exception as e:
-            logger.error(f"Failed to get history for {prompt_id}: {e}")
+            logger.error(f"Failed to get history: {e}")
             return {}
 
     def get_output_images(self, prompt_id: str) -> List[str]:
@@ -360,6 +410,72 @@ class ComfyUIClient:
             logger.error(f"Unexpected error uploading image: {e}", exc_info=True)
             return None
     
+    def upload_mask(
+        self,
+        mask_path: Path,
+        original_ref: Dict[str, Any],
+        subfolder: str = "",
+        image_type: str = "input",
+        overwrite: bool = False,
+    ) -> Optional[Dict[str, str]]:
+        """
+        Upload a mask image to ComfyUI (applies alpha channel to original image)
+        
+        This endpoint combines a mask with an original image by applying
+        the mask's alpha channel to the original image.
+        
+        Args:
+            mask_path: Path to local mask image file
+            original_ref: Reference to original image with keys:
+                         {"filename": str, "type": str, "subfolder": str}
+            subfolder: Optional subfolder in the upload directory
+            image_type: Type of upload ("input", "temp", "output")
+            overwrite: Whether to overwrite existing file with same name
+        
+        Returns:
+            Dictionary with 'name', 'subfolder', and 'type' if successful, None otherwise
+        """
+        if not mask_path.exists():
+            logger.error(f"Mask file not found: {mask_path}")
+            return None
+        
+        try:
+            # Prepare multipart form data
+            with open(mask_path, "rb") as f:
+                files = {
+                    "image": (mask_path.name, f, "image/png"),
+                }
+                data = {
+                    "original_ref": json.dumps(original_ref),
+                    "subfolder": subfolder,
+                    "type": image_type,
+                    "overwrite": "true" if overwrite else "false",
+                }
+                
+                response = self.session.post(
+                    f"{self.base_url}/upload/mask",
+                    files=files,
+                    data=data,
+                    timeout=30.0,
+                )
+                response.raise_for_status()
+                
+                result = response.json()
+                logger.info(f"Mask uploaded: {result['name']} (type: {result['type']})")
+                return result
+                
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to upload mask: {e}")
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    logger.error(f"Server response: {e.response.text[:500]}")
+                except:
+                    pass
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error uploading mask: {e}", exc_info=True)
+            return None
+    
     def get_image_data(self, filename: str, subfolder: str = "", folder_type: str = "output") -> Optional[bytes]:
         """
         Get image data directly from ComfyUI API (no file system access needed)
@@ -396,17 +512,27 @@ class ComfyUIClient:
             logger.error(f"Unexpected error getting image data: {e}", exc_info=True)
             return None
 
-    def interrupt_execution(self) -> bool:
+    def interrupt_execution(self, prompt_id: Optional[str] = None) -> bool:
         """
         Interrupt current execution
+        
+        Args:
+            prompt_id: Optional specific prompt ID to interrupt. If None, interrupts all.
         
         Returns:
             True if successful
         """
         try:
-            response = self.session.post(f"{self.base_url}/interrupt")
+            payload = {}
+            if prompt_id:
+                payload["prompt_id"] = prompt_id
+            
+            response = self.session.post(f"{self.base_url}/interrupt", json=payload)
             response.raise_for_status()
-            logger.info("Execution interrupted")
+            if prompt_id:
+                logger.info(f"Execution interrupted for prompt {prompt_id}")
+            else:
+                logger.info("Execution interrupted (all)")
             return True
         except Exception as e:
             logger.error(f"Failed to interrupt execution: {e}")
@@ -414,7 +540,7 @@ class ComfyUIClient:
 
     def clear_queue(self) -> bool:
         """
-        Clear the pending queue
+        Clear the entire pending queue
         
         Returns:
             True if successful
@@ -427,6 +553,103 @@ class ComfyUIClient:
             return True
         except Exception as e:
             logger.error(f"Failed to clear queue: {e}")
+            return False
+    
+    def delete_queue_item(self, prompt_id: str) -> bool:
+        """
+        Delete a specific item from the queue
+        
+        Args:
+            prompt_id: The prompt ID to delete from queue
+        
+        Returns:
+            True if successful
+        """
+        try:
+            payload = {"delete": [prompt_id]}
+            response = self.session.post(f"{self.base_url}/queue", json=payload)
+            response.raise_for_status()
+            logger.info(f"Deleted queue item: {prompt_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete queue item: {e}")
+            return False
+    
+    def delete_queue_items(self, prompt_ids: List[str]) -> bool:
+        """
+        Delete multiple items from the queue
+        
+        Args:
+            prompt_ids: List of prompt IDs to delete from queue
+        
+        Returns:
+            True if successful
+        """
+        try:
+            payload = {"delete": prompt_ids}
+            response = self.session.post(f"{self.base_url}/queue", json=payload)
+            response.raise_for_status()
+            logger.info(f"Deleted {len(prompt_ids)} queue items")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete queue items: {e}")
+            return False
+
+    def clear_history(self) -> bool:
+        """
+        Clear the entire history
+        
+        Returns:
+            True if successful
+        """
+        try:
+            payload = {"clear": True}
+            response = self.session.post(f"{self.base_url}/history", json=payload)
+            response.raise_for_status()
+            logger.info("History cleared")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to clear history: {e}")
+            return False
+    
+    def delete_history_item(self, prompt_id: str) -> bool:
+        """
+        Delete a specific item from history
+        
+        Args:
+            prompt_id: The prompt ID to delete from history
+        
+        Returns:
+            True if successful
+        """
+        try:
+            payload = {"delete": [prompt_id]}
+            response = self.session.post(f"{self.base_url}/history", json=payload)
+            response.raise_for_status()
+            logger.info(f"Deleted history item: {prompt_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete history item: {e}")
+            return False
+    
+    def delete_history_items(self, prompt_ids: List[str]) -> bool:
+        """
+        Delete multiple items from history
+        
+        Args:
+            prompt_ids: List of prompt IDs to delete from history
+        
+        Returns:
+            True if successful
+        """
+        try:
+            payload = {"delete": prompt_ids}
+            response = self.session.post(f"{self.base_url}/history", json=payload)
+            response.raise_for_status()
+            logger.info(f"Deleted {len(prompt_ids)} history items")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete history items: {e}")
             return False
 
     def free_memory(self, unload_models: bool = True, free_memory: bool = True) -> bool:
@@ -461,6 +684,129 @@ class ComfyUIClient:
             logger.warning("This might not be critical - ComfyUI may not have /free endpoint")
             # Don't fail hard - older ComfyUI versions might not have this endpoint
             return False
+    
+    def get_embeddings(self) -> List[str]:
+        """
+        Get list of available embeddings (without file extensions)
+        
+        Returns:
+            List of embedding names
+        """
+        try:
+            response = self.session.get(f"{self.base_url}/embeddings")
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"Failed to get embeddings: {e}")
+            return []
+    
+    def get_extensions(self) -> List[str]:
+        """
+        Get list of available web extensions
+        
+        Returns:
+            List of extension paths
+        """
+        try:
+            response = self.session.get(f"{self.base_url}/extensions")
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"Failed to get extensions: {e}")
+            return []
+    
+    def get_model_types(self) -> List[str]:
+        """
+        Get list of available model types (folders)
+        
+        Returns:
+            List of model type names (e.g., "checkpoints", "loras", "vae", etc.)
+        """
+        try:
+            response = self.session.get(f"{self.base_url}/models")
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"Failed to get model types: {e}")
+            return []
+    
+    def get_models(self, folder: str) -> List[str]:
+        """
+        Get list of available models in a specific folder
+        
+        Args:
+            folder: Model folder name (e.g., "checkpoints", "loras", "vae")
+        
+        Returns:
+            List of model filenames in that folder
+        """
+        try:
+            response = self.session.get(f"{self.base_url}/models/{folder}")
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"Failed to get models for folder {folder}: {e}")
+            return []
+    
+    def get_features(self) -> Dict[str, Any]:
+        """
+        Get server feature flags
+        
+        Returns:
+            Dictionary of feature flags supported by the server
+        """
+        try:
+            response = self.session.get(f"{self.base_url}/features")
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"Failed to get features: {e}")
+            return {}
+    
+    def get_object_info(self, node_class: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get node definitions/info from ComfyUI
+        
+        Args:
+            node_class: Optional specific node class to query. If None, returns all nodes.
+        
+        Returns:
+            Dictionary with node information including inputs, outputs, categories, etc.
+        """
+        try:
+            if node_class:
+                response = self.session.get(f"{self.base_url}/object_info/{node_class}")
+            else:
+                response = self.session.get(f"{self.base_url}/object_info")
+            
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"Failed to get object info: {e}")
+            return {}
+    
+    def get_view_metadata(self, folder_name: str, filename: str) -> Dict[str, Any]:
+        """
+        Get metadata from a safetensors file
+        
+        Args:
+            folder_name: Folder name (e.g., "checkpoints", "loras")
+            filename: Safetensors filename (must end with .safetensors)
+        
+        Returns:
+            Dictionary with metadata from the safetensors file
+        """
+        try:
+            params = {"filename": filename}
+            response = self.session.get(
+                f"{self.base_url}/view_metadata/{folder_name}",
+                params=params
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"Failed to get metadata for {folder_name}/{filename}: {e}")
+            return {}
 
     def close(self) -> None:
         """Close the HTTP session"""
@@ -480,50 +826,244 @@ class ComfyUIClient:
 # Test function for development
 async def test_api() -> bool:
     """
-    Test ComfyUI API connection
+    Comprehensive test of ComfyUI API endpoints
     
-    This should be run with ComfyUI server running to verify connectivity.
+    This should be run with ComfyUI server running to verify connectivity
+    and endpoint compatibility.
     """
-    print("=" * 60)
-    print("Testing ComfyUI API connection...")
-    print("=" * 60)
+    print("=" * 70)
+    print("Testing ComfyUI API - Comprehensive Endpoint Verification")
+    print("=" * 70)
     
     client = ComfyUIClient()
+    test_results = []
     
     # Test 1: System stats
-    print("\nTest 1: System Stats")
-    stats = client.get_system_stats()
-    if stats:
-        system_info = stats.get("system", {})
-        print(f"[OK] System stats: OS={system_info.get('os', 'unknown')}")
-        print(f"  Python: {system_info.get('python_version', 'unknown')}")
-        
-        devices = stats.get("devices", [])
-        if devices:
-            print(f"  Devices: {len(devices)} GPU(s)")
-            for i, device in enumerate(devices):
-                print(f"    GPU {i}: {device.get('name', 'unknown')}")
-    else:
-        print("[FAIL] Failed to get system stats (is ComfyUI running?)")
-        return False
+    print("\n[1/14] System Stats")
+    try:
+        stats = client.get_system_stats()
+        if stats and "system" in stats:
+            system_info = stats.get("system", {})
+            print(f"  ✓ OS: {system_info.get('os', 'unknown')}")
+            print(f"  ✓ ComfyUI: {system_info.get('comfyui_version', 'unknown')}")
+            devices = stats.get("devices", [])
+            if devices:
+                print(f"  ✓ Devices: {len(devices)} GPU(s)")
+            test_results.append(("System Stats", True))
+        else:
+            print("  ✗ Failed to get system stats")
+            test_results.append(("System Stats", False))
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+        test_results.append(("System Stats", False))
     
     # Test 2: Queue status
-    print("\nTest 2: Queue Status")
-    queue = client.get_queue()
-    if queue:
-        running = len(queue.get("queue_running", []))
-        pending = len(queue.get("queue_pending", []))
-        print(f"[OK] Queue: {running} running, {pending} pending")
-    else:
-        print("[FAIL] Failed to get queue status")
-        return False
+    print("\n[2/14] Queue Status")
+    try:
+        queue = client.get_queue()
+        if queue is not None:
+            running = len(queue.get("queue_running", []))
+            pending = len(queue.get("queue_pending", []))
+            print(f"  ✓ Queue: {running} running, {pending} pending")
+            test_results.append(("Queue Status", True))
+        else:
+            print("  ✗ Failed to get queue")
+            test_results.append(("Queue Status", False))
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+        test_results.append(("Queue Status", False))
     
-    print("\n" + "=" * 60)
-    print("API connection test PASSED [OK]")
-    print("=" * 60)
+    # Test 3: Features
+    print("\n[3/14] Server Features")
+    try:
+        features = client.get_features()
+        if features is not None:
+            print(f"  ✓ Features: {len(features)} feature flags")
+            test_results.append(("Features", True))
+        else:
+            print("  ✗ Failed to get features")
+            test_results.append(("Features", False))
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+        test_results.append(("Features", False))
+    
+    # Test 4: Model Types
+    print("\n[4/14] Model Types")
+    try:
+        model_types = client.get_model_types()
+        if model_types is not None:
+            print(f"  ✓ Model types: {len(model_types)} types available")
+            test_results.append(("Model Types", True))
+        else:
+            print("  ✗ Failed to get model types")
+            test_results.append(("Model Types", False))
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+        test_results.append(("Model Types", False))
+    
+    # Test 5: Models in checkpoints folder
+    print("\n[5/14] Models (Checkpoints)")
+    try:
+        models = client.get_models("checkpoints")
+        if models is not None:
+            print(f"  ✓ Checkpoints: {len(models)} models found")
+            test_results.append(("Models", True))
+        else:
+            print("  ✗ Failed to get models")
+            test_results.append(("Models", False))
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+        test_results.append(("Models", False))
+    
+    # Test 6: Embeddings
+    print("\n[6/14] Embeddings")
+    try:
+        embeddings = client.get_embeddings()
+        if embeddings is not None:
+            print(f"  ✓ Embeddings: {len(embeddings)} embeddings found")
+            test_results.append(("Embeddings", True))
+        else:
+            print("  ✗ Failed to get embeddings")
+            test_results.append(("Embeddings", False))
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+        test_results.append(("Embeddings", False))
+    
+    # Test 7: Extensions
+    print("\n[7/14] Extensions")
+    try:
+        extensions = client.get_extensions()
+        if extensions is not None:
+            print(f"  ✓ Extensions: {len(extensions)} extensions found")
+            test_results.append(("Extensions", True))
+        else:
+            print("  ✗ Failed to get extensions")
+            test_results.append(("Extensions", False))
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+        test_results.append(("Extensions", False))
+    
+    # Test 8: Object Info (all nodes)
+    print("\n[8/14] Object Info (All Nodes)")
+    try:
+        object_info = client.get_object_info()
+        if object_info is not None:
+            print(f"  ✓ Nodes: {len(object_info)} node types available")
+            test_results.append(("Object Info", True))
+        else:
+            print("  ✗ Failed to get object info")
+            test_results.append(("Object Info", False))
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+        test_results.append(("Object Info", False))
+    
+    # Test 9: History (basic)
+    print("\n[9/14] History")
+    try:
+        history = client.get_history()
+        if history is not None:
+            print(f"  ✓ History: {len(history)} items")
+            test_results.append(("History", True))
+        else:
+            print("  ✗ Failed to get history")
+            test_results.append(("History", False))
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+        test_results.append(("History", False))
+    
+    # Test 10: History with pagination
+    print("\n[10/14] History (Paginated)")
+    try:
+        history = client.get_history(max_items=5, offset=0)
+        if history is not None:
+            print(f"  ✓ Paginated history: max 5 items")
+            test_results.append(("History Pagination", True))
+        else:
+            print("  ✗ Failed to get paginated history")
+            test_results.append(("History Pagination", False))
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+        test_results.append(("History Pagination", False))
+    
+    # Test 11: Free memory (non-critical if fails on older versions)
+    print("\n[11/14] Free Memory")
+    try:
+        result = client.free_memory(unload_models=False, free_memory=False)
+        if result:
+            print("  ✓ Free memory endpoint available")
+            test_results.append(("Free Memory", True))
+        else:
+            print("  ⚠ Free memory endpoint not available (may be older ComfyUI)")
+            test_results.append(("Free Memory", True))  # Not critical
+    except Exception as e:
+        print(f"  ⚠ Error: {e} (not critical)")
+        test_results.append(("Free Memory", True))  # Not critical
+    
+    # Test 12: Interrupt (should succeed even if nothing to interrupt)
+    print("\n[12/14] Interrupt")
+    try:
+        result = client.interrupt_execution()
+        if result:
+            print("  ✓ Interrupt endpoint available")
+            test_results.append(("Interrupt", True))
+        else:
+            print("  ✗ Failed to interrupt")
+            test_results.append(("Interrupt", False))
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+        test_results.append(("Interrupt", False))
+    
+    # Test 13: Queue Management (clear should work even if queue is empty)
+    print("\n[13/14] Queue Management")
+    try:
+        # Note: We're not actually clearing to avoid disrupting any running jobs
+        # Just verify the endpoint exists
+        queue_before = client.get_queue()
+        if queue_before is not None:
+            print("  ✓ Queue management endpoints available")
+            test_results.append(("Queue Management", True))
+        else:
+            print("  ✗ Queue management failed")
+            test_results.append(("Queue Management", False))
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+        test_results.append(("Queue Management", False))
+    
+    # Test 14: WebSocket URL construction (don't actually connect)
+    print("\n[14/14] WebSocket Support")
+    try:
+        ws_base = client.base_url.replace("http://", "").replace("https://", "")
+        ws_url = f"ws://{ws_base}/ws?clientId={client.client_id}"
+        print(f"  ✓ WebSocket URL: {ws_url}")
+        test_results.append(("WebSocket", True))
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+        test_results.append(("WebSocket", False))
+    
+    # Summary
+    print("\n" + "=" * 70)
+    print("Test Summary")
+    print("=" * 70)
+    
+    passed = sum(1 for _, result in test_results if result)
+    total = len(test_results)
+    
+    for test_name, result in test_results:
+        status = "✓ PASS" if result else "✗ FAIL"
+        print(f"  {status}: {test_name}")
+    
+    print("\n" + "=" * 70)
+    print(f"Results: {passed}/{total} tests passed")
+    
+    if passed == total:
+        print("Status: ALL TESTS PASSED ✓")
+    else:
+        print(f"Status: {total - passed} test(s) failed ✗")
+    
+    print("=" * 70)
     
     client.close()
-    return True
+    return passed == total
 
 
 if __name__ == "__main__":

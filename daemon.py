@@ -16,10 +16,10 @@ Features:
 
 Usage:
     # Standalone (console)
-    python daemon.py
+    uv run daemon.py
     
     # Background mode (no console, Windows)
-    pythonw daemon.py
+    uv run daemon.py
     
     # From Rainmeter (via launch_daemon.ps1)
     Auto-launched when widget loads
@@ -254,7 +254,7 @@ class DaemonManager:
                         self.logger.warning("")
                         self.logger.warning("CONTINUING with existing ComfyUI instance.")
                         self.logger.warning("If frames don't generate, manually kill ComfyUI:")
-                        self.logger.warning("  python kill_comfyui.py")
+                        self.logger.warning("  uv run kill_comfyui.py")
                         self.logger.warning("=" * 70)
                         
                         self.comfyui_status = "ready"
@@ -321,7 +321,7 @@ class DaemonManager:
                 cmd = ['bash', script_str]
                 cwd = self.project_root
             else:
-                # Assume it's a direct command (e.g., "python path/to/main.py")
+                # Assume it's a direct command (e.g., "uv run path/to/main.py")
                 cmd = script_str.split()
                 cwd = self.project_root
             

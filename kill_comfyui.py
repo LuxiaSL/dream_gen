@@ -9,7 +9,7 @@ This is particularly useful when the daemon fails to terminate ComfyUI correctly
 leaving orphaned python.exe processes running on port 8188.
 
 Usage:
-    python kill_comfyui.py
+    uv run kill_comfyui.py
 """
 
 import subprocess
@@ -106,7 +106,7 @@ def main():
         print(f"✓ Successfully killed {killed} ComfyUI process(es)")
         print()
         print("You can now restart the daemon:")
-        print("  python daemon.py")
+        print("  uv run daemon.py")
     else:
         print("No processes were killed")
     print("=" * 70)

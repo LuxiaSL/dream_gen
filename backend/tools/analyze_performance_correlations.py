@@ -994,7 +994,7 @@ def main():
         
         if not quality_tests_dir.exists():
             print("[ERROR] No quality tests found")
-            print("Usage: python analyze_performance_correlations.py [path/to/performance_metrics.json]")
+            print("Usage: uv run backend/tools/analyze_performance_correlations.py [path/to/performance_metrics.json]")
             return
         
         # Find most recent run

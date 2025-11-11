@@ -206,7 +206,7 @@ set CUDA_VISIBLE_DEVICES=1
 **ComfyUI Startup:**
 ```bash
 # Force specific GPU
-python main.py --cuda-device 1
+uv run main.py --cuda-device 1
 ```
 
 **Validation**: First setup step will verify GPU isolation works

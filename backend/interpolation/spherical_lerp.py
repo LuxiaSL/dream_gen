@@ -18,16 +18,7 @@ def spherical_lerp(
     precomputed: Optional[Tuple] = None
 ) -> torch.Tensor:
     """
-    Spherical linear interpolation (slerp) between two latent tensors (OPTIMIZED)
-    
-    Why slerp over linear interpolation?
-    - Preserves magnitude (important for latent spaces)
-    - Smoother, more natural transitions
-    - Avoids "dead zones" in middle of interpolation
-    - Better for high-dimensional spaces
-    
-    OPTIMIZATION: Supports pre-computed values to avoid redundant calculations
-    when interpolating between the same two latents multiple times.
+    Spherical linear interpolation (slerp) between two latent tensors
     
     Algorithm:
     1. Flatten latents to vectors
@@ -47,10 +38,6 @@ def spherical_lerp(
     
     Returns:
         Interpolated latent tensor (same shape as inputs)
-    
-    References:
-        - https://en.wikipedia.org/wiki/Slerp
-        - "Understanding Slerp, Then Not Using It" by Jonathan Blow
     """
     # Validate inputs
     if latent_a.shape != latent_b.shape:
@@ -325,7 +312,3 @@ if __name__ == "__main__":
     print(f"  Average: {per_iteration:.3f}ms per interpolation")
     
     print("\n✅ All tests passed!")
-    print("\nUsage example:")
-    print("  from backend.interpolation import spherical_lerp")
-    print("  result = spherical_lerp(latent_a, latent_b, t=0.5)")
-

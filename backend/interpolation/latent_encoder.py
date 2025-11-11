@@ -45,10 +45,6 @@ class LatentEncoder:
     - Encode images to latent space
     - Decode latents back to images
     - Batch operations for efficiency
-    
-    Latent Space:
-    - Flux: 4 channels, ~8x spatial compression
-    - Input: 256x512 RGB image → Latent: 4x32x64 tensor
     """
     
     def __init__(self, vae_path: Optional[Path] = None, device: str = "cuda", auto_load: bool = False,
@@ -604,14 +600,4 @@ if __name__ == "__main__":
     print("   - Only needed if implementing pure latent interpolation")
     
     print("\n✅ All tests passed!")
-    print("\nUsage for Dream Window:")
-    print("  # Option 1: Use ComfyUI workflows (RECOMMENDED)")
-    print("  generator.generate_from_image(...)  # VAE ops happen in ComfyUI")
-    print("")
-    print("  # Option 2: Manual VAE ops (if needed for interpolation)")
-    print("  from backend.interpolation import LatentEncoder")
-    print("  encoder = LatentEncoder(vae_path=path_to_vae)")
-    print("  latent = encoder.encode(image)")
-    print("  interpolated = spherical_lerp(latent_a, latent_b, t=0.5)")
-    print("  result = encoder.decode(interpolated)")
 

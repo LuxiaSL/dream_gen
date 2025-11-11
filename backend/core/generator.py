@@ -62,6 +62,7 @@ class DreamGenerator:
         # State
         self.frame_count = 0
         self.generation_times: list[float] = []
+        self._shutdown_requested = False  # Flag to interrupt long-running operations
         
         logger.info("DreamGenerator initialized")
 
@@ -289,6 +290,16 @@ class DreamGenerator:
             
             while True:
                 poll_count += 1
+                
+                # Check for shutdown request
+                if self._shutdown_requested:
+                    logger.warning(f"Shutdown requested - aborting generation (prompt_id: {prompt_id})")
+                    # Try to interrupt the running generation
+                    try:
+                        self.client.interrupt_execution()
+                    except:
+                        pass
+                    return None
                 
                 # Check queue status
                 queue = self.client.get_queue()

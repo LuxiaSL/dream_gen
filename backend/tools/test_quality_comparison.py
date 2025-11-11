@@ -20,8 +20,8 @@ from datetime import datetime
 from typing import Dict, List, Tuple, Optional
 import numpy as np
 
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent))
+# Add backend directory to path for imports (we're in backend/tools/)
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from interpolation.latent_encoder import LatentEncoder
 from interpolation.spherical_lerp import spherical_lerp, precompute_slerp_params
@@ -632,14 +632,14 @@ def main():
     # Generate HTML comparison
     print("\nGenerating HTML comparison...")
     try:
-        from generate_comparison import generate_comparison_html
+        from tools.generate_comparison import generate_comparison_html
         html_path = generate_comparison_html(output_root)
         print(f"[OK] HTML comparison: {html_path}")
         print(f"     Open in browser: file:///{html_path.absolute()}")
     except Exception as e:
         print(f"[ERROR] Failed to generate HTML: {e}")
         print("You can manually generate it with:")
-        print(f"  python backend/generate_comparison.py {output_root}")
+        print(f"  uv run backend/tools/generate_comparison.py {output_root}")
     
     print("\n" + "="*70)
     print("TESTING COMPLETE!")
