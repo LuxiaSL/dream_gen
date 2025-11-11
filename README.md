@@ -2,7 +2,7 @@
 
 **A living AI dream on your desktop - continuously morphing ethereal imagery that never repeats.**
 
-> *"Like an automated dreams of electric sheep generator. A little HUD that is constantly pinging stable diffusion, showing images constantly shifting."*
+> *"Like an automated dreams of electric sheep generator. A little HUD that is constantly running diffusion, showing images constantly shifting."*
 
 Dream Window is a desktop widget that displays endlessly evolving AI-generated art. Using a hybrid generation pipeline combining diffusion models with latent space interpolation, it creates smooth, dreamlike transitions between AI-generated keyframes while maintaining a distinctive ethereal technical aesthetic.
 
@@ -26,8 +26,9 @@ Dream Window is a desktop widget that displays endlessly evolving AI-generated a
 Most AI art generators create individual images. Dream Window creates a *continuous stream* - think of it as a window into an algorithm's dreams that morphs through aesthetic space without ever truly repeating.
 
 The secret is in the architecture:
-- **Keyframes** (every ~2.5 seconds): Full diffusion generation provides diversity and detail
-- **Interpolations** (10+ frames between keyframes): VAE latent interpolation provides buttery-smooth transitions
+- **Keyframes**: Full diffusion generation provides diversity and detail
+- **Interpolations**: VAE latent interpolation between each keyframe provides buttery-smooth transitions
+- **Buffer and Queueing**: Allows frames to build up, coordinates between them, makes sure the "current frame" is always available and sequential
 - **Cache System**: CLIP embeddings match and reinject past frames to prevent the aesthetic from converging
 
 This hybrid approach gives you both visual quality and real-time performance that pure diffusion could never achieve.
@@ -211,32 +212,6 @@ Configure in `config.yaml` → `game_detection.known_games`.
 - Half resolution (256x128): ~15 FPS
 - Configure via `interpolation_resolution_divisor`
 
-
-## 🛠️ Development
-
-```bash
-# Run tests
-pytest
-
-# Code formatting
-black backend/
-ruff check backend/
-
-# Type checking
-mypy backend/
-
-# Development mode (verbose logging)
-# Edit config.yaml: log_level: "DEBUG"
-uv run backend\main.py
-```
-
-## 📖 Documentation
-
-- **Architecture Deep Dive**: `docs/DREAM_WINDOW_MASTER.md`
-- **API Reference**: `docs/backend_architecture/`
-- **Rainmeter Widget**: `docs/rainmeter_widget/`
-- **Configuration Guide**: `docs/configuration/`
-
 ## 🔧 Troubleshooting
 
 **ComfyUI not starting?**
@@ -259,18 +234,16 @@ uv run backend\main.py
 - Lower resolution: `interpolation_resolution_divisor: 2`
 - Reduce interpolation frames: `hybrid.interpolation_frames: 5`
 
-For more issues, see `docs/TROUBLESHOOTING.md` or open an issue.
+Any other issues, contact @luxia on discord or open an issue.
 
 ## 🤝 Contributing
 
 Contributions welcome! Areas of interest:
 
-- **Additional Models**: Support for SDXL, SD3, other architectures
-- **ControlNet Integration**: More control over image evolution
-- **Multi-Window Support**: Multiple aesthetic streams simultaneously
-- **Web UI**: Browser-based configuration interface
-- **Mobile Companion**: Remote viewing and control
-
+- **Additional Diffusion Suites**: ComfyUI is strong; could stand to support many others for flexibility/choice, as well as other models
+- **Improved Rainmeter Control/Display**: More buttons/knobs to tune the diffusion on the fly from the rainmeter widget itself.
+- **Refactoring + Cross-System Capabilities**: System and software agnostic, separating away from Rainmeter explicitly and moving towards independent pieces with the core logic
+- **Single GPU Support**: Self explanatory. Hardcoded to try and offload to secondary GPU, can be altered or made to support single ones. Pairs well with system agnostic development.
 ## 📜 License
 
 MIT License - see LICENSE file for details.
@@ -288,9 +261,3 @@ MIT License - see LICENSE file for details.
   <br>
   <em>The system in action - endless variations that never repeat</em>
 </p>
-
----
-
-**Built with** 🔥 **by someone who wanted their desktop to dream**
-
-If this project helps you create something beautiful, consider ⭐️ starring the repo!
