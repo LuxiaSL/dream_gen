@@ -111,24 +111,28 @@ generation:
     # Color histogram configuration
     color_histogram:
       bins_per_channel: 32             # 32 bins × 3 channels (HSV) = 96-dim vector
-      diversity_threshold: 1.95        # Cache if avg similarity < 1.95
-                                       # TUNED 2025-11-12 v2: Happy medium for AND logic
-                                       # With AND logic, each metric needs ~55% acceptance for 30% combined
-                                       # Observed: mean ~2.1-2.5, this is slightly below mean
-      dissimilarity_range: [1.20, 2.00]  # "Related but different" zone (for injection)
-                                       # TUNED: Observed range 1.5-2.8, this captures dissimilar zone
+      diversity_threshold: 1.92        # Cache if avg similarity < 1.92
+                                       # TUNED 2025-11-12 v3: Tightened to reduce near-duplicates
+                                       # Previous: 1.95 (30.2% acceptance)
+                                       # Target: ~27% acceptance (conservative reduction)
+                                       # Cuts into the 1.90-1.95 cluster where near-duplicates occur
+      dissimilarity_range: [1.18, 2.05]  # "Related but different" zone (for injection)
+                                       # Widened slightly to compensate for stricter caching
+                                       # Maintains injection pool diversity
       convergence_threshold: 0.15      # Delta threshold for scaling injection
       force_cache_threshold: 0.30      # Delta threshold for forcing cache
     
     # Perceptual hash configuration
     phash:
       hash_size: 8                     # 8×8 DCT hash (64 bits)
-      diversity_threshold: 0.82        # Cache if avg similarity < 0.82
-                                       # TUNED 2025-11-12 v2: Happy medium for AND logic
-                                       # Observed: mean ~0.85-0.93, this is below mean
-                                       # Targets ~55% acceptance on structure alone
-      dissimilarity_range: [0.70, 0.90]  # "Related but different" zone (for injection)
-                                       # TUNED: Observed range 0.75-0.97, this captures dissimilar zone
+      diversity_threshold: 0.80        # Cache if avg similarity < 0.80
+                                       # TUNED 2025-11-12 v3: Tightened for better structural uniqueness
+                                       # Previous: 0.82 (30.2% acceptance)
+                                       # Target: ~27% acceptance (conservative reduction)
+                                       # Raises bar for structural diversity
+      dissimilarity_range: [0.68, 0.92]  # "Related but different" zone (for injection)
+                                       # Widened slightly to compensate for stricter caching
+                                       # Maintains injection pool diversity
       convergence_threshold: 0.08      # Delta threshold for scaling injection
       force_cache_threshold: 0.15      # Delta threshold for forcing cache
     
