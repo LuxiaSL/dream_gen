@@ -2,9 +2,7 @@
 
 **Visual Design, Frame Mockups, and Prompt Engineering**
 
-Based on analysis of bg_5.png, num_1.png, num_3.png
-
-> **Related Documentation**: See [README.md](README.md) for complete documentation navigation
+Based on analysis of relevant seed images
 
 ---
 
@@ -168,20 +166,6 @@ low contrast, muddy colors, brown tones, warm colors"
 
 ---
 
-## 📐 Desktop Positioning
-
-**Recommended: Left Side**
-- X: 50 pixels
-- Y: 300 pixels
-- Rationale: Balances time/weather widget, leaves center clear
-
-**Alternative: Right Side**
-- X: 1600 pixels (adjust for resolution)
-- Y: 400 pixels
-- Rationale: Complements system monitors
-
----
-
 ## 🔍 Quality Validation
 
 **After first generation, check**:
@@ -219,16 +203,3 @@ Can generate these programmatically or in image editor.
 - [ ] Widget integrates naturally with desktop
 - [ ] Status info is clear and useful
 - [ ] Overall effect is "living dream window"
-
----
-
-## 📚 Documentation Navigation
-
-- **Return to**: [README.md](README.md) for complete documentation
-- **Project Vision**: [DREAM_WINDOW_MASTER.md](DREAM_WINDOW_MASTER.md)
-- **File Organization**: [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)
-- **Implementation**: [weekend_sprint/00_OVERVIEW.md](weekend_sprint/00_OVERVIEW.md)
-
----
-
-**Ready to implement in Rainmeter!** 🌀✨

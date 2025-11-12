@@ -96,13 +96,95 @@ generation:
   # Cache system
   cache:
     max_size: 50                    # Number of images to cache (LRU eviction)
-    injection_probability: 0.15     # 15% chance to inject cached image
-    similarity_threshold: 0.8       # CLIP similarity threshold (0.7-0.8 recommended)
-    # 0.9-1.0 = nearly identical
-    # 0.8-0.9 = very similar
-    # 0.7-0.8 = similar aesthetic (good for injection)
-    # 0.6-0.7 = related style
-    # < 0.6   = different aesthetic
+    
+    # === SIMILARITY METHOD ===
+    similarity_method: "dual_metric"   # ColorHist + pHash-8 dual-metric system
+    
+    # === CACHE POPULATION (Component 2) ===
+    population_mode: "selective"       # "all" or "selective"
+    cache_interpolations: true         # Cache interpolation midpoints
+    cache_diversity_logic: "all"       # "all" = AND (both metrics must be diverse)
+                                       # "any" = OR (either metric can be diverse)
+                                       # Recommend: "all" for high-quality diverse cache
+    
+    # === DUAL-METRIC SETTINGS (ColorHist + pHash-8) ===
+    # Color histogram configuration
+    color_histogram:
+      bins_per_channel: 32             # 32 bins × 3 channels (HSV) = 96-dim vector
+      diversity_threshold: 1.95        # Cache if avg similarity < 1.95
+                                       # TUNED 2025-11-12 v2: Happy medium for AND logic
+                                       # With AND logic, each metric needs ~55% acceptance for 30% combined
+                                       # Observed: mean ~2.1-2.5, this is slightly below mean
+      dissimilarity_range: [1.20, 2.00]  # "Related but different" zone (for injection)
+                                       # TUNED: Observed range 1.5-2.8, this captures dissimilar zone
+      convergence_threshold: 0.15      # Delta threshold for scaling injection
+      force_cache_threshold: 0.30      # Delta threshold for forcing cache
+    
+    # Perceptual hash configuration
+    phash:
+      hash_size: 8                     # 8×8 DCT hash (64 bits)
+      diversity_threshold: 0.82        # Cache if avg similarity < 0.82
+                                       # TUNED 2025-11-12 v2: Happy medium for AND logic
+                                       # Observed: mean ~0.85-0.93, this is below mean
+                                       # Targets ~55% acceptance on structure alone
+      dissimilarity_range: [0.70, 0.90]  # "Related but different" zone (for injection)
+                                       # TUNED: Observed range 0.75-0.97, this captures dissimilar zone
+      convergence_threshold: 0.08      # Delta threshold for scaling injection
+      force_cache_threshold: 0.15      # Delta threshold for forcing cache
+    
+    # Detection logic (for collapse detection and injection)
+    injection_logic: "any"             # "any" = OR logic (either metric triggers collapse/injection)
+                                       # "all" = AND logic (both must trigger)
+                                       # Recommend: "any" for sensitive collapse detection
+                                       
+    # NOTE: Different logic for different purposes:
+    # - cache_diversity_logic: "all" (AND) → ensures BOTH color & structure diverse → high-quality cache
+    # - injection_logic: "any" (OR) → detects ANY type of collapse → sensitive watchdog
+    
+    # === INJECTION STRATEGY (Component 3) ===
+    injection_mode: "dissimilar"       # "similar" or "dissimilar"
+    injection_probability: 0.15        # Base injection probability (15%)
+    blend_weight: 0.75                  # VAE blend: % cached frame (0.0-1.0)
+                                       # Higher = more influence from cached frame
+    
+    # Anti-loop protection (prevents repeated injections)
+    injection_cooldown: 2              # Minimum keyframes between cache injections
+    seed_injection_cooldown: 2         # Minimum keyframes between seed injections
+    embedding_history_reset: "partial" # "none", "partial", or "full" after injection
+    embedding_history_keep_recent: 10   # If partial reset, keep this many recent frames
+    
+    # === MODE COLLAPSE DETECTION (Component 1) ===
+    collapse_detection: true
+    
+    # Convergence detection mode: "absolute" or "percentage"
+    # NOTE: With dual-metric system, thresholds are defined per-metric above
+    #       (color_histogram.convergence_threshold, phash.convergence_threshold)
+    convergence_mode: "absolute"       # "absolute" uses delta thresholds, "percentage" uses % increase
+    
+    # Logging for calibration
+    log_convergence_stats: true        # Log delta values for tuning
+    
+    # === ADAPTIVE SEED INJECTION (Component 4) ===
+    # Probability increases with cache injection count
+    seed_injection_floor: 0.02         # Minimum probability (2%)
+    seed_injection_max: 0.15           # Maximum probability (15%)
+    seed_injection_ramp: 50            # Reach max after this many cache injections
+    
+    # Early seed injection boost (bootstrap phase)
+    seed_injection_boost_threshold: 10  # Boost seed probability when cache < 10 frames
+    seed_injection_boost_probability: 0.20  # 20% seed injection during bootstrap
+    
+    # Forced seed injection on frequent cache injections
+    # If >30% of recent 20 keyframes used cache injection, force seed reset
+    force_seed_injection_frequency: 0.30  # Force seed if >30% recent injections
+    
+    # Seed blending options
+    blend_seed_injection: true         # Blend seeds with current frame
+    seed_blend_weight: 0.85             # VAE blend: % seed (0.0-1.0)
+    
+    # === LOGGING & METRICS ===
+    log_diversity_stats: true          # Log cache diversity metrics
+    diversity_check_interval: 10       # Log every N keyframes
 
 display:
   # === BUFFERED DISPLAY SYSTEM ===
@@ -153,7 +235,6 @@ game_detection:
   known_games:
     - "eldenring.exe"
     - "cyberpunk2077.exe"
-    - "game.exe"
   
   gpu_threshold: 80               # GPU load % to trigger pause (if using gpu_load method)
   
@@ -162,12 +243,6 @@ performance:
   generation_timeout: 120          # Seconds before considering generation stuck (increased for Maxwell GPUs)
   enable_torch_compile: false     # PyTorch 2.0 optimization (experimental)
   async_file_operations: true     # Non-blocking file writes
-
-# Aesthetic validation (quality control)
-aesthetic:
-  clip_model: "openai/clip-vit-base-patch32"
-  validation_enabled: false       # Future: reject images that drift too far
-  similarity_warning_threshold: 0.5  # Warn if drifting from seed aesthetic
 
 # Daemon service (for Rainmeter auto-launch and process management)
 daemon:

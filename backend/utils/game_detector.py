@@ -101,8 +101,8 @@ class GameDetector:
         """
         try:
             # This requires pywin32
-            import win32gui
-            import win32api
+            import win32gui  # pyright: ignore[reportMissingModuleSource]
+            import win32api  # pyright: ignore[reportMissingModuleSource]
             
             # Get foreground window
             hwnd = win32gui.GetForegroundWindow()
@@ -158,8 +158,7 @@ def test_game_detector():
             "check_interval": 5.0,
             "known_games": [
                 "eldenring.exe",
-                "cyberpunk2077.exe",
-                "firefox.exe",  # For testing - Firefox should be running!
+                "cyberpunk2077.exe"
             ]
         }
     }

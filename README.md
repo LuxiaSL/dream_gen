@@ -7,16 +7,17 @@
 Dream Window is a desktop widget that displays endlessly evolving AI-generated art. Using a hybrid generation pipeline combining diffusion models with latent space interpolation, it creates smooth, dreamlike transitions between AI-generated keyframes while maintaining a distinctive ethereal technical aesthetic.
 
 <p align="center">
-  <img src="example_gens.webp" alt="Dream Window in action - ethereal AI-generated art continuously morphing" width="100%">
+  <img src="examples/gen_1.webp" alt="Dream Window in action - ethereal AI-generated art continuously morphing" width="45%">
+  <img src="examples/gen_3.webp" alt="Dream Window in action - ethereal AI-generated art continuously morphing" width="45%">
   <br>
-  <em>Example generation showing the ethereal technical aesthetic</em>
+  <em>Example generations showing the ethereal technical aesthetic</em>
 </p>
 
 ## ✨ Key Features
 
 - **Hybrid Generation Architecture**: Keyframes generated via img2img diffusion, smoothly interpolated using VAE latent space with spherical linear interpolation (slerp)
 - **Buffered Playback System**: 30-second rolling buffer ensures uninterrupted, smooth visual flow
-- **CLIP-Based Cache Injection**: Prevents visual mode collapse by intelligently reintroducing aesthetically similar past frames
+- **Dual-Metric Cache Injection**: Prevents visual mode collapse using ColorHist + pHash-8 similarity detection with OR logic for comprehensive collapse prevention
 - **Zero Gaming Impact**: Runs on dedicated GPU with automatic game detection and VRAM management
 - **Desktop Integration**: Lightweight Rainmeter widget with configurable styling and live status indicators
 - **Production-Ready Daemon**: Autonomous process management with auto-restart, health monitoring, and graceful shutdown
@@ -29,7 +30,7 @@ The secret is in the architecture:
 - **Keyframes**: Full diffusion generation provides diversity and detail
 - **Interpolations**: VAE latent interpolation between each keyframe provides buttery-smooth transitions
 - **Buffer and Queueing**: Allows frames to build up, coordinates between them, makes sure the "current frame" is always available and sequential
-- **Cache System**: CLIP embeddings match and reinject past frames to prevent the aesthetic from converging
+- **Cache System**: Dual-metric similarity (ColorHist + pHash-8) detects and prevents mode collapse by intelligently reinjecting diverse past frames
 
 This hybrid approach gives you both visual quality and real-time performance that pure diffusion could never achieve.
 
@@ -102,7 +103,7 @@ Load the Dream Window skin in Rainmeter and watch the magic happen!
 │                                 │                            │
 │                        ┌────────▼────────┐                  │
 │                        │  Cache Manager  │                  │
-│                        │  - CLIP embeds  │                  │
+│                        │  - Dual-metric  │                  │
 │                        │  - LRU storage  │                  │
 │                        │  - Injection    │                  │
 │                        └─────────────────┘                  │
@@ -116,7 +117,7 @@ Load the Dream Window skin in Rainmeter and watch the magic happen!
 3. **Interpolation**: Spherical lerp between keyframe latents creates smooth in-betweens
 4. **Frame Buffer**: All frames stored in sequence, maintaining 30s rolling buffer
 5. **Display Selection**: Buffer provides frames at target FPS (default 4fps) to Rainmeter
-6. **Cache Injection**: Periodically injects past frames with similar CLIP embeddings
+6. **Cache Injection**: Dual-metric similarity detection (ColorHist + pHash-8) prevents mode collapse
 
 ## 📁 Project Structure
 
@@ -132,11 +133,16 @@ dream-gen/
 │   │   └── workflow_builder.py  # Dynamic workflow construction
 │   ├── cache/                   # Aesthetic caching system
 │   │   ├── manager.py           # LRU cache manager
-│   │   └── aesthetic_matcher.py # CLIP-based similarity matching
+│   │   ├── injection_strategy.py # Cache injection strategies
+│   │   └── collapse_detector.py # Mode collapse detection
 │   ├── interpolation/           # Latent space interpolation
 │   │   ├── latent_encoder.py    # VAE encoding/decoding
 │   │   └── spherical_lerp.py    # Slerp implementation
-│   ├── utils/                   # Utilities
+│   ├── utils/                   # Utility modules
+│   │   ├── color_encoder.py     # ColorHist similarity encoder
+│   │   ├── phash_encoder.py     # Perceptual hash encoder
+│   │   ├── prompt_manager.py    # Prompt rotation
+│   │   └── ...
 │   └── config.yaml              # Main configuration
 ├── daemon.py                    # Production daemon manager
 ├── daemon_control.py            # Daemon control interface
@@ -169,7 +175,12 @@ generation:
   cache:
     max_size: 50                          # Cached frame limit
     injection_probability: 0.15           # 15% chance per keyframe
-    similarity_threshold: 0.8             # CLIP similarity for injection
+    similarity_method: "dual_metric"      # ColorHist + pHash-8 OR logic
+    
+    color_histogram:
+      diversity_threshold: 1.95           # Color diversity threshold
+    phash:
+      diversity_threshold: 0.82           # Structural diversity threshold
 
 prompts:
   base_themes:
@@ -257,7 +268,16 @@ MIT License - see LICENSE file for details.
 ## 🌟 Gallery
 
 <p align="center">
-  <img src="example_gens.webp" alt="Example generations from Dream Window" width="100%">
+  <img src="examples/gen_1.webp" alt="Example generations from Dream Window" width="100%">
   <br>
+
+  ---
+  <br>
+  <img src="examples/gen_2.webp" alt="Example generations from Dream Window" width="100%">
+  <br>
+
+  ---
+  <br>
+  <img src="examples/gen_3.webp" alt="Example generations from Dream Window" width="100%">
   <em>The system in action - endless variations that never repeat</em>
 </p>

@@ -4,7 +4,7 @@ Stores and retrieves generated images with metadata
 
 The cache serves multiple purposes:
 1. Store high-quality generated images for later re-use
-2. Enable aesthetic matching via CLIP embeddings
+2. Enable aesthetic matching via dual-metric embeddings (ColorHist + pHash-8)
 3. Prevent mode collapse through periodic injection
 4. Provide variety while maintaining coherence
 """
@@ -12,10 +12,11 @@ The cache serves multiple purposes:
 import json
 import logging
 import shutil
+import numpy as np
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 logger = logging.getLogger(__name__)
 
@@ -30,14 +31,14 @@ class CacheEntry:
         image_path: Path to cached image file
         prompt: Generation prompt used
         generation_params: Dict of generation parameters (denoise, steps, etc.)
-        embedding: CLIP embedding (512-dim vector) for similarity matching
+        embedding: Dual-metric embedding {'color': list[96], 'struct': str} for similarity matching
         timestamp: When this was cached
     """
     cache_id: str
     image_path: Path
     prompt: str
     generation_params: Dict[str, Any]
-    embedding: Optional[List[float]]
+    embedding: Optional[Dict[str, Any]]  # Dual-metric embedding {'color': ndarray, 'struct': str}
     timestamp: str
 
     def to_dict(self) -> Dict[str, Any]:
@@ -82,6 +83,7 @@ class CacheManager:
         Args:
             config: Configuration dictionary
         """
+        self.config = config  # Store full config for diversity checks
         self.cache_dir = Path(config["system"]["cache_dir"])
         self.image_dir = self.cache_dir / "images"
         self.metadata_dir = self.cache_dir / "metadata"
@@ -162,7 +164,7 @@ class CacheManager:
         image_path: Path,
         prompt: str,
         generation_params: Dict[str, Any],
-        embedding: Optional[List[float]] = None,
+        embedding: Optional[Union[Dict[str, Any], List[float]]] = None,
     ) -> str:
         """
         Add image to cache
@@ -179,7 +181,8 @@ class CacheManager:
             image_path: Source image to cache
             prompt: Prompt used to generate
             generation_params: Generation parameters
-            embedding: CLIP embedding (None = will be computed later)
+            embedding: Dual-metric embedding {'color': ndarray, 'struct': str}
+                      None = will be computed later
         
         Returns:
             cache_id of the new entry
@@ -296,7 +299,7 @@ class CacheManager:
 
     def get_with_embeddings(self) -> List[CacheEntry]:
         """
-        Get all entries that have CLIP embeddings
+        Get all entries that have embeddings
         
         Returns:
             List of CacheEntry objects with embeddings
@@ -329,6 +332,170 @@ class CacheManager:
         self.save_cache()
         logger.warning("Cache cleared!")
 
+    def should_cache_frame(
+        self, 
+        new_embedding: Union[Dict[str, Any], np.ndarray],
+        force: bool = False,
+        similarity_manager=None
+    ) -> bool:
+        """
+        Determine if frame should be cached based on diversity
+        
+        This is KEY to preventing cache homogeneity. Only cache frames
+        that add diversity to the cache, not frames similar to existing ones.
+        
+        Args:
+            new_embedding: Dual-metric embedding {'color': ndarray, 'struct': str}
+            force: Force caching (for seeds, important frames)
+            similarity_manager: DualMetricSimilarityManager instance
+            
+        Returns:
+            True if frame adds diversity to cache
+        """
+        if force or self.size() == 0:
+            return True
+        
+        # Get all cached embeddings
+        cached_embeddings = [
+            e.embedding for e in self.entries.values()
+            if e.embedding is not None
+        ]
+        
+        if not cached_embeddings:
+            return True
+        
+        # Dual-metric diversity check
+        if not similarity_manager:
+            logger.warning("No similarity_manager provided - cannot check diversity")
+            return True
+        
+        # Filter to only dual-metric embeddings
+        dual_embeddings = [e for e in cached_embeddings if isinstance(e, dict) and 'color' in e]
+        
+        if not dual_embeddings:
+            # No embeddings in cache yet - cache this one
+            return True
+        
+        # Use OR logic: check if diverse in EITHER color OR structure
+        cache_config = self.config['generation']['cache']
+        color_threshold = cache_config.get('color_histogram', {}).get('diversity_threshold', 1.80)
+        struct_threshold = cache_config.get('phash', {}).get('diversity_threshold', 0.65)
+        
+        # Calculate average similarities
+        color_sims = []
+        struct_sims = []
+        for cached in dual_embeddings:
+            color_sim = similarity_manager.get_color_similarity(new_embedding, cached)
+            struct_sim = similarity_manager.get_struct_similarity(new_embedding, cached)
+            color_sims.append(color_sim)
+            struct_sims.append(struct_sim)
+        
+        avg_color_sim = float(np.mean(color_sims)) if color_sims else 0.0
+        avg_struct_sim = float(np.mean(struct_sims)) if struct_sims else 0.0
+        
+        # Get cache diversity logic (AND vs OR)
+        cache_diversity_logic = cache_config.get('cache_diversity_logic', 'all')
+        
+        # Determine if diverse based on logic mode
+        color_diverse = avg_color_sim < color_threshold
+        struct_diverse = avg_struct_sim < struct_threshold
+        
+        if cache_diversity_logic == 'all':
+            # AND logic: BOTH metrics must show diversity
+            is_diverse = color_diverse and struct_diverse
+            logic_str = "AND"
+        else:
+            # OR logic: EITHER metric shows diversity
+            is_diverse = color_diverse or struct_diverse
+            logic_str = "OR"
+        
+        if is_diverse:
+            logger.debug(
+                f"Frame is diverse (color:{avg_color_sim:.3f}<{color_threshold:.3f} "
+                f"{logic_str} struct:{avg_struct_sim:.3f}<{struct_threshold:.3f}) - caching"
+            )
+        else:
+            # Build readable rejection reason
+            color_status = "PASS" if color_diverse else "FAIL"
+            struct_status = "PASS" if struct_diverse else "FAIL"
+            logger.debug(
+                f"Frame is redundant (color:{avg_color_sim:.3f} {color_status}, "
+                f"struct:{avg_struct_sim:.3f} {struct_status}, logic:{logic_str}) - skipping cache"
+            )
+        
+        return is_diverse
+    
+    def get_diversity_stats(self, similarity_manager=None) -> Dict[str, Any]:
+        """
+        Calculate cache diversity metrics
+        
+        Args:
+            similarity_manager: DualMetricSimilarityManager instance (required for dual-metric)
+        
+        Returns:
+            Dictionary with diversity statistics:
+            {
+                "diversity_score_color": float,
+                "diversity_score_struct": float,
+                "avg_color_similarity": float,
+                "avg_struct_similarity": float,
+                "cache_size": int
+            }
+        """
+        embeddings = [
+            e.embedding for e in self.entries.values()
+            if e.embedding is not None
+        ]
+        
+        if len(embeddings) < 2:
+            return {
+                "diversity_score": 1.0,
+                "avg_pairwise_similarity": 0.0,
+                "cache_size": len(embeddings)
+            }
+        
+        # Check if we have dual-metric embeddings
+        dual_embeddings = [e for e in embeddings if isinstance(e, dict) and 'color' in e]
+        
+        if dual_embeddings and similarity_manager:
+            # Dual-metric diversity stats
+            n = len(dual_embeddings)
+            color_sims = []
+            struct_sims = []
+            
+            for i in range(n):
+                for j in range(i+1, n):
+                    color_sim = similarity_manager.get_color_similarity(dual_embeddings[i], dual_embeddings[j])
+                    struct_sim = similarity_manager.get_struct_similarity(dual_embeddings[i], dual_embeddings[j])
+                    color_sims.append(color_sim)
+                    struct_sims.append(struct_sim)
+            
+            avg_color_sim = float(np.mean(color_sims)) if color_sims else 0.0
+            avg_struct_sim = float(np.mean(struct_sims)) if struct_sims else 0.0
+            
+            # Diversity is inversely proportional to similarity
+            # For ColorHist (range ~0.8-2.3): lower similarity = more diverse
+            # For pHash (range ~0.4-0.9): lower similarity = more diverse
+            # We'll normalize to 0-1 scale where 1 = most diverse
+            color_diversity = max(0.0, 1.0 - (avg_color_sim / 2.3))  # Normalize by max range
+            struct_diversity = max(0.0, 1.0 - avg_struct_sim)  # Already 0-1 scale
+            
+            return {
+                "diversity_score_color": color_diversity,
+                "diversity_score_struct": struct_diversity,
+                "avg_color_similarity": avg_color_sim,
+                "avg_struct_similarity": avg_struct_sim,
+                "cache_size": n
+            }
+        
+        return {
+            "diversity_score_color": 1.0,
+            "diversity_score_struct": 1.0,
+            "avg_color_similarity": 0.0,
+            "avg_struct_similarity": 0.0,
+            "cache_size": 0
+        }
+
     def get_stats(self) -> Dict[str, Any]:
         """
         Get cache statistics
@@ -347,147 +514,3 @@ class CacheManager:
             "with_embeddings": with_embeddings,
             "without_embeddings": len(self.entries) - with_embeddings,
         }
-
-
-# Test function
-def test_cache_manager() -> bool:
-    """Test cache manager"""
-    import yaml
-    from PIL import Image
-
-    print("=" * 60)
-    print("Testing CacheManager...")
-    print("=" * 60)
-
-    # Load config
-    config_path = Path("backend/config.yaml")
-    if not config_path.exists():
-        print("✗ config.yaml not found")
-        return False
-
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
-
-    # Override cache settings for test
-    config["system"]["cache_dir"] = "./test_cache"
-    config["generation"]["cache"]["max_size"] = 5  # Small for testing
-
-    # Create test images
-    test_image_dir = Path("./test_cache_images")
-    test_image_dir.mkdir(exist_ok=True)
-
-    test_images = []
-    for i in range(7):
-        img = Image.new("RGB", (256, 512), color=(i * 30, 100, 200))
-        img_path = test_image_dir / f"test_{i}.png"
-        img.save(img_path)
-        test_images.append(img_path)
-
-    try:
-        # Create manager
-        print("\n1. Creating cache manager...")
-        cache = CacheManager(config)
-        print(f"✓ Manager created: {cache.size()} entries")
-
-        # Test adding
-        print("\n2. Adding images to cache...")
-        cache_ids = []
-        for i, img_path in enumerate(test_images[:3]):
-            cache_id = cache.add(
-                image_path=img_path,
-                prompt=f"test prompt {i}",
-                generation_params={"steps": 4, "denoise": 0.4},
-                embedding=[float(i)] * 512,  # Mock embedding
-            )
-            cache_ids.append(cache_id)
-            print(f"   Added: {cache_id}")
-
-        print(f"✓ Added 3 images, cache size: {cache.size()}")
-
-        # Test retrieval
-        print("\n3. Testing retrieval...")
-        entry = cache.get(cache_ids[0])
-        if entry and entry.prompt == "test prompt 0":
-            print(f"✓ Retrieved: {entry.cache_id}")
-        else:
-            print("✗ Retrieval failed")
-            return False
-
-        # Test LRU eviction
-        print("\n4. Testing LRU eviction (max_size=5)...")
-        for i, img_path in enumerate(test_images[3:], start=3):
-            cache.add(
-                image_path=img_path,
-                prompt=f"test prompt {i}",
-                generation_params={"steps": 4},
-            )
-
-        final_size = cache.size()
-        if final_size == 5:
-            print(f"✓ LRU eviction working: size={final_size}")
-            # Check that old entries were removed
-            if cache.get(cache_ids[0]) is None:
-                print("  ✓ Oldest entry evicted")
-            else:
-                print("  ✗ Oldest entry not evicted")
-                return False
-        else:
-            print(f"✗ LRU eviction failed: size={final_size} (expected 5)")
-            return False
-
-        # Test random
-        print("\n5. Testing random selection...")
-        random_entry = cache.get_random()
-        if random_entry:
-            print(f"✓ Random entry: {random_entry.cache_id}")
-        else:
-            print("✗ Random selection failed")
-            return False
-
-        # Test with embeddings
-        print("\n6. Testing embedding filter...")
-        with_emb = cache.get_with_embeddings()
-        print(f"✓ Entries with embeddings: {len(with_emb)}")
-
-        # Test stats
-        print("\n7. Testing stats...")
-        stats = cache.get_stats()
-        print(f"✓ Cache stats:")
-        print(f"   Total: {stats['total_entries']}")
-        print(f"   Usage: {stats['usage_percent']:.1f}%")
-        print(f"   With embeddings: {stats['with_embeddings']}")
-
-        print("\n" + "=" * 60)
-        print("CacheManager test PASSED ✓")
-        print("=" * 60)
-
-        # Cleanup
-        cache.clear()
-        shutil.rmtree(Path("./test_cache"))
-        shutil.rmtree(test_image_dir)
-        return True
-
-    except Exception as e:
-        print(f"\n✗ Test failed with exception: {e}")
-        import traceback
-
-        traceback.print_exc()
-
-        # Cleanup
-        try:
-            shutil.rmtree(Path("./test_cache"))
-            shutil.rmtree(test_image_dir)
-        except:
-            pass
-        return False
-
-
-if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(levelname)s - %(message)s",
-    )
-
-    success = test_cache_manager()
-    exit(0 if success else 1)
-

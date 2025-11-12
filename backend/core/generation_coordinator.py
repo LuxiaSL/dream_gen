@@ -14,9 +14,11 @@ Key responsibilities:
 """
 
 import logging
+import random
 import time
 from pathlib import Path
 from typing import Optional, Dict, Any
+from collections import deque
 import asyncio
 import torch
 
@@ -52,7 +54,7 @@ class GenerationCoordinator:
         prompt_manager,
         config: Dict[str, Any],
         cache_manager=None,
-        aesthetic_matcher=None
+        similarity_manager=None
     ):
         """
         Initialize generation coordinator
@@ -64,7 +66,7 @@ class GenerationCoordinator:
             prompt_manager: PromptManager instance
             config: Configuration dictionary
             cache_manager: CacheManager instance (optional, for cache injection)
-            aesthetic_matcher: AestheticMatcher instance (optional, for cache injection)
+            similarity_manager: DualMetricSimilarityManager instance (optional, for embeddings)
         """
         self.buffer = frame_buffer
         self.generator = generator
@@ -72,7 +74,7 @@ class GenerationCoordinator:
         self.prompt_manager = prompt_manager
         self.config = config
         self.cache = cache_manager
-        self.aesthetic_matcher = aesthetic_matcher
+        self.similarity_manager = similarity_manager
         
         # Keyframe storage for interpolation
         self.keyframe_latents: Dict[int, Any] = {}  # keyframe_num -> torch.Tensor
@@ -90,6 +92,59 @@ class GenerationCoordinator:
         self.interpolations_generated = 0
         self.cache_injections = 0
         self.generation_times = []
+        
+        # Mode collapse prevention
+        self.collapse_detector = None
+        self.injection_strategy = None
+        self.current_injection_rate = config['generation']['cache']['injection_probability']
+        
+        # Track recent cache injections for seed forcing logic
+        self.recent_cache_injections = deque(maxlen=20)  # Last 20 keyframes
+        
+        # Injection cooldown tracking (prevents loops)
+        self.last_cache_injection_kf = -999  # Keyframe number of last cache injection
+        self.last_seed_injection_kf = -999   # Keyframe number of last seed injection
+        
+        # Initialize mode collapse detection if enabled
+        if cache_manager and similarity_manager and config['generation']['cache'].get('collapse_detection', True):
+            try:
+                from cache.collapse_detector import ModeCollapseDetector
+                from cache.injection_strategy import CacheInjectionStrategy
+                
+                cache_config = config['generation']['cache']
+                
+                # Get dual-metric thresholds if available
+                color_config = cache_config.get('color_histogram', {})
+                phash_config = cache_config.get('phash', {})
+                
+                self.collapse_detector = ModeCollapseDetector(
+                    similarity_manager=similarity_manager,
+                    history_size=50,
+                    detection_window=20,
+                    color_convergence_threshold=color_config.get('convergence_threshold', 0.15),
+                    color_force_cache_threshold=color_config.get('force_cache_threshold', 0.30),
+                    struct_convergence_threshold=phash_config.get('convergence_threshold', 0.08),
+                    struct_force_cache_threshold=phash_config.get('force_cache_threshold', 0.15),
+                    convergence_mode=cache_config.get('convergence_mode', 'absolute'),
+                    log_stats=cache_config.get('log_convergence_stats', True)
+                )
+                
+                self.injection_strategy = CacheInjectionStrategy(
+                    config=config,
+                    cache_manager=cache_manager,
+                    similarity_manager=similarity_manager,
+                    latent_encoder=latent_encoder,
+                    buffer=frame_buffer
+                )
+                
+                logger.info("Mode collapse prevention enabled")
+                logger.info(f"  Similarity method: {cache_config.get('similarity_method', 'dual_metric')}")
+                logger.info(f"  Collapse detection: active")
+                logger.info(f"  Injection mode: {config['generation']['cache'].get('injection_mode', 'dissimilar')}")
+                
+            except Exception as e:
+                logger.error(f"Failed to initialize mode collapse prevention: {e}")
+                logger.info("Continuing without collapse prevention")
         
         logger.info("GenerationCoordinator initialized")
         if self.cache:
@@ -133,101 +188,12 @@ class GenerationCoordinator:
         self.current_image_path = seed_path
         logger.info(f"Seed image set: {seed_path.name}")
     
-    def should_inject_cache(self) -> bool:
-        """
-        Decide if should inject cached image for next keyframe
-        
-        Uses probability from config and checks cache has content.
-        
-        Returns:
-            True if should inject cache
-        """
-        if self.current_keyframe_num == 0:
-            return False  # Never inject on first keyframe
-        
-        if not self.cache or not self.aesthetic_matcher:
-            return False  # Cache system not available
-        
-        # Check cache has entries
-        if self.cache.size() == 0:
-            return False
-        
-        # Random probability check
-        import random
-        injection_prob = self.config['generation']['cache']['injection_probability']
-        return random.random() < injection_prob
-    
-    def inject_cached_keyframe(self) -> Optional[Path]:
-        """
-        Inject similar cached image as keyframe based on current aesthetic
-        
-        Returns:
-            Path to cached image, or None if injection fails
-        """
-        if self.current_image_path is None or not self.current_image_path.exists():
-            return None
-        
-        try:
-            # Encode current frame
-            current_embedding = self.aesthetic_matcher.encode_image(self.current_image_path)
-            
-            if current_embedding is None:
-                logger.warning("Failed to encode current frame for cache injection")
-                return None
-            
-            # Get all cached entries
-            cache_entries = self.cache.get_all()
-            if not cache_entries:
-                logger.debug("Cache is empty, no injection possible")
-                return None
-            
-            # Prepare candidates (cache_id, embedding) pairs
-            candidates = [
-                (entry.cache_id, entry.embedding)
-                for entry in cache_entries
-                if entry.embedding is not None
-            ]
-            
-            if not candidates:
-                logger.debug("No cache entries with embeddings")
-                return None
-            
-            # Find similar cached images
-            threshold = self.config['generation']['cache']['similarity_threshold']
-            similar = self.aesthetic_matcher.find_similar(
-                target_embedding=current_embedding,
-                candidate_embeddings=candidates,
-                threshold=threshold,
-                top_k=5
-            )
-            
-            if not similar:
-                logger.debug(f"No similar images found (threshold: {threshold})")
-                return None
-            
-            # Weighted random selection from similar images
-            selected_cache_id = self.aesthetic_matcher.weighted_random_selection(similar)
-            
-            if not selected_cache_id:
-                return None
-            
-            # Get the cached image path
-            cached_entry = self.cache.get(selected_cache_id)
-            if cached_entry:
-                self.cache_injections += 1
-                # Log with similarity info from similar list
-                similarity_score = next((s for cid, s in similar if cid == selected_cache_id), 0.0)
-                logger.info(f"[CACHE] INJECTION #{self.cache_injections}: {selected_cache_id} (similarity: {similarity_score:.3f})")
-                return cached_entry.image_path
-            
-        except Exception as e:
-            logger.error(f"Cache injection failed: {e}", exc_info=True)
-        
-        return None
     
     def add_keyframe_to_cache(self, keyframe_path: Path, prompt: str, denoise: float) -> bool:
         """
-        Add a generated keyframe to the cache with CLIP embedding
+        Add a generated keyframe to the cache with dual-metric embedding
+        
+        Uses selective caching if mode collapse prevention is enabled.
         
         Args:
             keyframe_path: Path to generated keyframe
@@ -237,20 +203,36 @@ class GenerationCoordinator:
         Returns:
             True if successfully added to cache
         """
-        if not self.cache or not self.aesthetic_matcher:
+        if not self.cache or not self.similarity_manager:
             return False
         
         try:
-            # Encode image to CLIP embedding
-            embedding = self.aesthetic_matcher.encode_image(keyframe_path)
+            # Encode image with dual-metric similarity system
+            embedding = self.similarity_manager.encode_image(keyframe_path)
             
             if embedding is None:
                 logger.warning(f"Failed to encode keyframe for cache: {keyframe_path.name}")
                 return False
             
-            # Convert numpy array to list for JSON serialization
-            if hasattr(embedding, 'tolist'):
-                embedding = embedding.tolist()
+            # Check if should cache (selective caching for diversity)
+            population_mode = self.config['generation']['cache'].get('population_mode', 'selective')
+            
+            should_cache = True
+            if population_mode == 'selective' and self.cache.size() > 0:
+                should_cache = self.cache.should_cache_frame(
+                    embedding, 
+                    force=False,
+                    similarity_manager=self.similarity_manager
+                )
+                
+                if not should_cache:
+                    logger.debug(f"Skipping cache (frame not diverse enough)")
+                    return False
+            
+            # Convert to serializable format if needed
+            if isinstance(embedding, dict) and 'color' in embedding:
+                # Dual-metric: convert to serializable
+                embedding = self.similarity_manager.to_serializable(embedding)
             
             # Add to cache
             generation_params = {
@@ -268,6 +250,27 @@ class GenerationCoordinator:
             )
             
             logger.debug(f"Added keyframe to cache: {cache_id} (total: {self.cache.size()})")
+            
+            # Log diversity stats periodically
+            if self.config['generation']['cache'].get('log_diversity_stats', True):
+                diversity_interval = self.config['generation']['cache'].get('diversity_check_interval', 10)
+                if self.cache.size() % diversity_interval == 0:
+                    diversity_stats = self.cache.get_diversity_stats(similarity_manager=self.similarity_manager)
+                    
+                    # Log dual-metric diversity stats
+                    if 'diversity_score_color' in diversity_stats:
+                        logger.info(
+                            f"[CACHE_DIVERSITY] Color:{diversity_stats['diversity_score_color']:.3f}, "
+                            f"Struct:{diversity_stats['diversity_score_struct']:.3f}, "
+                            f"Size:{diversity_stats['cache_size']}"
+                        )
+                    else:
+                        logger.info(
+                            f"[CACHE_DIVERSITY] Score:{diversity_stats['diversity_score']:.3f}, "
+                            f"Avg similarity:{diversity_stats['avg_pairwise_similarity']:.3f}, "
+                            f"Size:{diversity_stats['cache_size']}"
+                        )
+            
             return True
             
         except Exception as e:
@@ -346,7 +349,9 @@ class GenerationCoordinator:
     
     async def generate_keyframe(self) -> bool:
         """
-        Generate the next keyframe (or inject from cache)
+        Generate the next keyframe (or inject from cache/seed)
+        
+        Integrates mode collapse detection and adaptive injection strategies.
         
         Returns:
             True if successful
@@ -369,45 +374,238 @@ class GenerationCoordinator:
         prompt = self.prompt_manager.get_next_prompt()
         logger.info(f"Prompt: {prompt[:60]}...")
         
-        # Check for cache injection
-        if self.should_inject_cache():
-            logger.info("  -> Attempting cache injection...")
-            cached_path = self.inject_cached_keyframe()
-            
-            if cached_path and cached_path.exists():
-                # Use cached image as keyframe
-                import shutil
-                target_path = self.buffer.keyframe_dir / f"keyframe_{keyframe_num:03d}.png"
-                shutil.copy(cached_path, target_path)
-                
-                # Mark as ready in buffer
-                self.buffer.mark_ready(sequence_num, target_path)
-                
-                # Update current image for next generation
-                self.current_image_path = target_path
-                
-                # Encode cached frame if using VAE
-                if self.latent_encoder:
-                    try:
-                        if torch.cuda.is_available():
-                            torch.cuda.synchronize()
-                        
-                        latent = self.latent_encoder.encode(
-                            target_path,
-                            for_interpolation=True
+        # === MODE COLLAPSE DETECTION & ADAPTIVE INJECTION ===
+        collapse_result = None
+        if self.collapse_detector and self.similarity_manager and self.current_image_path:
+            try:
+                # Encode current frame for collapse detection
+                current_embedding = self.similarity_manager.encode_image(self.current_image_path)
+                if current_embedding is not None:
+                    collapse_result = self.collapse_detector.analyze_frame(current_embedding)
+                    
+                    # Record collapse status for adaptive seed injection
+                    if self.injection_strategy:
+                        is_collapsed = collapse_result['status'] in ['converging', 'collapsed']
+                        self.injection_strategy.record_collapse_detection(is_collapsed)
+                    
+                    # Log collapse metrics
+                    if collapse_result['convergence_delta'] > 0:
+                        logger.info(
+                            f"[COLLAPSE_METRICS] Status: {collapse_result['status']}, "
+                            f"Delta: {collapse_result['convergence_delta']:.3f}, "
+                            f"Similarity: {collapse_result['avg_similarity']:.3f}"
                         )
-                        self.keyframe_latents[keyframe_num] = latent
-                        self.keyframe_paths[keyframe_num] = target_path
-                        
-                        logger.debug(f"  Encoded cached keyframe {keyframe_num} to latent")
-                    except Exception as e:
-                        logger.error(f"Failed to encode cached keyframe: {e}")
-                
-                logger.info(f"[OK] Keyframe {keyframe_num} from CACHE")
-                logger.info(f"     Saved to: {target_path.name}")
-                return True
+                    
+                    # Adjust injection rate based on collapse status
+                    # Three modes:
+                    # 1. "none": baseline 15%
+                    # 2. "scale_injection": gradually scale 15% -> 100% based on delta
+                    # 3. "force_cache": force 100% (handled separately below)
+                    baseline_prob = self.config['generation']['cache']['injection_probability']
+                    
+                    if collapse_result['action'] == 'scale_injection':
+                        # Gradually scale from baseline to 100% as convergence increases
+                        scaled_prob = collapse_result.get('scaled_injection_probability', 0.0)
+                        self.current_injection_rate = baseline_prob + (1.0 - baseline_prob) * scaled_prob
+                        logger.info(
+                            f"[SCALING] Injection probability scaled to {self.current_injection_rate:.0%} "
+                            f"(delta: {collapse_result['convergence_delta']:.3f})"
+                        )
+                    elif collapse_result['action'] == 'force_cache':
+                        # Will be handled below with forced injection (bypasses probability)
+                        pass
+                    else:
+                        # Normal baseline rate
+                        self.current_injection_rate = baseline_prob
+            except Exception as e:
+                logger.error(f"Collapse detection failed: {e}", exc_info=True)
         
-        # Normal generation (no cache injection)
+        # === SEED INJECTION (Adaptive or Forced) ===
+        if self.injection_strategy:
+            # Check cooldown (prevent seed injection loops)
+            seed_cooldown = self.config['generation']['cache'].get('seed_injection_cooldown', 2)
+            keyframes_since_seed = keyframe_num - self.last_seed_injection_kf
+            
+            if keyframes_since_seed <= seed_cooldown:
+                logger.debug(f"Seed injection on cooldown ({keyframes_since_seed}/{seed_cooldown} keyframes)")
+            else:
+                # Check if we should force seed based on injection frequency
+                # If we've had many cache injections recently, it means collapse is persistent
+                recent_injection_count = sum(1 for x in self.recent_cache_injections if x)
+                injection_frequency = recent_injection_count / len(self.recent_cache_injections) if self.recent_cache_injections else 0.0
+                
+                force_seed_threshold = self.config['generation']['cache'].get('force_seed_injection_frequency', 0.5)
+                force_seed_from_frequency = injection_frequency > force_seed_threshold
+                
+                if force_seed_from_frequency:
+                    logger.warning(
+                        f"[EMERGENCY] High injection frequency ({injection_frequency:.0%}) -> forcing seed"
+                    )
+                
+                # Or adaptive seed injection
+                should_seed = force_seed_from_frequency or self.injection_strategy.should_inject_seed()
+                
+                if should_seed:
+                    logger.info("  -> Attempting seed injection...")
+                    result = self.injection_strategy.inject_seed_frame(
+                        target_keyframe_num=keyframe_num,
+                        current_image_path=self.current_image_path
+                    )
+                    
+                    if result:
+                        target_path, metadata = result
+                        
+                        # Track seed injection
+                        self.last_seed_injection_kf = keyframe_num
+                        
+                        # Reset embedding history to break convergence signal
+                        if self.collapse_detector:
+                            reset_mode = self.config['generation']['cache'].get('embedding_history_reset', 'partial')
+                            if reset_mode == 'full':
+                                self.collapse_detector.reset()
+                            elif reset_mode == 'partial':
+                                keep_recent = self.config['generation']['cache'].get('embedding_history_keep_recent', 5)
+                                self.collapse_detector.partial_reset(keep_recent)
+                            logger.info(f"  Embedding history reset ({reset_mode}) after seed injection")
+                        
+                        # Mark as ready in buffer
+                        self.buffer.mark_ready(sequence_num, target_path)
+                        
+                        # Update current image for next generation
+                        self.current_image_path = target_path
+                        
+                        # Encode for VAE interpolation
+                        if self.latent_encoder:
+                            try:
+                                if torch.cuda.is_available():
+                                    torch.cuda.synchronize()
+                                
+                                latent = self.latent_encoder.encode(
+                                    target_path,
+                                    for_interpolation=True
+                                )
+                                self.keyframe_latents[keyframe_num] = latent
+                                self.keyframe_paths[keyframe_num] = target_path
+                                
+                                logger.debug(f"  Encoded seed keyframe {keyframe_num} to latent")
+                            except Exception as e:
+                                logger.error(f"Failed to encode seed keyframe: {e}")
+                        
+                        # Add to cache (seeds are always diverse)
+                        self.add_keyframe_to_cache(target_path, prompt, 0.0)
+                        
+                        logger.info(f"[OK] Keyframe {keyframe_num} from SEED ({metadata['type']})")
+                        logger.info(f"     Saved to: {target_path.name}")
+                        return True
+        
+        # === CACHE INJECTION (Dissimilar Strategy) ===
+        # Three modes:
+        # 1. FORCED: severe collapse detected, must inject (100%)
+        # 2. SCALED: converging, probability scaled based on delta (15% -> 100%)
+        # 3. BASELINE: normal random variance (15%)
+        
+        # Check cooldown (prevent cache injection loops)
+        cache_cooldown = self.config['generation']['cache'].get('injection_cooldown', 3)
+        keyframes_since_cache = keyframe_num - self.last_cache_injection_kf
+        on_cooldown = keyframes_since_cache <= cache_cooldown
+        
+        force_cache = collapse_result and collapse_result['action'] == 'force_cache'
+        probability_cache = (
+            not force_cache and
+            not on_cooldown and  # Respect cooldown for probability-based injections
+            self.current_keyframe_num > 0 and
+            self.cache and 
+            self.similarity_manager and
+            self.cache.size() > 0 and
+            random.random() < self.current_injection_rate
+        )
+        
+        # Force cache ignores cooldown (severe convergence)
+        cache_injection_allowed = force_cache or probability_cache
+        
+        if on_cooldown and not force_cache:
+            logger.debug(f"Cache injection on cooldown ({keyframes_since_cache}/{cache_cooldown} keyframes)")
+        
+        if cache_injection_allowed:
+            if force_cache:
+                logger.warning(f"  -> FORCING cache injection (severe convergence, 100%)")
+            else:
+                logger.info(f"  -> Attempting cache injection (probability: {self.current_injection_rate:.0%})")
+            
+            # Use modern dissimilar injection strategy
+            if self.injection_strategy:
+                injection_mode = self.config['generation']['cache'].get('injection_mode', 'dissimilar')
+                
+                if injection_mode == 'dissimilar':
+                    # Extract which metric triggered (for smart selection)
+                    collapse_trigger = None
+                    if collapse_result and 'trigger_reason' in collapse_result:
+                        trigger_reason = collapse_result['trigger_reason']
+                        # Parse trigger reason to determine which metric
+                        if 'COLOR' in trigger_reason and 'STRUCT' in trigger_reason:
+                            collapse_trigger = "BOTH"
+                        elif 'COLOR' in trigger_reason:
+                            collapse_trigger = "COLOR"
+                        elif 'STRUCT' in trigger_reason:
+                            collapse_trigger = "STRUCTURAL"
+                    
+                    result = self.injection_strategy.inject_dissimilar_keyframe(
+                        current_image_path=self.current_image_path,
+                        target_keyframe_num=keyframe_num,
+                        collapse_trigger=collapse_trigger
+                    )
+                    
+                    if result:
+                        target_path, metadata = result
+                        
+                        # Track cache injection
+                        self.last_cache_injection_kf = keyframe_num
+                        
+                        # Reset embedding history to break convergence signal
+                        if self.collapse_detector:
+                            reset_mode = self.config['generation']['cache'].get('embedding_history_reset', 'partial')
+                            if reset_mode == 'full':
+                                self.collapse_detector.reset()
+                            elif reset_mode == 'partial':
+                                keep_recent = self.config['generation']['cache'].get('embedding_history_keep_recent', 5)
+                                self.collapse_detector.partial_reset(keep_recent)
+                            logger.info(f"  Embedding history reset ({reset_mode}) after cache injection")
+                        
+                        # Mark as ready in buffer
+                        self.buffer.mark_ready(sequence_num, target_path)
+                        
+                        # Update current image for next generation
+                        self.current_image_path = target_path
+                        
+                        # Encode for VAE interpolation
+                        if self.latent_encoder:
+                            try:
+                                if torch.cuda.is_available():
+                                    torch.cuda.synchronize()
+                                
+                                latent = self.latent_encoder.encode(
+                                    target_path,
+                                    for_interpolation=True
+                                )
+                                self.keyframe_latents[keyframe_num] = latent
+                                self.keyframe_paths[keyframe_num] = target_path
+                                
+                                logger.debug(f"  Encoded dissimilar keyframe {keyframe_num} to latent")
+                            except Exception as e:
+                                logger.error(f"Failed to encode dissimilar keyframe: {e}")
+                        
+                        self.cache_injections += 1
+                        
+                        # Track cache injection for seed forcing logic
+                        self.recent_cache_injections.append(True)
+                        
+                        logger.info(f"[OK] Keyframe {keyframe_num} from DISSIMILAR CACHE")
+                        logger.info(f"     Saved to: {target_path.name}")
+                        return True
+                else:
+                    logger.debug("Dissimilar injection returned None, continuing to normal generation")
+        
+        # === NORMAL GENERATION (No injection) ===
         # Get denoise from config
         denoise = self.config['generation']['hybrid']['keyframe_denoise']
         
@@ -429,13 +627,17 @@ class GenerationCoordinator:
                 # Mark as ready in buffer
                 self.buffer.mark_ready(sequence_num, keyframe_path)
                 
-                # Add to cache for future injections
+                # Add to cache for future injections (with selective caching)
                 self.add_keyframe_to_cache(keyframe_path, prompt, denoise)
                 
                 # Update current image for next generation
                 self.current_image_path = keyframe_path
                 
                 self.keyframes_generated += 1
+                
+                # Track that no cache injection occurred (for seed forcing logic)
+                self.recent_cache_injections.append(False)
+                
                 logger.info(f"[OK] Keyframe {keyframe_num} generated in {elapsed:.2f}s")
                 logger.info(f"     Saved to: {keyframe_path.name}")
                 
@@ -592,6 +794,61 @@ class GenerationCoordinator:
         logger.info(f"[OK] Generated {success_count}/{count} interpolations in {elapsed:.2f}s")
         logger.info(f"     Average: {elapsed/success_count:.3f}s per frame")
         
+        # === CACHE INTERPOLATION MIDPOINT (Component 5) ===
+        if self.config['generation']['cache'].get('cache_interpolations', True):
+            if self.cache and self.similarity_manager and success_count > 0:
+                try:
+                    # Find midpoint frame (t ≈ 0.5)
+                    midpoint_idx = count // 2
+                    midpoint_sequence = sequence_nums[midpoint_idx]
+                    midpoint_frame = self.buffer.frames[midpoint_sequence]
+                    
+                    # Encode midpoint
+                    midpoint_embedding = self.similarity_manager.encode_image(
+                        midpoint_frame.file_path
+                    )
+                    
+                    if midpoint_embedding is not None:
+                        # Use selective caching (same diversity eval as keyframes)
+                        population_mode = self.config['generation']['cache'].get('population_mode', 'selective')
+                        should_cache_interp = True
+                        
+                        if population_mode == 'selective' and self.cache.size() > 0:
+                            should_cache_interp = self.cache.should_cache_frame(
+                                midpoint_embedding,
+                                similarity_manager=self.similarity_manager
+                            )
+                        
+                        if should_cache_interp:
+                            # Convert to serializable format if needed
+                            if isinstance(midpoint_embedding, dict) and 'color' in midpoint_embedding:
+                                # Dual-metric: convert to serializable
+                                midpoint_embedding = self.similarity_manager.to_serializable(midpoint_embedding)
+                            else:
+                                raise Exception("Midpoint embedding is not a dictionary")
+                            
+                            self.cache.add(
+                                image_path=midpoint_frame.file_path,
+                                prompt=f"interpolation_{start_kf}_{end_kf}_t0.5",
+                                generation_params={
+                                    "type": "interpolation",
+                                    "start_kf": start_kf,
+                                    "end_kf": end_kf,
+                                    "t": 0.5
+                                },
+                                embedding=midpoint_embedding
+                            )
+                            
+                            logger.info(
+                                f"[INTERP_CACHE] Cached midpoint "
+                                f"({start_kf} -> {end_kf} @ t=0.5)"
+                            )
+                        else:
+                            logger.debug(f"[INTERP_CACHE] Skipping midpoint (not diverse enough)")
+                
+                except Exception as e:
+                    logger.debug(f"Interpolation caching failed: {e}")
+        
         return success_count == count
     
     def pause(self) -> None:
@@ -611,7 +868,7 @@ class GenerationCoordinator:
     
     def get_stats(self) -> Dict:
         """
-        Get generation statistics
+        Get generation statistics including mode collapse metrics
         
         Returns:
             Dictionary with statistics
@@ -622,7 +879,7 @@ class GenerationCoordinator:
         
         cache_size = self.cache.size() if self.cache else 0
         
-        return {
+        stats = {
             "keyframes_generated": self.keyframes_generated,
             "interpolations_generated": self.interpolations_generated,
             "cache_injections": self.cache_injections,
@@ -632,3 +889,49 @@ class GenerationCoordinator:
             "is_paused": self.paused,
             "is_running": self.running
         }
+        
+        # Add mode collapse detection stats
+        if self.collapse_detector:
+            try:
+                collapse_stats = self.collapse_detector.get_stats()
+                stats.update({
+                    "collapse_recent_similarity": collapse_stats.get("recent_avg_similarity", 0.0),
+                    "collapse_overall_similarity": collapse_stats.get("overall_avg_similarity", 0.0),
+                    "collapse_frames_analyzed": collapse_stats.get("frames_analyzed", 0)
+                })
+            except Exception as e:
+                logger.debug(f"Failed to get collapse stats: {e}")
+        
+        # Add injection strategy stats
+        if self.injection_strategy:
+            try:
+                injection_stats = self.injection_strategy.get_stats()
+                stats.update({
+                    "total_seed_injections": injection_stats.get("total_seed_injections", 0),
+                    "collapse_frequency": injection_stats.get("recent_collapse_frequency", 0.0)
+                })
+            except Exception as e:
+                logger.debug(f"Failed to get injection stats: {e}")
+        
+        # Add cache diversity stats
+        if self.cache:
+            try:
+                diversity_stats = self.cache.get_diversity_stats(similarity_manager=self.similarity_manager)
+                
+                # Handle dual-metric stats
+                if 'diversity_score_color' in diversity_stats:
+                    stats.update({
+                        "cache_diversity_score_color": diversity_stats.get("diversity_score_color", 0.0),
+                        "cache_diversity_score_struct": diversity_stats.get("diversity_score_struct", 0.0),
+                        "cache_avg_color_similarity": diversity_stats.get("avg_color_similarity", 0.0),
+                        "cache_avg_struct_similarity": diversity_stats.get("avg_struct_similarity", 0.0)
+                    })
+                else:
+                    stats.update({
+                        "cache_diversity_score": diversity_stats.get("diversity_score", 0.0),
+                        "cache_avg_similarity": diversity_stats.get("avg_pairwise_similarity", 0.0)
+                    })
+            except Exception as e:
+                logger.debug(f"Failed to get diversity stats: {e}")
+        
+        return stats

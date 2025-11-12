@@ -57,18 +57,21 @@ class WorkflowBuilder:
             self.default_steps = sd_config.get("steps", 20)
             self.default_cfg = sd_config.get("cfg_scale", 7.0)
             self.default_sampler = sd_config.get("sampler", "euler_ancestral")
+            self.default_scheduler = sd_config.get("scheduler", "normal")
         elif model_type == "sd21-unclip":
             self.model_name = "sd21-unclip-h.ckpt"
             sd_config = gen_config.get("sd", {})
             self.default_steps = sd_config.get("steps", 20)
             self.default_cfg = sd_config.get("cfg_scale", 7.0)
             self.default_sampler = sd_config.get("sampler", "euler_ancestral")
+            self.default_scheduler = sd_config.get("scheduler", "normal")
         else:  # flux.1-schnell
             self.model_name = "flux1-schnell.safetensors"
             flux_config = gen_config.get("flux", {})
             self.default_steps = flux_config.get("steps", 4)
             self.default_cfg = flux_config.get("cfg_scale", 1.0)
             self.default_sampler = flux_config.get("sampler", "euler")
+            self.default_scheduler = flux_config.get("scheduler", "normal")
         self.vae_name = "ae.safetensors"  # Flux VAE
 
     def build_txt2img(
@@ -147,7 +150,7 @@ class WorkflowBuilder:
                     "steps": steps,
                     "cfg": cfg,
                     "sampler": self.default_sampler,
-                    "scheduler": "simple" if "flux" in self.model_name else "normal",
+                    "scheduler": self.default_scheduler,
                     "denoise": 1.0,  # Full generation
                     "model": ["1", 0],  # Model from checkpoint
                     "positive": ["2", 0],  # Positive conditioning
@@ -156,16 +159,16 @@ class WorkflowBuilder:
                     # FSampler Advanced specific parameters (good defaults)
                     "protect_first_steps": 2,  # Warmup steps never skipped
                     "protect_last_steps": 2,  # Quality safeguard
-                    "adaptive_mode": "none",  # Can enable later: "learning"
+                    "adaptive_mode": "learn+grad_est",  # Can enable later: "learning"
                     "smoothing_beta": 0.9990,
-                    "skip_mode": "none",  # Can enable: "h2/s3" or "adaptive"
+                    "skip_mode": "adaptive",  # Can enable: "h2/s3" or "adaptive"
                     "skip_indices": "",  # Empty = use skip_mode
                     "anchor_interval": 4,
                     "max_consecutive_skips": 4,
                     "start_at_step": -1,  # -1 = start from 0
                     "end_at_step": -1,  # -1 = full schedule
                     "add_noise": 0.0,  # 0 = deterministic
-                    "noise_type": "whitened",
+                    "noise_type": "gaussian",
                     "verbose": False,
                     "no_grad": True,
                     "official_comfy": True,
@@ -280,7 +283,7 @@ class WorkflowBuilder:
                     "steps": steps,
                     "cfg": cfg,
                     "sampler": self.default_sampler,
-                    "scheduler": "simple" if "flux" in self.model_name else "normal",
+                    "scheduler": self.default_scheduler,
                     "denoise": denoise,
                     "model": ["1", 0],
                     "positive": ["4", 0],
@@ -289,16 +292,16 @@ class WorkflowBuilder:
                     # FSampler Advanced specific parameters (good defaults)
                     "protect_first_steps": 2,  # Warmup steps never skipped
                     "protect_last_steps": 2,  # Quality safeguard
-                    "adaptive_mode": "none",  # Can enable later: "learning"
+                    "adaptive_mode": "learn+grad_est",  # Can enable later: "learning"
                     "smoothing_beta": 0.9990,
-                    "skip_mode": "none",  # Can enable: "h2/s3" or "adaptive"
+                    "skip_mode": "adaptive",  # Can enable: "h2/s3" or "adaptive"
                     "skip_indices": "",  # Empty = use skip_mode
                     "anchor_interval": 4,
                     "max_consecutive_skips": 4,
                     "start_at_step": -1,  # -1 = start from 0
                     "end_at_step": -1,  # -1 = full schedule
                     "add_noise": 0.0,  # 0 = deterministic
-                    "noise_type": "whitened",
+                    "noise_type": "gaussian",
                     "verbose": False,
                     "no_grad": True,
                     "official_comfy": True,

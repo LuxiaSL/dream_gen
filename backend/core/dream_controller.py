@@ -3,7 +3,7 @@ Dream Window Main Controller
 
 Entry point for the Dream Window system. Orchestrates:
 - Image generation (img2img or hybrid mode)
-- Cache management with aesthetic matching
+- Cache management with dual-metric similarity (ColorHist + pHash-8)
 - Prompt rotation
 - Status monitoring
 - Display output
@@ -33,11 +33,11 @@ from utils.status_writer import StatusWriter
 from utils.file_ops import atomic_write_image_with_retry
 from utils.game_detector import GameDetector
 from cache.manager import CacheManager
-from cache.aesthetic_matcher import AestheticMatcher
+from cache.dual_similarity import DualMetricSimilarityManager
 
 # Setup logging
 def setup_logging(log_dir: Path, log_level: str = "INFO"):
-    """Configure logging system"""
+    """Configure logging system with rotation"""
     log_dir.mkdir(parents=True, exist_ok=True)
     
     log_file = log_dir / "dream_controller.log"
@@ -48,8 +48,13 @@ def setup_logging(log_dir: Path, log_level: str = "INFO"):
         datefmt='%Y-%m-%d %H:%M:%S'
     )
     
-    # File handler
-    file_handler = logging.FileHandler(log_file)
+    # Rotating file handler (max 5MB per file, keep 3 backups)
+    from logging.handlers import RotatingFileHandler
+    file_handler = RotatingFileHandler(
+        log_file,
+        maxBytes=5 * 1024 * 1024,  # 5 MB
+        backupCount=3  # Keep 3 backup files (dream_controller.log.1, .2, .3)
+    )
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(formatter)
     
@@ -112,13 +117,10 @@ class DreamController:
         self.game_detector = GameDetector(self.config)
         self.cache = CacheManager(self.config)
         
-        # Initialize aesthetic matcher for cache similarity
-        self.logger.info("Initializing aesthetic matcher...")
-        # Get GPU ID from config (same GPU as ComfyUI for consistency)
-        gpu_id = self.config.get('system', {}).get('gpu_id', 0)
-        device = f"cuda:{gpu_id}" if torch.cuda.is_available() else "cuda"
-        self.logger.info(f"Using GPU {gpu_id} for CLIP/VAE (matching ComfyUI)")
-        self.aesthetic_matcher = AestheticMatcher(device=device)
+        # Initialize dual-metric similarity manager for cache
+        self.logger.info("Initializing Dual-Metric Similarity Manager...")
+        self.similarity_manager = DualMetricSimilarityManager(self.config)
+        self.logger.info("  Using ColorHist + pHash-8 with OR logic for collapse detection")
         
         # Initialize hybrid mode if enabled
         self.latent_encoder = None
@@ -188,7 +190,7 @@ class DreamController:
                 prompt_manager=self.prompt_manager,
                 config=self.config,
                 cache_manager=self.cache,
-                aesthetic_matcher=self.aesthetic_matcher
+                similarity_manager=self.similarity_manager
             )
             
             # Create display selector
@@ -218,9 +220,8 @@ class DreamController:
         self.running_tasks = []
         self.asyncio_loop = None
         
-        # Statistics
+        # Statistics (moved to GenerationCoordinator)
         self.generation_times = []
-        self.cache_injections = 0
         
         # Frame management
         self.max_output_frames = self.config.get('display', {}).get('max_output_frames', 100)
@@ -279,52 +280,6 @@ class DreamController:
             raise ValueError(f"No seed images found in {self.seed_dir}")
         
         return random.choice(seed_images)
-    
-    def add_frame_to_cache(self, frame_path: Path, prompt: str, denoise: float) -> bool:
-        """
-        Add a generated frame to the cache with CLIP embedding
-        
-        Args:
-            frame_path: Path to generated frame
-            prompt: Generation prompt used
-            denoise: Denoise value used
-            
-        Returns:
-            True if successfully added to cache
-        """
-        try:
-            # Encode image to CLIP embedding
-            embedding = self.aesthetic_matcher.encode_image(frame_path)
-            
-            if embedding is None:
-                self.logger.warning(f"Failed to encode image for cache: {frame_path.name}")
-                return False
-            
-            # Convert numpy array to list for JSON serialization
-            if hasattr(embedding, 'tolist'):
-                embedding = embedding.tolist()
-            
-            # Add to cache
-            generation_params = {
-                "denoise": denoise,
-                "prompt": prompt,
-                "model": self.config["generation"]["model"],
-                "resolution": self.config["generation"]["resolution"]
-            }
-            
-            cache_id = self.cache.add(
-                image_path=frame_path,
-                prompt=prompt,
-                generation_params=generation_params,
-                embedding=embedding
-            )
-            
-            self.logger.debug(f"Added to cache: {cache_id} (total: {self.cache.size()})")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Failed to add frame to cache: {e}", exc_info=True)
-            return False
     
     def check_game_state(self) -> bool:
         """
@@ -387,94 +342,6 @@ class DreamController:
         
         return self.paused
     
-    def should_inject_cache(self) -> bool:
-        """
-        Decide if should inject cached image this frame
-        
-        Uses probability from config and checks cache has content.
-        
-        Returns:
-            True if should inject cache
-        """
-        if self.frame_count == 0:
-            return False  # Never inject on first frame
-        
-        # Check cache has entries
-        if self.cache.size() == 0:
-            return False
-        
-        # Random probability check
-        injection_prob = self.config['generation']['cache']['injection_probability']
-        return random.random() < injection_prob
-    
-    def inject_cached_frame(self) -> Optional[Path]:
-        """
-        Inject similar cached image based on current aesthetic
-        
-        Returns:
-            Path to cached image, or None if injection fails
-        """
-        if self.current_image is None:
-            return None
-        
-        try:
-            # Encode current frame
-            current_embedding = self.aesthetic_matcher.encode_image(self.current_image)
-            
-            if current_embedding is None:
-                self.logger.warning("Failed to encode current frame for cache injection")
-                return None
-            
-            # Get all cached entries
-            cache_entries = self.cache.get_all()
-            if not cache_entries:
-                self.logger.debug("Cache is empty, no injection possible")
-                return None
-            
-            # Prepare candidates (cache_id, embedding) pairs
-            candidates = [
-                (entry.cache_id, entry.embedding)
-                for entry in cache_entries
-                if entry.embedding is not None
-            ]
-            
-            if not candidates:
-                self.logger.debug("No cache entries with embeddings")
-                return None
-            
-            # Find similar cached images
-            threshold = self.config['generation']['cache']['similarity_threshold']
-            similar = self.aesthetic_matcher.find_similar(
-                target_embedding=current_embedding,
-                candidate_embeddings=candidates,
-                threshold=threshold,
-                top_k=5
-            )
-            
-            if not similar:
-                self.logger.debug(f"No similar images found (threshold: {threshold})")
-                return None
-            
-            # Weighted random selection from similar images
-            selected_cache_id = self.aesthetic_matcher.weighted_random_selection(similar)
-            
-            if not selected_cache_id:
-                return None
-            
-            # Get the cached image path
-            cached_entry = self.cache.get(selected_cache_id)
-            if cached_entry:
-                self.cache_injections += 1
-                # Log with similarity info from similar list
-                similarity_score = next((s for cid, s in similar if cid == selected_cache_id), 0.0)
-                self.logger.info(f"[CACHE] INJECTION #{self.cache_injections}: {selected_cache_id} (similarity: {similarity_score:.3f})")
-                return cached_entry.image_path
-            
-        except Exception as e:
-            self.logger.error(f"Cache injection failed: {e}", exc_info=True)
-        
-        return None
-    
     def write_current_frame(self, frame_path: Path):
         """
         Write frame to current_frame.png for display
@@ -524,7 +391,6 @@ class DreamController:
                 "current_mode": mode,
                 "current_prompt": prompt[:100],  # Truncate long prompts
                 "cache_size": self.cache.size(),
-                "cache_injections": self.cache_injections,
                 "uptime_minutes": round((time.time() - self.start_time) / 60, 1) if self.start_time else 0,
                 # Buffer status for widget
                 "buffer_filled": buffer_filled,
@@ -536,112 +402,6 @@ class DreamController:
             
         except Exception as e:
             self.logger.error(f"Failed to update status: {e}")
-    
-    async def run_img2img_loop(self, max_frames: Optional[int] = None):
-        """
-        Run continuous img2img feedback loop
-        
-        Each frame is generated from the previous frame with cache injection.
-        
-        Args:
-            max_frames: Maximum frames to generate (None = infinite)
-        """
-        self.logger.info("Starting img2img feedback loop")
-        self.logger.info(f"Target: {'infinite' if max_frames is None else max_frames} frames")
-        
-        # Start with random seed
-        self.current_image = self.get_random_seed_image()
-        self.logger.info(f"Starting from seed: {self.current_image.name}")
-        
-        # Copy seed to output as frame 0
-        dest = self.output_dir / f"frame_{self.frame_count:05d}.png"
-        Image.open(self.current_image).save(dest)
-        self.write_current_frame(dest)
-        self.frame_count += 1
-        
-        # Main generation loop
-        while self.running:
-            if max_frames and self.frame_count >= max_frames:
-                break
-            
-            try:
-                # Check for game detection (pause + free VRAM if needed)
-                if self.check_game_state():
-                    # Game is running - skip generation
-                    await asyncio.sleep(2.0)
-                    continue
-                
-                # Check for cache injection
-                if self.should_inject_cache():
-                    cached_image = self.inject_cached_frame()
-                    if cached_image and cached_image.exists():
-                        # Use cached image
-                        dest = self.output_dir / f"frame_{self.frame_count:05d}.png"
-                        Image.open(cached_image).copy().save(dest)
-                        self.write_current_frame(dest)
-                        self.current_image = dest
-                        self.frame_count += 1
-                        
-                        # Update status
-                        self.update_status(0.0, "cache_injection", "cached image")
-                        
-                        await asyncio.sleep(1.0)
-                        continue
-                
-                # Normal generation
-                prompt = self.prompt_manager.get_next_prompt()
-                self.logger.info(f"\n{'='*70}")
-                self.logger.info(f"Frame {self.frame_count}")
-                self.logger.info(f"Prompt: {prompt[:60]}...")
-                
-                start_time = time.time()
-                
-                # Generate frame
-                new_frame = self.generator.generate_from_image(
-                    image_path=self.current_image,
-                    prompt=prompt,
-                    denoise=self.config['generation']['img2img']['denoise']
-                )
-                
-                elapsed = time.time() - start_time
-                
-                if new_frame and new_frame.exists():
-                    # Success
-                    self.generation_times.append(elapsed)
-                    self.current_image = new_frame
-                    self.frame_count += 1
-                    
-                    # Write to display
-                    self.write_current_frame(new_frame)
-                    
-                    # Update status
-                    self.update_status(elapsed, "img2img", prompt)
-                    
-                    # Log stats
-                    avg_time = sum(self.generation_times[-10:]) / min(10, len(self.generation_times))
-                    self.logger.info(f"[OK] Generated in {elapsed:.2f}s (avg: {avg_time:.2f}s)")
-                    self.logger.info(f"Cache: {self.cache.size()}/{self.config['generation']['cache']['max_size']}")
-                    
-                    # Small pause
-                    await asyncio.sleep(1.0)
-                    
-                else:
-                    self.logger.error("Generation failed, retrying...")
-                    await asyncio.sleep(5.0)
-                    
-            except KeyboardInterrupt:
-                self.logger.info("\n[!]  Interrupted by user")
-                break
-            except Exception as e:
-                self.logger.error(f"Error in loop: {e}", exc_info=True)
-                await asyncio.sleep(5.0)
-        
-        self.logger.info(f"\n{'='*70}")
-        self.logger.info(f"Loop complete: {self.frame_count} frames generated")
-        self.logger.info(f"Cache injections: {self.cache_injections}")
-        if self.generation_times:
-            avg_time = sum(self.generation_times) / len(self.generation_times)
-            self.logger.info(f"Average generation time: {avg_time:.2f}s")
     
     async def run_buffered_hybrid_loop(self) -> None:
         """
@@ -759,15 +519,15 @@ class DreamController:
                 gen_stats = self.generation_coordinator.get_stats()
                 display_stats = self.display_selector.get_stats()
                 
-                # Update status.json
+                # Update status.json with comprehensive stats from new system
                 status_data = {
                     "frame_number": display_stats['frames_displayed'],
                     "generation_time": gen_stats['avg_generation_time'],
                     "status": "paused" if self.paused else "live",
                     "current_mode": "hybrid_buffered",
                     "current_prompt": "generating...",
-                    "cache_size": self.cache.size(),
-                    "cache_injections": self.cache_injections,
+                    "cache_size": gen_stats.get('cache_size', self.cache.size()),
+                    "cache_injections": gen_stats.get('cache_injections', 0),
                     "uptime_minutes": round((time.time() - self.start_time) / 60, 1) if self.start_time else 0,
                     # Buffer status
                     "buffer_filled": int(buffer_status['frames_ready']),
@@ -777,7 +537,15 @@ class DreamController:
                     "buffer_percentage": buffer_status['buffer_percentage'],
                     # Generation stats
                     "keyframes_generated": gen_stats['keyframes_generated'],
-                    "interpolations_generated": gen_stats['interpolations_generated']
+                    "interpolations_generated": gen_stats['interpolations_generated'],
+                    # Mode collapse prevention stats (new!)
+                    "collapse_recent_similarity": gen_stats.get('collapse_recent_similarity', 0.0),
+                    "collapse_overall_similarity": gen_stats.get('collapse_overall_similarity', 0.0),
+                    "collapse_frames_analyzed": gen_stats.get('collapse_frames_analyzed', 0),
+                    "total_seed_injections": gen_stats.get('total_seed_injections', 0),
+                    "collapse_frequency": gen_stats.get('collapse_frequency', 0.0),
+                    "cache_diversity_score": gen_stats.get('cache_diversity_score', 0.0),
+                    "cache_avg_similarity": gen_stats.get('cache_avg_similarity', 0.0)
                 }
                 
                 self.status_writer.write_status(status_data)
@@ -855,8 +623,8 @@ class DreamController:
             if mode == 'hybrid':
                 # Use buffered hybrid loop (modern architecture)
                 asyncio.run(self.run_buffered_hybrid_loop())
-            else:  # 'img2img' or fallback
-                asyncio.run(self.run_img2img_loop(max_frames))
+            else:
+                raise ValueError(f"Invalid mode: {mode}")
                 
         except KeyboardInterrupt:
             self.logger.info("\n[!]  Stopped by user")
