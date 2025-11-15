@@ -14,7 +14,7 @@ system:
   log_dir: "./logs"
   
   # GPU configuration (Windows only)
-  gpu_id: 1  # GPU #2 (0-indexed) for dedicated generation
+  gpu_id: 0 # GPU #2 (0-indexed) for dedicated generation
   
   # Logging
   log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR
@@ -25,7 +25,7 @@ generation:
   # When true: Uses new AsyncGenerationOrchestrator (KeyframeWorker + InterpolationWorker + CacheWorker)
   # When false: Uses legacy GenerationCoordinator (rollback safety)
   # Default: false (enable after testing)
-  use_async_orchestrator: false
+  use_async_orchestrator: true
   
   # Model selection
   model: "sd15"  # "sd15", "flux.1-schnell", or "sd21-unclip"
@@ -65,8 +65,8 @@ generation:
     # TESTED PERFORMANCE:
     # - Full res (512x256): ~4 FPS max
     # - Half res (256x128): ~15 FPS max
-    # Set this based on your interpolation_resolution_divisor
-    target_interpolation_fps: 4
+    # Set this based on your interpolation_resolution_divisor and GPU speed
+    target_interpolation_fps: 3.5
     
     # Keyframe generation strength (0.0-1.0)
     # Higher = more variation between keyframes, lower = smoother evolution

@@ -641,6 +641,32 @@ class DreamController:
                     "cache_avg_similarity": gen_stats.get('cache_avg_similarity', 0.0)
                 }
                 
+                # === PROFILING: VAE Lock Stats ===
+                if hasattr(self, 'vae_access') and self.vae_access is not None:
+                    lock_stats = self.vae_access.get_lock_stats()
+                    
+                    # Log if significant contention
+                    if lock_stats['avg_wait_time_ms'] > 10:
+                        self.logger.warning(
+                            f"VAE Lock Contention: {lock_stats['acquisitions']} ops, "
+                            f"avg wait: {lock_stats['avg_wait_time_ms']:.1f}ms, "
+                            f"max wait: {lock_stats['max_wait_time_ms']:.1f}ms"
+                        )
+                    else:
+                        self.logger.debug(
+                            f"VAE Lock: {lock_stats['acquisitions']} ops, "
+                            f"avg wait: {lock_stats['avg_wait_time_ms']:.1f}ms"
+                        )
+                    
+                    # Add to status.json
+                    status_data["vae_lock_acquisitions"] = lock_stats["acquisitions"]
+                    status_data["vae_lock_avg_wait_ms"] = lock_stats["avg_wait_time_ms"]
+                    status_data["vae_lock_max_wait_ms"] = lock_stats["max_wait_time_ms"]
+                    
+                    # Reset stats every 10 seconds for moving average
+                    if int(time.time()) % 10 == 0:
+                        self.vae_access.reset_stats()
+                
                 self.status_writer.write_status(status_data)
                 
                 # Log buffer status every 10 seconds

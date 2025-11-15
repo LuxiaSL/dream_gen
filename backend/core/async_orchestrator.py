@@ -155,8 +155,8 @@ class AsyncGenerationOrchestrator:
             )
             logger.info("Collapse detector initialized (inline in orchestrator)")
         
-        # Initialize injection strategy if cache enabled
-        if self.config['generation']['cache'].get('enabled', False):
+        # Initialize injection strategy (always enabled when cache/similarity available)
+        if cache_manager and similarity_manager:
             self.injection_strategy = CacheInjectionStrategy(
                 config=self.config,
                 cache_manager=cache_manager,
@@ -193,6 +193,23 @@ class AsyncGenerationOrchestrator:
         # Statistics
         self.start_time = None
         self.frames_generated = 0
+        
+        # === PROFILING: CUDA Context Detection ===
+        if torch.cuda.is_available():
+            logger.info("=== CUDA Context Info ===")
+            logger.info(f"  Current device: {torch.cuda.current_device()}")
+            logger.info(f"  Device name: {torch.cuda.get_device_name(0)}")
+            logger.info(f"  CUDA streams: {torch.cuda.current_stream()}")
+            
+            # Check if multiple contexts exist (can cause issues)
+            try:
+                # This will show if contexts are being recreated
+                ctx_handle = torch.cuda.current_context()
+                logger.info(f"  Context handle: {ctx_handle}")
+            except Exception as e:
+                logger.debug(f"  Context check: {e}")
+            
+            logger.info("=========================")
         
         logger.info("AsyncGenerationOrchestrator initialized")
         logger.info(f"  - Seed image: {seed_image}")
@@ -356,7 +373,21 @@ class AsyncGenerationOrchestrator:
         
         while self.running:
             try:
-                # === 1. Wait for Keyframe Completion ===
+                # === 1. Wait for Keyframe Completion OR Buffer Drain (if throttled) ===
+                # First check: are we currently throttled?
+                buffer_status = self.buffer.get_buffer_status()
+                seconds_buffered = buffer_status['seconds_buffered']
+                target_seconds = buffer_status['target_seconds']
+                is_throttled = seconds_buffered >= target_seconds
+                
+                if is_throttled:
+                    # Buffer is full - don't wait for completions (there may be none!)
+                    # Instead, sleep briefly and check buffer status again
+                    logger.debug(f"  System throttled ({seconds_buffered:.1f}s / {target_seconds}s), waiting for buffer to drain...")
+                    await asyncio.sleep(0.5)
+                    continue  # Loop back to check buffer status again
+                
+                # Not throttled, wait for next keyframe completion
                 try:
                     result = await asyncio.wait_for(
                         self.keyframe_worker.result_queue.get(),
@@ -485,23 +516,7 @@ class AsyncGenerationOrchestrator:
                     metadata={'denoise': gen_time, 'type': 'keyframe'}
                 )
                 
-                # === 6. Check Buffer Pacing ===
-                # Use buffer status to check if we've exceeded target
-                buffer_status = self.buffer.get_buffer_status()
-                seconds_buffered = buffer_status['seconds_buffered']
-                target_seconds = buffer_status['target_seconds']
-                
-                # Only throttle if we've exceeded the TARGET buffer
-                # This allows the buffer to fill to its intended size (e.g., 30s)
-                if seconds_buffered >= target_seconds:
-                    logger.info(
-                        f"  Buffer pacing: {seconds_buffered:.1f}s buffered "
-                        f"(target {target_seconds}s reached), throttling..."
-                    )
-                    await asyncio.sleep(2.0)
-                    continue
-                
-                # === 7. Decide Next Keyframe (with injection logic) ===
+                # === 6. Decide Next Keyframe (with injection logic) ===
                 next_kf = kf_num + 1
                 
                 # Check if should inject (collapse detection + probability)
@@ -636,7 +651,20 @@ class AsyncGenerationOrchestrator:
                 break
             except Exception as e:
                 logger.error(f"Coordination loop error: {e}", exc_info=True)
-                # Continue loop (don't crash on single error)
+                
+                # === CRITICAL: Don't let exceptions starve the system ===
+                # Check if workers are still running
+                if not self.keyframe_worker.running:
+                    logger.error("KeyframeWorker died! Restarting...")
+                    self.keyframe_worker.running = True
+                    self.keyframe_task = asyncio.create_task(self.keyframe_worker.run())
+                
+                if not self.interpolation_worker.running:
+                    logger.error("InterpolationWorker died! Restarting...")
+                    self.interpolation_worker.running = True
+                    self.interpolation_task = asyncio.create_task(self.interpolation_worker.run())
+                
+                # Sleep briefly and continue (don't crash on single error)
                 await asyncio.sleep(1.0)
         
         logger.info("Coordination loop exited")

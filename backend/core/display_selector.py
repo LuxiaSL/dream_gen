@@ -125,7 +125,7 @@ class DisplayFrameSelector:
     
     async def select_and_display_next_frame(self) -> bool:
         """
-        Get next frame from buffer and display it
+        Get next frame from buffer and display it (with async I/O)
         
         Returns:
             True if frame was displayed successfully
@@ -155,8 +155,8 @@ class DisplayFrameSelector:
             return False
         
         try:
-            # Copy frame to current_frame.png
-            self._write_current_frame(frame_spec.file_path)
+            # Copy frame to current_frame.png ASYNC (don't block event loop)
+            await self._write_current_frame_async(frame_spec.file_path)
             
             # Mark as displayed in buffer
             self.buffer.mark_displayed(frame_spec.sequence_num)
@@ -180,9 +180,27 @@ class DisplayFrameSelector:
             logger.error(f"Error displaying frame: {e}", exc_info=True)
             return False
     
-    def _write_current_frame(self, frame_path: Path) -> None:
+    async def _write_current_frame_async(self, frame_path: Path) -> None:
         """
-        Write frame to current_frame.png atomically
+        Write frame to current_frame.png using async I/O (optimized)
+        
+        Moves image loading and saving to executor to avoid blocking event loop.
+        
+        Args:
+            frame_path: Path to frame to display
+        """
+        loop = asyncio.get_event_loop()
+        
+        # Run sync I/O in executor (don't block event loop!)
+        await loop.run_in_executor(
+            None,
+            self._write_current_frame_sync,
+            frame_path
+        )
+    
+    def _write_current_frame_sync(self, frame_path: Path) -> None:
+        """
+        Sync I/O operations (runs in executor)
         
         Args:
             frame_path: Path to frame to display
