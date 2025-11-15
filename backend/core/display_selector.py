@@ -96,10 +96,15 @@ class DisplayFrameSelector:
         logger.info("Waiting for initial buffer to fill...")
         logger.info(f"Target: {self.min_buffer_seconds}s")
         
-        # HACKY WORKAROUND: Use much smaller minimum buffer (2 seconds) to let it run free
-        # TODO: Replace with proper async/non-blocking implementation
-        actual_min_buffer = min(2.0, self.min_buffer_seconds)
-        logger.info(f"[WORKAROUND] Using reduced min buffer: {actual_min_buffer}s instead of {self.min_buffer_seconds}s")
+        # For async system: Need proper buffer to account for generation/display rate mismatch
+        # Display rate: 4 FPS = 4 frames/sec
+        # Generation rate: ~2.5 frames/sec (0.4s per interpolation)
+        # Need cushion to prevent display from overtaking generation!
+        # Use at least 5 seconds (20 frames) to give async system time to build lead
+        actual_min_buffer = max(5.0, min(self.min_buffer_seconds, 10.0))
+        
+        if actual_min_buffer != self.min_buffer_seconds:
+            logger.info(f"[ASYNC] Adjusted min buffer: {actual_min_buffer}s (configured: {self.min_buffer_seconds}s)")
         
         while self.running:
             status = self.buffer.get_buffer_status()
@@ -129,7 +134,20 @@ class DisplayFrameSelector:
         frame_spec = self.buffer.get_next_display_frame()
         
         if frame_spec is None:
-            logger.warning("Next frame not ready in buffer")
+            # DEBUG: What frame are we trying to get?
+            seq = self.buffer.display_sequence_num
+            if seq in self.buffer.frames:
+                frame = self.buffer.frames[seq]
+                logger.warning(
+                    f"Next frame not ready in buffer: Seq {seq} is {frame.state.value}, "
+                    f"type={frame.frame_type.value}, "
+                    f"file={frame.file_path.name if frame.file_path else 'None'}"
+                )
+            else:
+                logger.warning(
+                    f"Next frame not ready in buffer: Seq {seq} NOT REGISTERED YET "
+                    f"(next_sequence_num={self.buffer.next_sequence_num})"
+                )
             return False
         
         if not frame_spec.file_path or not frame_spec.file_path.exists():

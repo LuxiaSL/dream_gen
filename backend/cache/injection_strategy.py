@@ -64,8 +64,9 @@ class CacheInjectionStrategy:
         config: Dict[str, Any],
         cache_manager,
         similarity_manager,
-        latent_encoder,
-        buffer
+        latent_encoder=None,  # Legacy: for backward compatibility
+        buffer=None,
+        vae_access=None  # NEW: SharedVAEAccess for async operations
     ):
         """
         Initialize injection strategy
@@ -74,14 +75,36 @@ class CacheInjectionStrategy:
             config: Configuration dictionary
             cache_manager: CacheManager instance
             similarity_manager: DualMetricSimilarityManager instance
-            latent_encoder: LatentEncoder instance for VAE operations
-            buffer: FrameBuffer instance
+            latent_encoder: (DEPRECATED) LatentEncoder instance - use vae_access instead
+            buffer: FrameBuffer instance (optional for direct output_dir)
+            vae_access: SharedVAEAccess instance for thread-safe async VAE operations
         """
         self.config = config
         self.cache = cache_manager
         self.similarity_manager = similarity_manager
-        self.latent_encoder = latent_encoder
+        
+        # Support both legacy (latent_encoder) and new (vae_access) interfaces
+        if vae_access is not None:
+            self.vae_access = vae_access
+            self.latent_encoder = None  # Not used in async mode
+            self.is_async = True
+        elif latent_encoder is not None:
+            self.latent_encoder = latent_encoder
+            self.vae_access = None  # Not available in sync mode
+            self.is_async = False
+        else:
+            logger.warning("Neither vae_access nor latent_encoder provided - VAE blending disabled")
+            self.vae_access = None
+            self.latent_encoder = None
+            self.is_async = False
+        
         self.buffer = buffer
+        
+        # Determine output directory
+        if buffer:
+            self.output_dir = buffer.keyframe_dir
+        else:
+            self.output_dir = Path(config['system']['output_dir']) / 'frames' / 'keyframes'
         
         # Cache config shortcuts
         self.cache_config = config['generation']['cache']
@@ -93,12 +116,13 @@ class CacheInjectionStrategy:
         self.recent_cache_injections: deque = deque(maxlen=5)  # Track last 5 injected cache IDs
         
         logger.info("CacheInjectionStrategy initialized")
+        logger.info(f"  Mode: {'ASYNC (thread-safe)' if self.is_async else 'SYNC (legacy)'}")
         logger.info(f"  Similarity method: {self.cache_config.get('similarity_method', 'dual_metric')}")
         logger.info(f"  Injection mode: {self.cache_config.get('injection_mode', 'dissimilar')}")
         logger.info(f"  Blend weight: {self.cache_config.get('blend_weight', 0.6)}")
         logger.info(f"  Anti-loop tracking: {5} recent injections")
     
-    def inject_dissimilar_keyframe(
+    async def inject_dissimilar_keyframe(
         self,
         current_image_path: Path,
         target_keyframe_num: int,
@@ -236,19 +260,31 @@ class CacheInjectionStrategy:
                 )
             
             # VAE latent blending (not direct copy!)
-            if not self.latent_encoder:
-                logger.warning("No latent encoder available, falling back to direct copy")
+            if not self.vae_access and not self.latent_encoder:
+                logger.warning("No VAE access available, falling back to direct copy")
                 return self._direct_copy_fallback(selected_entry, target_keyframe_num)
             
             try:
-                current_latent = self.latent_encoder.encode(
-                    current_image_path,
-                    for_interpolation=True
-                )
-                cached_latent = self.latent_encoder.encode(
-                    selected_entry.image_path,
-                    for_interpolation=True
-                )
+                # Use async VAE access if available (thread-safe)
+                if self.vae_access:
+                    current_latent = await self.vae_access.encode_async(
+                        current_image_path,
+                        for_interpolation=True
+                    )
+                    cached_latent = await self.vae_access.encode_async(
+                        selected_entry.image_path,
+                        for_interpolation=True
+                    )
+                else:
+                    # Legacy sync mode (no lock - only safe in single-threaded context)
+                    current_latent = self.latent_encoder.encode(
+                        current_image_path,
+                        for_interpolation=True
+                    )
+                    cached_latent = self.latent_encoder.encode(
+                        selected_entry.image_path,
+                        for_interpolation=True
+                    )
                 
                 # Blend: weighted towards cached (breaking collapse)
                 blend_weight = self.cache_config.get('blend_weight', 0.6)
@@ -258,13 +294,19 @@ class CacheInjectionStrategy:
                 )
                 
                 # Decode to image
-                blended_image = self.latent_encoder.decode(
-                    blended_latent,
-                    upscale_to_target=True
-                )
+                if self.vae_access:
+                    blended_image = await self.vae_access.decode_async(
+                        blended_latent,
+                        upscale_to_target=True
+                    )
+                else:
+                    blended_image = self.latent_encoder.decode(
+                        blended_latent,
+                        upscale_to_target=True
+                    )
                 
                 # Save blended frame
-                target_path = self.buffer.keyframe_dir / f"keyframe_{target_keyframe_num:03d}.png"
+                target_path = self.output_dir / f"keyframe_{target_keyframe_num:03d}.png"
                 blended_image.save(target_path, "PNG", optimize=False, compress_level=1)
                 
                 self.total_cache_injections += 1
@@ -318,7 +360,7 @@ class CacheInjectionStrategy:
         import shutil
         
         try:
-            target_path = self.buffer.keyframe_dir / f"keyframe_{target_keyframe_num:03d}.png"
+            target_path = self.output_dir / f"keyframe_{target_keyframe_num:03d}.png"
             shutil.copy(cache_entry.image_path, target_path)
             
             self.total_cache_injections += 1
@@ -411,7 +453,7 @@ class CacheInjectionStrategy:
         
         return should_inject
     
-    def inject_seed_frame(
+    async def inject_seed_frame(
         self,
         target_keyframe_num: int,
         current_image_path: Optional[Path] = None
@@ -439,17 +481,29 @@ class CacheInjectionStrategy:
         # Check if should blend with current
         blend_seeds = self.cache_config.get('blend_seed_injection', True)
         
-        if blend_seeds and current_image_path and self.latent_encoder:
+        if blend_seeds and current_image_path and (self.vae_access or self.latent_encoder):
             try:
                 # VAE blend: 50/50 with current for smoother transition
-                current_latent = self.latent_encoder.encode(
-                    current_image_path,
-                    for_interpolation=True
-                )
-                seed_latent = self.latent_encoder.encode(
-                    seed_path,
-                    for_interpolation=True
-                )
+                if self.vae_access:
+                    # Async mode (thread-safe)
+                    current_latent = await self.vae_access.encode_async(
+                        current_image_path,
+                        for_interpolation=True
+                    )
+                    seed_latent = await self.vae_access.encode_async(
+                        seed_path,
+                        for_interpolation=True
+                    )
+                else:
+                    # Legacy sync mode
+                    current_latent = self.latent_encoder.encode(
+                        current_image_path,
+                        for_interpolation=True
+                    )
+                    seed_latent = self.latent_encoder.encode(
+                        seed_path,
+                        for_interpolation=True
+                    )
                 
                 blend_weight = self.cache_config.get('seed_blend_weight', 0.5)
                 
@@ -458,13 +512,19 @@ class CacheInjectionStrategy:
                     current_latent * (1.0 - blend_weight)
                 )
                 
-                blended_image = self.latent_encoder.decode(
-                    blended_latent,
-                    upscale_to_target=True
-                )
+                if self.vae_access:
+                    blended_image = await self.vae_access.decode_async(
+                        blended_latent,
+                        upscale_to_target=True
+                    )
+                else:
+                    blended_image = self.latent_encoder.decode(
+                        blended_latent,
+                        upscale_to_target=True
+                    )
                 
                 # Save blended seed
-                target_path = self.buffer.keyframe_dir / f"keyframe_{target_keyframe_num:03d}.png"
+                target_path = self.output_dir / f"keyframe_{target_keyframe_num:03d}.png"
                 blended_image.save(target_path, "PNG", optimize=False, compress_level=1)
                 
                 self.total_seed_injections += 1
@@ -487,7 +547,7 @@ class CacheInjectionStrategy:
         import shutil
         
         try:
-            target_path = self.buffer.keyframe_dir / f"keyframe_{target_keyframe_num:03d}.png"
+            target_path = self.output_dir / f"keyframe_{target_keyframe_num:03d}.png"
             shutil.copy(seed_path, target_path)
             
             self.total_seed_injections += 1

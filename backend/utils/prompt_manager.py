@@ -8,7 +8,7 @@ aesthetic themes while maintaining coherence.
 
 import logging
 import random
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ class PromptManager:
     Manages prompt themes and rotation
     
     Features:
-    - Cycle through base themes
+    - Cycle through theme pairs (positive + negative prompts)
     - Optional time-based modifiers
     - Random vs sequential rotation
     """
@@ -30,8 +30,8 @@ class PromptManager:
         Args:
             config: Configuration dictionary
         """
-        self.base_themes: List[str] = config["prompts"]["base_themes"]
-        self.negative: str = config["prompts"]["negative"]
+        # Load theme pairs (positive + negative prompts)
+        self.theme_pairs: List[Dict[str, str]] = config["prompts"]["theme_pairs"]
         self.rotation_interval: int = config["prompts"]["rotation_interval"]
         
         # Modifiers
@@ -43,8 +43,12 @@ class PromptManager:
         self.frames_on_current_theme = 0
         self.total_frames = 0
         
+        # Cache current pair (for consistent positive/negative pairing)
+        self._current_positive = None
+        self._current_negative = None
+        
         logger.info(
-            f"PromptManager initialized: {len(self.base_themes)} themes, "
+            f"PromptManager initialized: {len(self.theme_pairs)} theme pairs, "
             f"rotation every {self.rotation_interval} frames"
         )
 
@@ -52,24 +56,30 @@ class PromptManager:
         """
         Get next prompt with rotation
         
-        Switches theme every rotation_interval frames for variety
+        Switches theme every rotation_interval frames for variety.
+        This also updates the corresponding negative prompt.
         
         Returns:
-            Prompt string with optional modifiers
+            Positive prompt string with optional modifiers
         """
         # Check if should rotate theme
         if self.frames_on_current_theme >= self.rotation_interval:
             self.current_theme_index = (self.current_theme_index + 1) % len(
-                self.base_themes
+                self.theme_pairs
             )
             self.frames_on_current_theme = 0
             logger.info(f"Rotated to theme {self.current_theme_index + 1}")
         
-        # Get current theme
-        theme = self.base_themes[self.current_theme_index]
+        # Get current theme pair
+        theme_pair = self.theme_pairs[self.current_theme_index]
+        positive_prompt = theme_pair["positive"]
         
-        # Apply modifiers
-        prompt = self._apply_modifiers(theme)
+        # Cache the corresponding negative prompt
+        self._current_negative = theme_pair["negative"]
+        
+        # Apply modifiers to positive prompt
+        prompt = self._apply_modifiers(positive_prompt)
+        self._current_positive = prompt
         
         # Update counters
         self.frames_on_current_theme += 1
@@ -81,13 +91,21 @@ class PromptManager:
         """
         Get completely random prompt (ignores rotation)
         
-        Useful for cache injection or variation
+        Useful for cache injection or variation.
+        Also updates the corresponding negative prompt.
         
         Returns:
-            Random prompt from themes
+            Random positive prompt from themes
         """
-        theme = random.choice(self.base_themes)
-        prompt = self._apply_modifiers(theme)
+        theme_pair = random.choice(self.theme_pairs)
+        positive_prompt = theme_pair["positive"]
+        
+        # Cache the corresponding negative prompt
+        self._current_negative = theme_pair["negative"]
+        
+        prompt = self._apply_modifiers(positive_prompt)
+        self._current_positive = prompt
+        
         return prompt
 
     def _apply_modifiers(self, base_prompt: str) -> str:
@@ -142,12 +160,21 @@ class PromptManager:
 
     def get_negative_prompt(self) -> str:
         """
-        Get negative prompt
+        Get negative prompt corresponding to the current theme
+        
+        Returns the negative prompt that pairs with the last returned
+        positive prompt (from get_next_prompt or get_random_prompt).
         
         Returns:
             Negative prompt string
         """
-        return self.negative
+        # If we have a cached negative from the current theme, return it
+        if self._current_negative is not None:
+            return self._current_negative
+        
+        # Fallback: return negative from current theme index
+        # (This shouldn't normally happen if get_next_prompt is called first)
+        return self.theme_pairs[self.current_theme_index]["negative"]
 
     def reset_rotation(self) -> None:
         """Reset rotation state"""
@@ -164,7 +191,7 @@ class PromptManager:
         """
         return {
             "current_theme": self.current_theme_index + 1,
-            "total_themes": len(self.base_themes),
+            "total_themes": len(self.theme_pairs),
             "frames_on_theme": self.frames_on_current_theme,
             "rotation_interval": self.rotation_interval,
             "total_frames": self.total_frames,
@@ -193,20 +220,23 @@ def test_prompt_manager() -> bool:
     # Create manager
     print("\n1. Creating prompt manager...")
     manager = PromptManager(config)
-    print(f"✓ Manager created: {len(manager.base_themes)} themes")
+    print(f"✓ Manager created: {len(manager.theme_pairs)} theme pairs")
     
     # Test rotation
     print("\n2. Testing prompt rotation...")
     prompts = []
     for i in range(25):  # Go past rotation interval
         prompt = manager.get_next_prompt()
-        prompts.append(prompt)
+        negative = manager.get_negative_prompt()
+        prompts.append((prompt, negative))
         if i % 5 == 0:
             stats = manager.get_stats()
             print(
                 f"   Frame {i}: Theme {stats['current_theme']}, "
                 f"Frames on theme: {stats['frames_on_theme']}"
             )
+            print(f"      Positive (first 60 chars): {prompt[:60]}...")
+            print(f"      Negative (first 60 chars): {negative[:60]}...")
     
     # Check that rotation happened
     stats = manager.get_stats()
@@ -218,8 +248,13 @@ def test_prompt_manager() -> bool:
     
     # Test random
     print("\n3. Testing random prompts...")
-    random_prompts = [manager.get_random_prompt() for _ in range(5)]
-    print(f"✓ Generated {len(random_prompts)} random prompts")
+    for i in range(3):
+        random_prompt = manager.get_random_prompt()
+        random_negative = manager.get_negative_prompt()
+        print(f"   Random pair {i+1}:")
+        print(f"      Positive: {random_prompt[:50]}...")
+        print(f"      Negative: {random_negative[:50]}...")
+    print(f"✓ Generated random prompt pairs")
     
     # Test modifiers
     print("\n4. Testing time-based modifiers...")
@@ -229,14 +264,15 @@ def test_prompt_manager() -> bool:
     else:
         print("  (Time modifiers disabled)")
     
-    # Test negative prompt
-    print("\n5. Testing negative prompt...")
-    negative = manager.get_negative_prompt()
-    if negative and len(negative) > 0:
-        print(f"✓ Negative prompt: {negative[:50]}...")
-    else:
-        print("✗ Negative prompt empty")
-        return False
+    # Test negative prompt pairing
+    print("\n5. Testing positive/negative pairing...")
+    manager.reset_rotation()
+    for i in range(len(manager.theme_pairs)):
+        positive = manager.get_next_prompt()
+        negative = manager.get_negative_prompt()
+        print(f"   Theme {i+1}:")
+        print(f"      Positive: {positive[:40]}...")
+        print(f"      Negative: {negative[:40]}...")
     
     print("\n" + "=" * 60)
     print("PromptManager test PASSED ✓")

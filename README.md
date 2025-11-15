@@ -183,8 +183,9 @@ generation:
       diversity_threshold: 0.82           # Structural diversity threshold
 
 prompts:
-  base_themes:
-    - "ethereal digital angel, dissolving particles, technical wireframe..."
+  theme_pairs:
+    - positive: "ethereal digital angel, dissolving particles, technical wireframe..."
+      negative: "colors, warm tones, low quality..."
   rotation_interval: 20                   # Keyframes before theme rotation
 ```
 
@@ -192,11 +193,11 @@ prompts:
 
 The visual style is controlled by:
 
-1. **Prompts** (`config.yaml` → `prompts.base_themes`): Define the aesthetic space
+1. **Prompts** (`config.yaml` → `prompts.theme_pairs`): Define the aesthetic space with paired positive/negative prompts
 2. **Seed Images** (`seeds/`): Starting points that influence evolution
 3. **Denoise Strength** (`config.yaml` → `generation.hybrid.keyframe_denoise`): Controls how much each keyframe drifts
 
-The default aesthetic is "ethereal technical angels" - monochrome with cyan/red accents, particle dissolution, architectural wireframes. Change the prompts and seeds to explore different aesthetic spaces!
+The default aesthetic is "ethereal technical angels" - monochrome with cyan/red accents, particle dissolution, architectural wireframes. Each theme now has a tailored negative prompt for better control. Change the prompt pairs and seeds to explore different aesthetic spaces!
 
 ## 🎮 Dual-GPU Setup & Game Detection
 
@@ -268,16 +269,32 @@ MIT License - see LICENSE file for details.
 ## 🌟 Gallery
 
 <p align="center">
+
   <img src="examples/gen_1.webp" alt="Example generations from Dream Window" width="100%">
   <br>
 
   ---
+
   <br>
   <img src="examples/gen_2.webp" alt="Example generations from Dream Window" width="100%">
+
   <br>
 
   ---
+
   <br>
   <img src="examples/gen_3.webp" alt="Example generations from Dream Window" width="100%">
+  
+  <br>
+
+  ---
+
+  <br>
+  <img src="examples/gen_4.webp" alt="Example generations from Dream Window" width="100%">
+  
+  <br>
+
+  ---
+
   <em>The system in action - endless variations that never repeat</em>
 </p>

@@ -27,6 +27,8 @@ import torch
 from core.generator import DreamGenerator
 from core.frame_buffer import FrameBuffer
 from core.generation_coordinator import GenerationCoordinator
+from core.async_orchestrator import AsyncGenerationOrchestrator
+from core.shared_resources import SharedVAEAccess
 from core.display_selector import DisplayFrameSelector
 from utils.prompt_manager import PromptManager
 from utils.status_writer import StatusWriter
@@ -182,16 +184,46 @@ class DreamController:
                 buffer_target_seconds=buffer_target_seconds
             )
             
-            # Create generation coordinator
-            self.generation_coordinator = GenerationCoordinator(
-                frame_buffer=self.frame_buffer,
-                generator=self.generator,
-                latent_encoder=self.latent_encoder,
-                prompt_manager=self.prompt_manager,
-                config=self.config,
-                cache_manager=self.cache,
-                similarity_manager=self.similarity_manager
-            )
+            # Check if we should use async orchestrator (new parallelized system)
+            use_async = self.config['generation'].get('use_async_orchestrator', False)
+            
+            if use_async:
+                self.logger.info("Using AsyncGenerationOrchestrator (parallelized pipeline)")
+                
+                # Create SharedVAEAccess wrapper for thread-safe VAE operations
+                self.vae_access = SharedVAEAccess(self.latent_encoder)
+                
+                # Get seed image for bootstrap
+                seed_image = self.get_random_seed_image()
+                
+                # Create async orchestrator
+                self.generation_coordinator = AsyncGenerationOrchestrator(
+                    frame_buffer=self.frame_buffer,
+                    generator=self.generator,
+                    vae_access=self.vae_access,
+                    prompt_manager=self.prompt_manager,
+                    cache_manager=self.cache,
+                    similarity_manager=self.similarity_manager,
+                    config=self.config,
+                    seed_image=seed_image
+                )
+                
+                self.logger.info("  Workers: KeyframeWorker, InterpolationWorker, CacheAnalysisWorker")
+                self.logger.info("  Expected FPS improvement: 2x+ (from ~2.7 to ~5+ fps)")
+            else:
+                self.logger.info("Using GenerationCoordinator (legacy sequential pipeline)")
+                
+                # Create legacy generation coordinator
+                self.vae_access = None
+                self.generation_coordinator = GenerationCoordinator(
+                    frame_buffer=self.frame_buffer,
+                    generator=self.generator,
+                    latent_encoder=self.latent_encoder,
+                    prompt_manager=self.prompt_manager,
+                    config=self.config,
+                    cache_manager=self.cache,
+                    similarity_manager=self.similarity_manager
+                )
             
             # Create display selector
             self.display_selector = DisplayFrameSelector(
@@ -407,8 +439,8 @@ class DreamController:
         """
         Run buffered hybrid generation loop (NEW ARCHITECTURE)
         
-        Uses FrameBuffer, GenerationCoordinator, and DisplayFrameSelector
-        to maintain a 30s buffer of frames for smooth, uninterrupted playback.
+        Uses FrameBuffer, GenerationCoordinator (or AsyncGenerationOrchestrator),
+        and DisplayFrameSelector to maintain a 30s buffer of frames for smooth playback.
         """
         if not self.frame_buffer or not self.generation_coordinator or not self.display_selector:
             self.logger.error("Buffered frame system not initialized!")
@@ -418,91 +450,152 @@ class DreamController:
         self.logger.info("STARTING BUFFERED HYBRID MODE")
         self.logger.info("=" * 70)
         
-        # Get seed image
-        seed_image = self.get_random_seed_image()
-        self.logger.info(f"Starting from seed: {seed_image.name}")
+        # Check if using async orchestrator
+        use_async = self.config['generation'].get('use_async_orchestrator', False)
         
-        # Register and prepare seed as keyframe 1
-        self.logger.info("Preparing seed frame as keyframe 1...")
-        sequence_num = self.frame_buffer.register_keyframe(1)
-        
-        # Copy seed to keyframe directory
-        target_path = self.frame_buffer.keyframe_dir / "keyframe_001.png"
-        Image.open(seed_image).save(target_path)
-        self.frame_buffer.mark_ready(sequence_num, target_path)
-        
-        # Encode seed frame if using VAE
-        if self.latent_encoder:
+        if use_async:
+            # AsyncOrchestrator handles seed bootstrap internally
+            self.logger.info("Using AsyncGenerationOrchestrator (parallelized)")
+            
+            # Clear ComfyUI queue
+            self.logger.info("Clearing ComfyUI queue...")
+            queue_status = self.generator.client.get_queue()
+            if queue_status:
+                running_count = len(queue_status.get("queue_running", []))
+                pending_count = len(queue_status.get("queue_pending", []))
+                if running_count > 0 or pending_count > 0:
+                    self.logger.warning(f"Found stale jobs: {running_count} running, {pending_count} pending")
+                    self.generator.client.interrupt_execution()
+                    self.generator.client.clear_queue()
+                    self.logger.info("Queue cleared")
+            
+            # Start orchestrator and display tasks concurrently
+            self.logger.info("Starting orchestrator and display tasks...")
+            
+            generation_task = asyncio.create_task(self.generation_coordinator.run())
+            display_task = asyncio.create_task(self.display_selector.run())
+            status_task = asyncio.create_task(self._update_buffer_status_loop())
+            
+            # Store task references for signal handler
+            self.running_tasks = [generation_task, display_task, status_task]
+            self.asyncio_loop = asyncio.get_event_loop()
+            
             try:
-                if torch.cuda.is_available():
-                    torch.cuda.synchronize()
-                
-                latent = self.latent_encoder.encode(target_path, for_interpolation=True)
-                self.generation_coordinator.keyframe_latents[1] = latent
-                self.generation_coordinator.keyframe_paths[1] = target_path
-                
-                self.logger.info("  [OK] Seed frame encoded as keyframe 1")
+                # Run all tasks concurrently
+                await asyncio.gather(generation_task, display_task, status_task)
+            except asyncio.CancelledError:
+                self.logger.info("Buffered hybrid loop cancelled")
+            except KeyboardInterrupt:
+                self.logger.info("Buffered hybrid loop interrupted")
             except Exception as e:
-                self.logger.error(f"  [FAIL] Could not encode seed frame: {e}")
+                self.logger.error(f"Error in buffered hybrid loop: {e}", exc_info=True)
+            finally:
+                # Clean up orchestrator (handles worker shutdown)
+                await self.generation_coordinator.stop()
+                self.display_selector.stop()
+                
+                # Cancel tasks
+                for task in [generation_task, display_task, status_task]:
+                    if not task.done():
+                        task.cancel()
+                        try:
+                            await task
+                        except asyncio.CancelledError:
+                            pass
+                
+                # Clear task references
+                self.running_tasks = []
+                self.asyncio_loop = None
         
-        # Set seed in generation coordinator
-        self.generation_coordinator.set_seed_image(target_path)
-        
-        # Mark keyframe 1 as already generated (the seed)
-        # This prevents the coordinator from regenerating keyframe 1
-        self.generation_coordinator.current_keyframe_num = 1
-        self.generation_coordinator.keyframes_generated = 1
-        self.logger.info("  [OK] Keyframe 1 registered (seed frame preserved)")
-        
-        # Clear ComfyUI queue
-        self.logger.info("Clearing ComfyUI queue...")
-        queue_status = self.generator.client.get_queue()
-        if queue_status:
-            running_count = len(queue_status.get("queue_running", []))
-            pending_count = len(queue_status.get("queue_pending", []))
-            if running_count > 0 or pending_count > 0:
-                self.logger.warning(f"Found stale jobs: {running_count} running, {pending_count} pending")
-                self.generator.client.interrupt_execution()
-                self.generator.client.clear_queue()
-                self.logger.info("Queue cleared")
-        
-        # Start generation and display tasks concurrently
-        self.logger.info("Starting generation and display tasks...")
-        
-        generation_task = asyncio.create_task(self.generation_coordinator.run())
-        display_task = asyncio.create_task(self.display_selector.run())
-        status_task = asyncio.create_task(self._update_buffer_status_loop())
-        
-        # Store task references for signal handler
-        self.running_tasks = [generation_task, display_task, status_task]
-        self.asyncio_loop = asyncio.get_event_loop()
-        
-        try:
-            # Run both tasks concurrently
-            await asyncio.gather(generation_task, display_task, status_task)
-        except asyncio.CancelledError:
-            self.logger.info("Buffered hybrid loop cancelled")
-        except KeyboardInterrupt:
-            self.logger.info("Buffered hybrid loop interrupted")
-        except Exception as e:
-            self.logger.error(f"Error in buffered hybrid loop: {e}", exc_info=True)
-        finally:
-            # Clean up
-            self.generation_coordinator.stop()
-            self.display_selector.stop()
+        else:
+            # Legacy GenerationCoordinator (original flow)
+            self.logger.info("Using GenerationCoordinator (legacy sequential)")
             
-            # Cancel tasks
-            for task in [generation_task, display_task, status_task]:
-                if not task.done():
-                    task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
+            # Get seed image
+            seed_image = self.get_random_seed_image()
+            self.logger.info(f"Starting from seed: {seed_image.name}")
             
-            # Clear task references
-            self.running_tasks = []
-            self.asyncio_loop = None
+            # Register and prepare seed as keyframe 1
+            self.logger.info("Preparing seed frame as keyframe 1...")
+            sequence_num = self.frame_buffer.register_keyframe(1)
+            
+            # Copy seed to keyframe directory
+            target_path = self.frame_buffer.keyframe_dir / "keyframe_001.png"
+            Image.open(seed_image).save(target_path)
+            self.frame_buffer.mark_ready(sequence_num, target_path)
+            
+            # Encode seed frame if using VAE
+            if self.latent_encoder:
+                try:
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize()
+                    
+                    latent = self.latent_encoder.encode(target_path, for_interpolation=True)
+                    self.generation_coordinator.keyframe_latents[1] = latent
+                    self.generation_coordinator.keyframe_paths[1] = target_path
+                    
+                    self.logger.info("  [OK] Seed frame encoded as keyframe 1")
+                except Exception as e:
+                    self.logger.error(f"  [FAIL] Could not encode seed frame: {e}")
+            
+            # Set seed in generation coordinator
+            self.generation_coordinator.set_seed_image(target_path)
+            
+            # Mark keyframe 1 as already generated (the seed)
+            # This prevents the coordinator from regenerating keyframe 1
+            self.generation_coordinator.current_keyframe_num = 1
+            self.generation_coordinator.keyframes_generated = 1
+            self.logger.info("  [OK] Keyframe 1 registered (seed frame preserved)")
+            
+            # Clear ComfyUI queue
+            self.logger.info("Clearing ComfyUI queue...")
+            queue_status = self.generator.client.get_queue()
+            if queue_status:
+                running_count = len(queue_status.get("queue_running", []))
+                pending_count = len(queue_status.get("queue_pending", []))
+                if running_count > 0 or pending_count > 0:
+                    self.logger.warning(f"Found stale jobs: {running_count} running, {pending_count} pending")
+                    self.generator.client.interrupt_execution()
+                    self.generator.client.clear_queue()
+                    self.logger.info("Queue cleared")
+            
+            # Start generation and display tasks concurrently
+            self.logger.info("Starting generation and display tasks...")
+            
+            generation_task = asyncio.create_task(self.generation_coordinator.run())
+            display_task = asyncio.create_task(self.display_selector.run())
+            status_task = asyncio.create_task(self._update_buffer_status_loop())
+            
+            # Store task references for signal handler
+            self.running_tasks = [generation_task, display_task, status_task]
+            self.asyncio_loop = asyncio.get_event_loop()
+            
+            try:
+                # Run both tasks concurrently
+                await asyncio.gather(generation_task, display_task, status_task)
+            except asyncio.CancelledError:
+                self.logger.info("Buffered hybrid loop cancelled")
+            except KeyboardInterrupt:
+                self.logger.info("Buffered hybrid loop interrupted")
+            except Exception as e:
+                self.logger.error(f"Error in buffered hybrid loop: {e}", exc_info=True)
+            finally:
+                # Clean up
+                self.generation_coordinator.stop()
+                self.display_selector.stop()
+                
+                # Cancel tasks
+                for task in [generation_task, display_task, status_task]:
+                    if not task.done():
+                        task.cancel()
+                        try:
+                            await task
+                        except asyncio.CancelledError:
+                            pass
+                
+                # Clear task references
+                self.running_tasks = []
+                self.asyncio_loop = None
         
         self.logger.info("=" * 70)
         self.logger.info("BUFFERED HYBRID MODE STOPPED")

@@ -20,6 +20,13 @@ system:
   log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR
 
 generation:
+  # === PARALLELIZATION FEATURE FLAG ===
+  # Enable async orchestrator for 2x+ FPS improvement
+  # When true: Uses new AsyncGenerationOrchestrator (KeyframeWorker + InterpolationWorker + CacheWorker)
+  # When false: Uses legacy GenerationCoordinator (rollback safety)
+  # Default: false (enable after testing)
+  use_async_orchestrator: false
+  
   # Model selection
   model: "sd15"  # "sd15", "flux.1-schnell", or "sd21-unclip"
   resolution: [512, 256]    # Width x Height
@@ -63,7 +70,7 @@ generation:
     
     # Keyframe generation strength (0.0-1.0)
     # Higher = more variation between keyframes, lower = smoother evolution
-    keyframe_denoise: 0.3
+    keyframe_denoise: 0.2
     
     # PERFORMANCE OPTIMIZATION: Lower-resolution interpolation
     # Interpolate at lower resolution, then upscale for massive speedup
@@ -87,7 +94,7 @@ generation:
   
   # img2img parameters (for feedback loop mode)
   img2img:
-    denoise: 0.35               # Lower = slower drift, higher = more variation
+    denoise: 0.3               # Lower = slower drift, higher = more variation
     # 0.3 = very slow evolution (preserves structure)
     # 0.4 = balanced (recommended)
     # 0.5 = faster changes
@@ -160,6 +167,11 @@ generation:
     # === MODE COLLAPSE DETECTION (Component 1) ===
     collapse_detection: true
     
+    # Warmup period: disable ALL injections during initial aesthetic establishment
+    # Recommendation: Set to at least 40 (collapse detection window size)
+    # This lets img2img naturally drift and establishes baseline before interventions
+    warmup_keyframes: 10               # No cache/seed injection until this many keyframes
+    
     # Convergence detection mode: "absolute" or "percentage"
     # NOTE: With dual-metric system, thresholds are defined per-metric above
     #       (color_histogram.convergence_threshold, phash.convergence_threshold)
@@ -189,6 +201,22 @@ generation:
     # === LOGGING & METRICS ===
     log_diversity_stats: true          # Log cache diversity metrics
     diversity_check_interval: 10       # Log every N keyframes
+    
+    # === PHASE 2: ADVANCED CACHE MONITORING (Future Enhancement) ===
+    # These settings are designed for future use with AsyncGenerationOrchestrator
+    # See: docs/ASYNC_CACHE_MONITORING_DESIGN.md for details
+    # When enabled, provides continuous background monitoring and smart eviction
+    advanced_monitoring:
+      enabled: false                   # Enable Phase 2 monitoring (not yet implemented)
+      eviction_strategy: "lru"         # "lru" or "redundancy" (Phase 2: smart eviction)
+      acceptance_logic: "average"      # "average" or "max_similarity" (Phase 2: stricter logic)
+      diversity_matrix_refresh: 50     # Recalculate diversity matrix every N keyframes
+      # Phase 2 will add:
+      # - Continuous O(N²) diversity matrix
+      # - Redundancy-based eviction (remove duplicates first)
+      # - Max-similarity acceptance (stricter than average)
+      # - Cluster detection
+      # - Adaptive threshold tuning
 
 display:
   # === BUFFERED DISPLAY SYSTEM ===
@@ -208,12 +236,20 @@ display:
   max_output_frames: 100          # Keep only last N frames in output dir (prevents unbounded growth)
   
 prompts:
-  # Base theme templates (rotate through these)
-  base_themes:
-    - "black, white, ethereal digital angel, dissolving into particles, flowing white lines, technical wireframe overlay, monochrome, sparse color accents, architectural diagrams, high contrast, abstract geometry"
-    - "abstract geometry, technical wireframe, architectural diagrams, flowing lines, blueprint aesthetic, monochrome with data corruption, cyberpunk overlay, grid patterns, high contrast"
-    - "cyberpunk angel, glitch art aesthetic, digital corruption, technical overlay, particle dissolution, monochrome with red and cyan accents, wireframe structure, abstract form, high contrast"
-    - "black, white, ethereal figure in data stream, technical readouts, flowing particles, architectural wireframe, monochrome with blue highlights, digital dissolution, abstract geometry, high contrast"
+  # Theme pairs (positive + negative prompts)
+  # Each theme can have its own tailored negative prompt for better control
+  theme_pairs:
+    - positive: "black, white, ethereal digital angel, dissolving into particles, flowing white lines, technical wireframe overlay, monochrome, sparse color accents, architectural diagrams, high contrast, abstract geometry"
+      negative: "colors, red, blue, green, yellow, orange, purple, pink, brown, low quality, text, watermark, signature, jpeg artifacts, muddy colors, brown tones, warm colors"
+    
+    - positive: "abstract geometry, technical wireframe, architectural diagrams, flowing lines, blueprint aesthetic, monochrome with data corruption, cyberpunk overlay, grid patterns, high contrast"
+      negative: "organic forms, curves, nature, soft edges, blur, low quality, text, watermark, signature, jpeg artifacts, low contrast, muddy colors"
+    
+    - positive: "cyberpunk angel, glitch art aesthetic, digital corruption, technical overlay, particle dissolution, monochrome with red and cyan accents, wireframe structure, abstract form, high contrast"
+      negative: "smooth, clean, pristine, perfect, polished, blur, low quality, text, watermark, signature, jpeg artifacts, low contrast, natural lighting"
+    
+    - positive: "black, white, ethereal figure in data stream, technical readouts, flowing particles, architectural wireframe, monochrome with blue highlights, digital dissolution, abstract geometry, high contrast"
+      negative: "solid forms, static, stable, grounded, physical, blur, low quality, text, watermark, signature, jpeg artifacts, low contrast, warm colors"
   
   # Prompt modifiers (optional enhancements)
   modifiers:
@@ -225,9 +261,6 @@ prompts:
   # Prompts rotate when generating new keyframes, not during interpolation
   rotation_interval: 20           # Number of KEYFRAMES before switching base theme
                                   # Example: 20 keyframes = 20 theme cycles before rotation
-  
-  # Negative prompt (always used)
-  negative: "colors, red, blue, green, yellow, orange, purple, pink, brown, black, white, gray, silver, gold, platinum, rainbow, multicolor, psychedelic, trippy, fractal, glitch, noise, blur, low quality, text, watermark, signature, jpeg artifacts, low contrast, muddy colors, brown tones, warm colors"
 
 # Game detection (auto-pause generation)
 game_detection:

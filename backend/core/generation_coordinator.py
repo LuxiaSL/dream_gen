@@ -338,14 +338,13 @@ class GenerationCoordinator:
         # Check if buffer needs more content
         status = self.buffer.get_buffer_status()
         
-        # Generate keyframes to keep buffer ahead
-        # Target: always have at least one complete cycle ahead
-        frames_per_cycle = self.buffer.interpolation_frames + 1
-        target_ahead = frames_per_cycle * 2  # 2 cycles ahead
+        # Generate keyframes until buffer reaches target
+        # Use seconds_buffered (READY frames) vs target_seconds
+        seconds_buffered = status['seconds_buffered']
+        target_seconds = status['target_seconds']
         
-        frames_ahead = self.buffer.next_sequence_num - self.buffer.display_sequence_num
-        
-        return frames_ahead < target_ahead
+        # Keep generating if below target
+        return seconds_buffered < target_seconds
     
     async def generate_keyframe(self) -> bool:
         """
@@ -420,8 +419,26 @@ class GenerationCoordinator:
             except Exception as e:
                 logger.error(f"Collapse detection failed: {e}", exc_info=True)
         
+        # === WARMUP PERIOD CHECK ===
+        # During warmup, skip ALL injections to let img2img establish natural baseline
+        warmup_keyframes = self.config['generation']['cache'].get('warmup_keyframes', 0)
+        in_warmup = keyframe_num <= warmup_keyframes
+        
+        if in_warmup:
+            logger.debug(
+                f"[WARMUP] Keyframe {keyframe_num}/{warmup_keyframes} - "
+                f"skipping all injections (establishing baseline)"
+            )
+        elif keyframe_num == warmup_keyframes + 1:
+            # First keyframe after warmup
+            logger.info(
+                f"[WARMUP_COMPLETE] Warmup period finished! "
+                f"Collapse detection and adaptive interventions now ACTIVE. "
+                f"Cache size: {self.cache.size() if self.cache else 0}"
+            )
+        
         # === SEED INJECTION (Adaptive or Forced) ===
-        if self.injection_strategy:
+        if self.injection_strategy and not in_warmup:
             # Check cooldown (prevent seed injection loops)
             seed_cooldown = self.config['generation']['cache'].get('seed_injection_cooldown', 2)
             keyframes_since_seed = keyframe_num - self.last_seed_injection_kf
@@ -447,7 +464,7 @@ class GenerationCoordinator:
                 
                 if should_seed:
                     logger.info("  -> Attempting seed injection...")
-                    result = self.injection_strategy.inject_seed_frame(
+                    result = await self.injection_strategy.inject_seed_frame(
                         target_keyframe_num=keyframe_num,
                         current_image_path=self.current_image_path
                     )
@@ -513,6 +530,7 @@ class GenerationCoordinator:
         probability_cache = (
             not force_cache and
             not on_cooldown and  # Respect cooldown for probability-based injections
+            not in_warmup and  # Respect warmup period
             self.current_keyframe_num > 0 and
             self.cache and 
             self.similarity_manager and
@@ -520,8 +538,8 @@ class GenerationCoordinator:
             random.random() < self.current_injection_rate
         )
         
-        # Force cache ignores cooldown (severe convergence)
-        cache_injection_allowed = force_cache or probability_cache
+        # Force cache ignores cooldown but respects warmup (let baseline establish first)
+        cache_injection_allowed = (force_cache and not in_warmup) or probability_cache
         
         if on_cooldown and not force_cache:
             logger.debug(f"Cache injection on cooldown ({keyframes_since_cache}/{cache_cooldown} keyframes)")
@@ -549,7 +567,7 @@ class GenerationCoordinator:
                         elif 'STRUCT' in trigger_reason:
                             collapse_trigger = "STRUCTURAL"
                     
-                    result = self.injection_strategy.inject_dissimilar_keyframe(
+                    result = await self.injection_strategy.inject_dissimilar_keyframe(
                         current_image_path=self.current_image_path,
                         target_keyframe_num=keyframe_num,
                         collapse_trigger=collapse_trigger
@@ -670,9 +688,13 @@ class GenerationCoordinator:
             Path to generated keyframe
         """
         # Generate using generator's img2img
+        # Get the paired negative prompt
+        negative_prompt = self.prompt_manager.get_negative_prompt()
+        
         keyframe_path = self.generator.generate_from_image(
             image_path=current_image,
             prompt=prompt,
+            negative_prompt=negative_prompt,
             denoise=denoise
         )
         

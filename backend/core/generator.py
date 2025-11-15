@@ -126,7 +126,11 @@ class DreamGenerator:
         start_time = time.time()
         
         if negative_prompt is None:
-            negative_prompt = self.config["prompts"]["negative"]
+            # Try new theme_pairs format first, fallback to old negative format
+            if "theme_pairs" in self.config["prompts"] and len(self.config["prompts"]["theme_pairs"]) > 0:
+                negative_prompt = self.config["prompts"]["theme_pairs"][0]["negative"]
+            else:
+                negative_prompt = self.config["prompts"].get("negative", "")
         
         logger.info(f"Generating from prompt: {prompt[:60]}...")
         
@@ -190,7 +194,11 @@ class DreamGenerator:
             return None
         
         if negative_prompt is None:
-            negative_prompt = self.config["prompts"]["negative"]
+            # Try new theme_pairs format first, fallback to old negative format
+            if "theme_pairs" in self.config["prompts"] and len(self.config["prompts"]["theme_pairs"]) > 0:
+                negative_prompt = self.config["prompts"]["theme_pairs"][0]["negative"]
+            else:
+                negative_prompt = self.config["prompts"].get("negative", "")
         
         if denoise is None:
             denoise = self.config["generation"]["img2img"]["denoise"]
@@ -354,6 +362,186 @@ class DreamGenerator:
         output_filename = output_files[0]
         
         # Get image data directly from ComfyUI API (no file system access needed!)
+        image_data = self.client.get_image_data(output_filename)
+        if not image_data:
+            logger.error(f"Failed to retrieve image data for: {output_filename}")
+            return None
+        
+        # Save to our output directory
+        self.frame_count += 1
+        dest_filename = f"frame_{self.frame_count:05d}.png"
+        dest_path = self.output_dir / dest_filename
+        
+        try:
+            # Write image bytes directly
+            with open(dest_path, 'wb') as f:
+                f.write(image_data)
+            logger.debug(f"Saved output to: {dest_path}")
+        except Exception as e:
+            logger.error(f"Failed to save output: {e}")
+            return None
+        
+        # Track performance
+        elapsed = time.time() - start_time
+        self.generation_times.append(elapsed)
+        if len(self.generation_times) > 100:
+            self.generation_times.pop(0)
+        
+        logger.info(f"Generation time: {elapsed:.2f}s")
+        
+        return dest_path
+
+    async def generate_from_image_async(
+        self,
+        image_path: Path,
+        prompt: str,
+        negative_prompt: Optional[str] = None,
+        denoise: Optional[float] = None,
+        seed: Optional[int] = None,
+    ) -> Optional[Path]:
+        """
+        Generate image from existing image (img2img) - ASYNC VERSION
+        
+        This is the async version that uses WebSocket waiting instead of
+        polling, allowing the event loop to remain responsive during generation.
+        
+        Args:
+            image_path: Source image path
+            prompt: Generation prompt
+            negative_prompt: Negative prompt (uses config default if None)
+            denoise: Denoise strength 0.0-1.0 (uses config default if None)
+            seed: Random seed (None = random)
+        
+        Returns:
+            Path to generated image, or None on failure
+        """
+        start_time = time.time()
+        
+        if not image_path.exists():
+            logger.error(f"Source image not found: {image_path}")
+            return None
+        
+        if negative_prompt is None:
+            # Try new theme_pairs format first, fallback to old negative format
+            if "theme_pairs" in self.config["prompts"] and len(self.config["prompts"]["theme_pairs"]) > 0:
+                negative_prompt = self.config["prompts"]["theme_pairs"][0]["negative"]
+            else:
+                negative_prompt = self.config["prompts"].get("negative", "")
+        
+        if denoise is None:
+            denoise = self.config["generation"]["img2img"]["denoise"]
+        
+        logger.info(f"Generating from image (async): {image_path.name} (denoise={denoise})")
+        logger.debug(f"Prompt: {prompt[:60]}...")
+        
+        # Resize image to target resolution before uploading
+        resized_image_path = self._resize_image_for_generation(image_path)
+        
+        # Upload image to ComfyUI via API
+        upload_result = self.client.upload_image(
+            image_path=resized_image_path,
+            subfolder="",
+            image_type="input",
+            overwrite=False,
+        )
+        
+        if not upload_result:
+            logger.error("Failed to upload image to ComfyUI")
+            return None
+        
+        # Get the uploaded filename
+        input_filename = upload_result["name"]
+        logger.debug(f"Uploaded image as: {input_filename}")
+        
+        # Get model-specific config
+        model_type = self.config.get("generation", {}).get("model", "sd15")
+        if model_type == "flux.1-schnell":
+            model_config = self.config["generation"]["flux"]
+        else:
+            model_config = self.config["generation"]["sd"]
+        
+        # Build workflow
+        workflow = self.workflow_builder.build_img2img(
+            image_path=input_filename,
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            denoise=denoise,
+            steps=model_config["steps"],
+            cfg=model_config["cfg_scale"],
+            seed=seed,
+        )
+        
+        # Execute workflow ASYNC (uses WebSocket instead of polling)
+        result_path = await self._execute_workflow_async(workflow, start_time)
+        
+        if result_path:
+            logger.info(f"[OK] img2img generation complete (async): {result_path.name}")
+        else:
+            logger.error("[FAIL] img2img generation failed (async)")
+        
+        return result_path
+    
+    async def _execute_workflow_async(
+        self,
+        workflow: Dict[str, Any],
+        start_time: float,
+    ) -> Optional[Path]:
+        """
+        Execute a workflow and retrieve the result - ASYNC VERSION
+        
+        This uses WebSocket waiting instead of polling, allowing the event loop
+        to remain responsive during the ~2s generation time.
+        
+        This is THE KEY to parallelization - by using async/await here,
+        multiple generations can be queued and other workers can run
+        concurrently during the HTTP wait.
+        
+        Args:
+            workflow: ComfyUI workflow JSON
+            start_time: When generation started (for timing)
+        
+        Returns:
+            Path to generated image in our output directory
+        """
+        # Queue prompt
+        logger.debug("Queueing workflow to ComfyUI (async)...")
+        prompt_id = self.client.queue_prompt(workflow)
+        if not prompt_id:
+            logger.error("Failed to queue workflow")
+            return None
+        
+        logger.info(f"Workflow queued with prompt_id: {prompt_id}")
+        
+        # Wait for completion via WebSocket (ASYNC - doesn't block event loop!)
+        try:
+            timeout = self.config["performance"]["generation_timeout"]
+            
+            logger.debug(f"Waiting for completion via WebSocket (timeout: {timeout}s)...")
+            success = await self.client.wait_for_completion(
+                prompt_id=prompt_id,
+                timeout=timeout
+            )
+            
+            if not success:
+                logger.error(f"Generation failed or timed out (prompt_id: {prompt_id})")
+                return None
+            
+            logger.debug(f"Generation completed (prompt_id: {prompt_id})")
+            
+        except Exception as e:
+            logger.error(f"Error waiting for completion: {e}", exc_info=True)
+            return None
+        
+        # Get output images
+        output_files = self.client.get_output_images(prompt_id)
+        if not output_files:
+            logger.error("No output images found")
+            return None
+        
+        # Get first output (we only generate one image at a time)
+        output_filename = output_files[0]
+        
+        # Get image data directly from ComfyUI API
         image_data = self.client.get_image_data(output_filename)
         if not image_data:
             logger.error(f"Failed to retrieve image data for: {output_filename}")

@@ -18,6 +18,12 @@ from pathlib import Path
 from typing import List, Tuple, Optional
 from PIL import Image
 
+try:
+    import imageio
+    IMAGEIO_AVAILABLE = True
+except ImportError:
+    IMAGEIO_AVAILABLE = False
+
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -303,6 +309,192 @@ def generate_animation(
     print(f"  - File size: {file_size_mb:.2f} MB")
 
 
+def generate_mp4(
+    frames: List[Path],
+    output_path: Path,
+    fps: int = 15,
+    target_resolution: Optional[Tuple[int, int]] = None,
+    quality: int = 10,
+) -> None:
+    """
+    Generate an MP4 video from a sequence of frames using imageio.
+    
+    Args:
+        frames: List of frame paths in sequence order
+        output_path: Output path for the video
+        fps: Frames per second (default: 15)
+        target_resolution: Optional (width, height) to resize all frames to.
+                          If None, uses the first frame's size.
+        quality: Video quality 1-10, where 10 is best (default: 10)
+    """
+    if not IMAGEIO_AVAILABLE:
+        raise RuntimeError(
+            "imageio is not installed. Install with: uv add imageio imageio-ffmpeg"
+        )
+    
+    if not frames:
+        raise ValueError("No frames provided")
+    
+    # First, quickly scan for target resolution if not provided
+    if target_resolution is None:
+        img = Image.open(frames[0])
+        target_resolution = img.size
+        img.close()
+        print(f"Using first frame size as reference: {target_resolution[0]}x{target_resolution[1]}")
+    else:
+        print(f"Target resolution from config: {target_resolution[0]}x{target_resolution[1]}")
+    
+    # Load and process all frames in parallel
+    print(f"Loading and processing {len(frames)} frames for MP4...")
+    frame_sizes = {}
+    processed_frames = [None] * len(frames)
+    
+    # Use ThreadPoolExecutor for I/O-bound operations (image loading)
+    max_workers = min(8, len(frames))
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all tasks (reuse existing load_and_process_frame)
+        futures = {
+            executor.submit(
+                load_and_process_frame,
+                frame_path,
+                target_resolution,
+                "mp4",  # format doesn't matter for RGB conversion
+                i
+            ): i for i, frame_path in enumerate(frames)
+        }
+        
+        # Collect results with progress indication
+        completed = 0
+        for future in as_completed(futures):
+            index, img, original_size = future.result()
+            processed_frames[index] = img
+            
+            # Track unique sizes for reporting
+            if original_size not in frame_sizes:
+                frame_sizes[original_size] = []
+            frame_sizes[original_size].append(frames[index].name)
+            
+            completed += 1
+            if completed % 50 == 0 or completed == len(frames):
+                print(f"  Processed {completed}/{len(frames)} frames...")
+    
+    # Report any size mismatches
+    if len(frame_sizes) > 1:
+        print(f"⚠ Warning: Found {len(frame_sizes)} different frame sizes. Resized all to {target_resolution[0]}x{target_resolution[1]}:")
+        for size, frame_list in frame_sizes.items():
+            print(f"  - {size[0]}x{size[1]}: {len(frame_list)} frames (e.g., {frame_list[0]})")
+    
+    # Convert PIL Images to numpy arrays for imageio
+    print(f"Encoding MP4 video at {fps} FPS (quality: {quality}/10)...")
+    import numpy as np
+    frame_arrays = [np.array(img) for img in processed_frames]
+    
+    # Configure video writer with h264 codec
+    # CRF (Constant Rate Factor): lower = better quality & larger files
+    # CRF mapping for quality 1-10:
+    #   quality 10 → CRF 18 (visually lossless, large files)
+    #   quality 8  → CRF 22 (very high quality, default)
+    #   quality 5  → CRF 28 (good quality, recommended for 512x256)
+    #   quality 3  → CRF 32 (medium quality, smaller files)
+    #   quality 1  → CRF 36 (acceptable quality, small files)
+    crf_value = 38 - (quality * 2)  # Maps quality 1-10 to CRF 36-18
+    
+    writer_kwargs = {
+        'codec': 'libx264',
+        'quality': quality,
+        'pixelformat': 'yuv420p',  # Compatible with most players
+        'ffmpeg_params': [
+            '-preset', 'medium',  # Balance between speed and compression
+            '-crf', str(crf_value),
+        ],
+    }
+    
+    # Write video
+    imageio.mimwrite(
+        str(output_path),
+        frame_arrays,
+        fps=fps,
+        **writer_kwargs
+    )
+    
+    file_size_mb = output_path.stat().st_size / (1024 * 1024)
+    crf_used = 38 - (quality * 2)
+    print(f"✓ MP4 video saved to: {output_path}")
+    print(f"  - Format: MP4 (h264)")
+    print(f"  - Resolution: {target_resolution[0]}x{target_resolution[1]}")
+    print(f"  - Frames: {len(frames)}")
+    print(f"  - FPS: {fps}")
+    print(f"  - Duration: {len(frames) / fps:.2f} seconds")
+    print(f"  - Quality: {quality}/10 (CRF {crf_used})")
+    print(f"  - File size: {file_size_mb:.2f} MB")
+
+
+def generate_thumbnail_and_full(
+    frames: List[Path],
+    base_output_path: Path,
+    fps: int = 15,
+    thumbnail_duration: float = 10.0,
+    target_resolution: Optional[Tuple[int, int]] = None,
+    mp4_quality: int = 5,
+) -> Tuple[Path, Path]:
+    """
+    Generate both a thumbnail WebP preview and full MP4 video.
+    
+    Args:
+        frames: List of frame paths in sequence order
+        base_output_path: Base output path (without extension)
+        fps: Frames per second (default: 15)
+        thumbnail_duration: Duration of thumbnail preview in seconds (default: 10.0)
+        target_resolution: Optional (width, height) to resize all frames to
+        mp4_quality: Video quality 1-10 for MP4 (default: 8)
+    
+    Returns:
+        Tuple of (thumbnail_path, full_video_path)
+    """
+    # Calculate how many frames for thumbnail
+    thumbnail_frame_count = int(fps * thumbnail_duration)
+    thumbnail_frames = frames[:thumbnail_frame_count]
+    
+    # Generate paths
+    thumbnail_path = base_output_path.parent / f"{base_output_path.stem}_preview.webp"
+    full_path = base_output_path.parent / f"{base_output_path.stem}_full.mp4"
+    
+    print(f"\n{'='*60}")
+    print(f"Generating dual output: thumbnail + full video")
+    print(f"{'='*60}")
+    
+    # Generate thumbnail WebP (first N seconds)
+    print(f"\n[1/2] Creating thumbnail preview ({thumbnail_duration}s, {len(thumbnail_frames)} frames)...")
+    generate_animation(
+        frames=thumbnail_frames,
+        output_path=thumbnail_path,
+        fps=fps,
+        format="webp",
+        loop=True,
+        target_resolution=target_resolution,
+        fast_mode=False,
+    )
+    
+    # Generate full MP4
+    print(f"\n[2/2] Creating full MP4 video ({len(frames) / fps:.1f}s, {len(frames)} frames)...")
+    generate_mp4(
+        frames=frames,
+        output_path=full_path,
+        fps=fps,
+        target_resolution=target_resolution,
+        quality=mp4_quality,
+    )
+    
+    print(f"\n{'='*60}")
+    print(f"✓ Dual output complete!")
+    print(f"  - Preview (for README): {thumbnail_path.name}")
+    print(f"  - Full video (for viewing): {full_path.name}")
+    print(f"{'='*60}\n")
+    
+    return thumbnail_path, full_path
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Generate looping animation from keyframes and interpolations. "
@@ -316,6 +508,15 @@ Examples:
   # Generate GIF at 4 FPS
   uv run backend/tools/generate_animation.py --format gif --fps 4
 
+  # Generate MP4 video at 15 FPS (better for long animations!)
+  uv run backend/tools/generate_animation.py --format mp4 --fps 15
+
+  # Dual output: WebP preview (10s) + full MP4 (perfect for README + sharing)
+  uv run backend/tools/generate_animation.py --dual-output --fps 15
+
+  # Dual output with custom preview duration (15 seconds)
+  uv run backend/tools/generate_animation.py --dual-output --thumbnail-duration 15
+
   # Custom output path
   uv run backend/tools/generate_animation.py --output my_animation.webp
 
@@ -325,11 +526,24 @@ Examples:
   # Use custom input directory
   uv run backend/tools/generate_animation.py --input-dir path/to/output
 
+  # High quality MP4 for archival (quality 10/10, large files!)
+  uv run backend/tools/generate_animation.py --format mp4 --mp4-quality 10
+
+  # Smaller file size while maintaining good quality
+  uv run backend/tools/generate_animation.py --format mp4 --mp4-quality 3
+
 Notes:
   - All frames are automatically resized to match the target resolution
   - Target resolution is loaded from backend/config.yaml by default
   - Use --resolution to override the config resolution
   - Mixed frame sizes are detected and reported with warnings
+  - MP4 format is MUCH more efficient for long animations (5+ min)
+  - Dual output mode creates both a WebP preview and full MP4 video
+  - MP4 quality recommendations:
+    * 10: Visually lossless (~100-300 MB for 5 min, overkill for 512x256)
+    * 5-7: Good quality (~5-15 MB, recommended for 512x256)
+    * 3-4: Medium quality (~3-8 MB, smaller files, still looks good)
+    * 1-2: Lower quality (~1-3 MB, acceptable for previews)
         """
     )
     
@@ -360,8 +574,8 @@ Notes:
         "--format",
         type=str,
         default="webp",
-        choices=["webp", "gif"],
-        help="Output format: webp or gif (default: webp)",
+        choices=["webp", "gif", "mp4"],
+        help="Output format: webp, gif, or mp4 (default: webp)",
     )
     
     parser.add_argument(
@@ -382,6 +596,29 @@ Notes:
         "--fast",
         action="store_true",
         help="Fast mode: faster encoding with slightly larger file size",
+    )
+    
+    parser.add_argument(
+        "--dual-output",
+        action="store_true",
+        help="Generate both WebP preview and full MP4 video (ignores --format)",
+    )
+    
+    parser.add_argument(
+        "--thumbnail-duration",
+        type=float,
+        default=10.0,
+        metavar="SECONDS",
+        help="Duration of WebP preview in dual-output mode (default: 10.0 seconds)",
+    )
+    
+    parser.add_argument(
+        "--mp4-quality",
+        type=int,
+        default=5,
+        choices=range(1, 11),
+        metavar="QUALITY",
+        help="MP4 video quality 1-10, where 10 is best (default: 5, recommended for 512x256)",
     )
     
     args = parser.parse_args()
@@ -409,7 +646,11 @@ Notes:
     
     # Determine output path
     if args.output is None:
-        args.output = args.input_dir / f"finished_product.{args.format}"
+        if args.dual_output:
+            # For dual output, use base name without extension
+            args.output = args.input_dir / "finished_product"
+        else:
+            args.output = args.input_dir / f"finished_product.{args.format}"
     
     # Ensure output directory exists
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -425,16 +666,42 @@ Notes:
         
         print(f"Found {len(frames)} frames in sequence")
         
-        # Generate animation
-        generate_animation(
-            frames=frames,
-            output_path=args.output,
-            fps=args.fps,
-            format=args.format,
-            loop=not args.no_loop,
-            target_resolution=target_resolution,
-            fast_mode=args.fast,
-        )
+        # Check if dual output mode
+        if args.dual_output:
+            # Generate both WebP preview and full MP4
+            generate_thumbnail_and_full(
+                frames=frames,
+                base_output_path=args.output,
+                fps=args.fps,
+                thumbnail_duration=args.thumbnail_duration,
+                target_resolution=target_resolution,
+                mp4_quality=args.mp4_quality,
+            )
+        elif args.format == "mp4":
+            # Generate MP4 only
+            if not IMAGEIO_AVAILABLE:
+                print("Error: imageio is required for MP4 generation.")
+                print("Install with: uv add imageio imageio-ffmpeg")
+                return 1
+            
+            generate_mp4(
+                frames=frames,
+                output_path=args.output,
+                fps=args.fps,
+                target_resolution=target_resolution,
+                quality=args.mp4_quality,
+            )
+        else:
+            # Generate WebP or GIF
+            generate_animation(
+                frames=frames,
+                output_path=args.output,
+                fps=args.fps,
+                format=args.format,
+                loop=not args.no_loop,
+                target_resolution=target_resolution,
+                fast_mode=args.fast,
+            )
         
         print("\n✓ Animation generated successfully!")
         return 0
