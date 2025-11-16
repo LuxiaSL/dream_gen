@@ -13,6 +13,10 @@ Dream Window is a desktop widget that displays endlessly evolving AI-generated a
   <em>Example generations showing the ethereal technical aesthetic</em>
 </p>
 
+## 📖 Installation
+
+**New to Dream Window?** Check out the **[Complete Installation Guide](docs/INSTALLATION_GUIDE.md)** for step-by-step instructions from zero to running, including Python setup, ComfyUI installation, and performance optimization for your GPU!
+
 ## ✨ Key Features
 
 - **Hybrid Generation Architecture**: Keyframes generated via img2img diffusion, smoothly interpolated using VAE latent space with spherical linear interpolation (slerp)

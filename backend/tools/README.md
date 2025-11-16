@@ -111,6 +111,58 @@ uv run backend/tools/generate_comparison.py output/quality_tests/run_TIMESTAMP -
 
 ## 🎬 Animation & Visualization
 
+### `generate_looped_preview.py`
+
+**Purpose**: Generate compact, looped preview GIF for GitHub README
+
+Creates a small, optimized GIF animation looping between two selected keyframes, perfect for GitHub README previews under 1MB.
+
+**Usage**:
+```bash
+# Default: keyframes 024 and 010 with 10 interpolation frames
+uv run backend/tools/generate_looped_preview.py
+
+# Custom keyframes
+uv run backend/tools/generate_looped_preview.py --keyframe-a 30 --keyframe-b 15
+
+# More interpolation frames for smoother animation (slower file)
+uv run backend/tools/generate_looped_preview.py --interpolation-frames 20
+
+# Faster animation
+uv run backend/tools/generate_looped_preview.py --fps 8
+
+# Custom output and location
+uv run backend/tools/generate_looped_preview.py --output my_preview.gif --output-dir path/to/output
+
+# More aggressive size optimization (0.8MB target)
+uv run backend/tools/generate_looped_preview.py --max-size 0.8
+
+# Override resolution for smaller file
+uv run backend/tools/generate_looped_preview.py --resolution 256x128
+```
+
+**Features**:
+- Looped animation pattern: A → interpolations → B → interpolations (reversed) → A
+- Automatic VAE interpolation using spherical lerp (slerp)
+- Smart compression strategies:
+  - Standard GIF optimization
+  - Downsampling for larger files
+  - Frame decimation if needed
+- Configurable interpolation smoothness (frames between keyframes)
+- Real-time file size monitoring
+- Target < 1MB for GitHub compatibility
+
+**How it Works**:
+1. Selects two keyframes by number
+2. Encodes both to latent space using VAE
+3. Generates smooth interpolated frames between them using spherical interpolation
+4. Creates sequence: KeyframeA → Interp(A→B) → KeyframeB → Interp(B→A) → loop
+5. Encodes as GIF with automatic compression optimization
+
+**Output**: `preview.gif` (or custom filename), optimized for < 1MB
+
+---
+
 ### `generate_animation.py`
 
 **Purpose**: Generate looping animation from keyframes and interpolations
