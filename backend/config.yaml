@@ -232,8 +232,15 @@ display:
   
   # NOTE: Display FPS is controlled by hybrid.target_interpolation_fps
   
-  # Output management
-  max_output_frames: 100          # Keep only last N frames in output dir (prevents unbounded growth)
+  # === STORAGE MANAGEMENT ===
+  # Auto-cleanup of displayed frames to prevent disk space issues on long runs
+  
+  cleanup_displayed_frames: true  # Delete frames immediately after display (recommended for 24/7)
+                                  # Safe: frame is copied to current_frame.png before deletion
+                                  # Keeps only buffered frames + current_frame.png
+  
+  # Legacy output management (deprecated if cleanup_displayed_frames is true)
+  max_output_frames: 100          # Keep only last N frames in output dir (old cleanup method)
   
 prompts:
   # Theme pairs (positive + negative prompts)

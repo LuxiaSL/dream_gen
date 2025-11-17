@@ -225,12 +225,17 @@ class DreamController:
                     similarity_manager=self.similarity_manager
                 )
             
+            # Get cleanup config
+            cleanup_config = self.config.get('display', {})
+            cleanup_enabled = cleanup_config.get('cleanup_displayed_frames', False)
+            
             # Create display selector
             self.display_selector = DisplayFrameSelector(
                 frame_buffer=self.frame_buffer,
                 output_dir=self.output_dir,
                 target_fps=target_fps,
-                min_buffer_seconds=min_buffer_seconds
+                min_buffer_seconds=min_buffer_seconds,
+                cleanup_displayed_frames=cleanup_enabled
             )
             
             self.logger.info("[OK] Buffered frame system initialized")

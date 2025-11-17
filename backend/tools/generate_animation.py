@@ -12,6 +12,7 @@ The animation loops back to the start, creating a continuous cycle.
 import argparse
 import re
 import sys
+import os
 import yaml
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -164,30 +165,34 @@ def load_and_process_frame(
     Returns:
         Tuple of (index, processed_image, original_size)
     """
-    img = Image.open(frame_path)
-    original_size = img.size
-    
-    # Resize if needed
-    if img.size != target_resolution:
-        # Use Lanczos for significant downscaling, bilinear for minor adjustments
-        size_ratio = (img.size[0] * img.size[1]) / (target_resolution[0] * target_resolution[1])
-        if size_ratio > 2.0:
-            # Significant downscaling - use Lanczos
-            img = img.resize(target_resolution, Image.Resampling.LANCZOS)
-        else:
-            # Minor adjustment - use faster bilinear
-            img = img.resize(target_resolution, Image.Resampling.BILINEAR)
-    
-    # Convert to RGB if needed
-    if format.lower() == "gif" and img.mode == "RGBA":
-        # Create white background
-        background = Image.new("RGB", img.size, (255, 255, 255))
-        background.paste(img, mask=img.split()[3] if img.mode == "RGBA" else None)
-        img = background
-    elif img.mode != "RGB":
-        img = img.convert("RGB")
-    
-    return (index, img, original_size)
+    # Open image and immediately load into memory, then close the file handle
+    with Image.open(frame_path) as img:
+        # Load image data into memory before closing the file
+        img.load()
+        original_size = img.size
+        
+        # Resize if needed
+        if img.size != target_resolution:
+            # Use Lanczos for significant downscaling, bilinear for minor adjustments
+            size_ratio = (img.size[0] * img.size[1]) / (target_resolution[0] * target_resolution[1])
+            if size_ratio > 2.0:
+                # Significant downscaling - use Lanczos
+                img = img.resize(target_resolution, Image.Resampling.LANCZOS)
+            else:
+                # Minor adjustment - use faster bilinear
+                img = img.resize(target_resolution, Image.Resampling.BILINEAR)
+        
+        # Convert to RGB if needed
+        if format.lower() == "gif" and img.mode == "RGBA":
+            # Create white background
+            background = Image.new("RGB", img.size, (255, 255, 255))
+            background.paste(img, mask=img.split()[3] if img.mode == "RGBA" else None)
+            img = background
+        elif img.mode != "RGB":
+            img = img.convert("RGB")
+        
+        # Return the image (file handle is automatically closed by context manager)
+        return (index, img, original_size)
 
 
 def generate_animation(
@@ -230,7 +235,8 @@ def generate_animation(
     processed_frames = [None] * len(frames)
     
     # Use ThreadPoolExecutor for I/O-bound operations (image loading)
-    max_workers = min(8, len(frames))  # Don't spawn too many threads
+    # Limit to 4 workers to prevent "too many open files" errors
+    max_workers = min(os.cpu_count(), len(frames))
     
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit all tasks
@@ -350,7 +356,8 @@ def generate_mp4(
     processed_frames = [None] * len(frames)
     
     # Use ThreadPoolExecutor for I/O-bound operations (image loading)
-    max_workers = min(8, len(frames))
+    # Limit to 4 workers to prevent "too many open files" errors
+    max_workers = min(4, len(frames))
     
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit all tasks (reuse existing load_and_process_frame)

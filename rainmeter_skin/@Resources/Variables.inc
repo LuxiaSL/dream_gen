@@ -5,6 +5,9 @@
 ; ========================================
 ; Set this to YOUR actual Dream Window project directory
 ; Use absolute path with backslashes, no trailing backslash
+; 
+; NOTE: If you ran install.ps1, this was auto-configured!
+; If you moved the project, run install.ps1 again or update manually
 ProjectPath=C:\Users\luxia\Documents\projects\dream_gen
 
 ; ========================================

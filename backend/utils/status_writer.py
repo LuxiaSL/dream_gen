@@ -205,12 +205,14 @@ class StatusWriter:
 
     def _write_json(self, data: Dict[str, Any]) -> bool:
         """
-        Write JSON data atomically
+        Write JSON data atomically with merge support
         
-        Uses temp file + rename for atomic writes
+        Reads existing data, merges new fields, then writes atomically.
+        This prevents race conditions when multiple processes update status.json
+        (e.g., daemon writing daemon_status while controller writes buffer_status).
         
         Args:
-            data: Data to write
+            data: Data to write (will be merged with existing data)
         
         Returns:
             True if successful
@@ -219,6 +221,21 @@ class StatusWriter:
         import shutil
         
         try:
+            # Read existing data for merge
+            existing_data = {}
+            if self.status_file.exists():
+                try:
+                    with open(self.status_file, 'r') as f:
+                        existing_data = json.load(f)
+                    logger.debug(f"Merging with existing status ({len(existing_data)} fields)")
+                except (json.JSONDecodeError, IOError) as e:
+                    # If file is corrupted, start fresh
+                    logger.warning(f"Could not read existing status.json (corrupted?): {e}")
+                    existing_data = {}
+            
+            # Merge: new data overwrites existing fields, preserves others
+            merged_data = {**existing_data, **data}
+            
             # Write to temp file
             with tempfile.NamedTemporaryFile(
                 mode="w",
@@ -227,14 +244,14 @@ class StatusWriter:
                 suffix=".tmp",
                 prefix=".status_",
             ) as tmp_file:
-                json.dump(data, tmp_file, indent=2)
+                json.dump(merged_data, tmp_file, indent=2)
                 tmp_file.flush()
                 tmp_path = tmp_file.name
             
             # Atomic rename
             shutil.move(tmp_path, str(self.status_file))
             
-            logger.debug("Status updated")
+            logger.debug(f"Status updated (merged {len(data)} new fields, total {len(merged_data)} fields)")
             return True
             
         except Exception as e:

@@ -49,7 +49,8 @@ class DisplayFrameSelector:
         frame_buffer: FrameBuffer,
         output_dir: Path,
         target_fps: float = 4.0,
-        min_buffer_seconds: float = 30.0
+        min_buffer_seconds: float = 30.0,
+        cleanup_displayed_frames: bool = False
     ):
         """
         Initialize display frame selector
@@ -59,11 +60,16 @@ class DisplayFrameSelector:
             output_dir: Output directory for current_frame.png
             target_fps: Target frame rate for display
             min_buffer_seconds: Minimum buffer before starting playback
+            cleanup_displayed_frames: Whether to delete frames immediately after display
         """
         self.buffer = frame_buffer
         self.output_dir = Path(output_dir)
         self.target_fps = target_fps
         self.min_buffer_seconds = min_buffer_seconds
+        
+        # Storage management
+        self.cleanup_enabled = cleanup_displayed_frames
+        self.frames_deleted = 0
         
         # Timing
         self.frame_interval = 1.0 / target_fps if target_fps > 0 else 0.25
@@ -82,6 +88,11 @@ class DisplayFrameSelector:
         logger.info(f"  Frame interval: {self.frame_interval:.3f}s")
         logger.info(f"  Min buffer: {min_buffer_seconds}s")
         logger.info(f"  Output: {self.current_frame_path}")
+        
+        if self.cleanup_enabled:
+            logger.info(f"  Auto-cleanup: ENABLED (delete after display)")
+        else:
+            logger.info(f"  Auto-cleanup: DISABLED")
     
     async def wait_for_initial_buffer(self, check_interval: float = 1.0) -> bool:
         """
@@ -166,11 +177,19 @@ class DisplayFrameSelector:
             
             self.frames_displayed += 1
             
+            # Delete the source frame immediately after successful display (if cleanup enabled)
+            # This is safe because we've already copied it to current_frame.png
+            if self.cleanup_enabled:
+                await self._delete_frame_async(frame_spec.file_path)
+            
             # Log every 10th frame
             if self.frames_displayed % 10 == 0:
                 logger.info(f"Displayed frame: {frame_spec}")
                 status = self.buffer.get_buffer_status()
                 logger.info(f"  Buffer: {status['seconds_buffered']:.1f}s ({status['frames_ready']} frames)")
+                
+                if self.cleanup_enabled and self.frames_deleted > 0:
+                    logger.info(f"  Cleanup: {self.frames_deleted} frames deleted total")
             else:
                 logger.debug(f"Displayed: {frame_spec}")
             
@@ -237,6 +256,48 @@ class DisplayFrameSelector:
                     tmp_path.unlink()
             except:
                 pass
+    
+    async def _delete_frame_async(self, frame_path: Path) -> None:
+        """
+        Delete a single frame file after it's been displayed (async version)
+        
+        This is safe because the frame has already been copied to current_frame.png.
+        We delete immediately to prevent disk space buildup.
+        
+        Args:
+            frame_path: Path to frame file to delete
+        """
+        # Run deletion in executor (don't block event loop)
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._delete_frame_sync, frame_path)
+    
+    def _delete_frame_sync(self, frame_path: Path) -> None:
+        """
+        Sync file deletion (runs in executor)
+        
+        Args:
+            frame_path: Path to frame file to delete
+        """
+        try:
+            # Safety check - file must exist and be in output directory
+            if not frame_path.exists():
+                logger.debug(f"Frame already deleted: {frame_path.name}")
+                return
+            
+            # Verify it's in our output directory (safety check)
+            if not str(frame_path).startswith(str(self.output_dir)):
+                logger.warning(f"Refusing to delete file outside output dir: {frame_path}")
+                return
+            
+            # Delete the file
+            frame_path.unlink()
+            self.frames_deleted += 1
+            logger.debug(f"Deleted displayed frame: {frame_path.name}")
+            
+        except Exception as e:
+            # Non-fatal - just log and continue
+            # File might be locked temporarily or already deleted
+            logger.debug(f"Could not delete {frame_path.name}: {e}")
     
     async def run(self, check_interval: float = 0.01) -> None:
         """
@@ -320,7 +381,7 @@ class DisplayFrameSelector:
         Returns:
             Dictionary with statistics
         """
-        return {
+        stats = {
             "frames_displayed": self.frames_displayed,
             "target_fps": self.target_fps,
             "frame_interval": self.frame_interval,
@@ -328,6 +389,17 @@ class DisplayFrameSelector:
             "is_running": self.running,
             "current_display_sequence": self.buffer.display_sequence_num
         }
+        
+        # Add cleanup stats if enabled
+        if self.cleanup_enabled:
+            stats.update({
+                "cleanup_enabled": True,
+                "frames_deleted": self.frames_deleted
+            })
+        else:
+            stats["cleanup_enabled"] = False
+        
+        return stats
 
 
 # Unit tests
