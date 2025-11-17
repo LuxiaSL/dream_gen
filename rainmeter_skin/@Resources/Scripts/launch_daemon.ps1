@@ -73,22 +73,22 @@ function Test-DaemonRunning {
         $Process = Get-Process -Id $PID -ErrorAction SilentlyContinue
         
         if ($Process) {
-            Write-Host "✓ Daemon already running (PID: $PID)"
+            Write-Host "Daemon already running (PID: $PID)"
             return $true
         } else {
-            Write-Host "  Stale PID file found (process $PID not running)"
+            Write-Host "Stale PID file found (process $PID not running)"
             # Clean up stale PID file
             Remove-Item $PidFilePath -Force -ErrorAction SilentlyContinue
             return $false
         }
     } catch {
-        Write-Host "  Error checking PID file: $_"
+        Write-Host "Error checking PID file: $_"
         return $false
     }
 }
 
 if (Test-DaemonRunning -PidFilePath $PidFile) {
-    Write-Host "  No action needed - daemon is operational"
+    Write-Host "No action needed - daemon is operational"
     exit 0
 }
 
@@ -164,7 +164,7 @@ try {
     $Process = [System.Diagnostics.Process]::Start($ProcessStartInfo)
     
     if ($Process) {
-        Write-Host "✓ Daemon launched successfully"
+        Write-Host "Daemon launched successfully"
         Write-Host "  Process ID: $($Process.Id)"
         
         # Wait a moment for daemon to initialize
@@ -172,7 +172,7 @@ try {
         
         # Verify daemon is still running and PID file was created
         if (Test-Path $PidFile) {
-            Write-Host "✓ Daemon started and PID file created"
+            Write-Host "Daemon started and PID file created"
             Write-Host ""
             Write-Host "Dream Window is now running!"
             Write-Host "  - ComfyUI will start automatically"
@@ -194,4 +194,3 @@ try {
     Write-Host "       Check that Python and all dependencies are installed"
     exit 1
 }
-

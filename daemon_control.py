@@ -130,15 +130,15 @@ def cmd_pause(config: dict, project_root: Path):
     
     running, pid = is_daemon_running(pid_file)
     if not running:
-        print("❌ Daemon is not running")
+        print("[ERROR] Daemon is not running")
         return 1
     
-    print(f"📤 Sending PAUSE command to daemon (PID: {pid})...")
+    print(f"[SEND] Sending PAUSE command to daemon (PID: {pid})...")
     if send_command('PAUSE', control_file):
-        print("✓ Command sent. Generation will pause shortly.")
+        print("[OK] Command sent. Generation will pause shortly.")
         return 0
     else:
-        print("❌ Failed to send command")
+        print("[ERROR] Failed to send command")
         return 1
 
 
@@ -149,15 +149,15 @@ def cmd_resume(config: dict, project_root: Path):
     
     running, pid = is_daemon_running(pid_file)
     if not running:
-        print("❌ Daemon is not running")
+        print("[ERROR] Daemon is not running")
         return 1
     
-    print(f"📤 Sending RESUME command to daemon (PID: {pid})...")
+    print(f"[SEND] Sending RESUME command to daemon (PID: {pid})...")
     if send_command('RESUME', control_file):
-        print("✓ Command sent. Generation will resume shortly.")
+        print("[OK] Command sent. Generation will resume shortly.")
         return 0
     else:
-        print("❌ Failed to send command")
+        print("[ERROR] Failed to send command")
         return 1
 
 
@@ -168,12 +168,12 @@ def cmd_shutdown(config: dict, project_root: Path):
     
     running, pid = is_daemon_running(pid_file)
     if not running:
-        print("❌ Daemon is not running")
+        print("[ERROR] Daemon is not running")
         return 1
     
-    print(f"📤 Sending SHUTDOWN command to daemon (PID: {pid})...")
+    print(f"[SEND] Sending SHUTDOWN command to daemon (PID: {pid})...")
     if send_command('SHUTDOWN', control_file):
-        print("✓ Command sent. Daemon will shutdown gracefully.")
+        print("[OK] Command sent. Daemon will shutdown gracefully.")
         print("   Waiting for shutdown...")
         
         # Wait up to 60s for daemon to stop
@@ -181,13 +181,13 @@ def cmd_shutdown(config: dict, project_root: Path):
             time.sleep(1)
             running, _ = is_daemon_running(pid_file)
             if not running:
-                print("✓ Daemon stopped successfully")
+                print("[OK] Daemon stopped successfully")
                 return 0
         
-        print("⚠️  Daemon did not stop within 60s")
+        print("[WARNING] Daemon did not stop within 60s")
         return 1
     else:
-        print("❌ Failed to send command")
+        print("[ERROR] Failed to send command")
         return 1
 
 
@@ -198,15 +198,15 @@ def cmd_restart_comfyui(config: dict, project_root: Path):
     
     running, pid = is_daemon_running(pid_file)
     if not running:
-        print("❌ Daemon is not running")
+        print("[ERROR] Daemon is not running")
         return 1
     
-    print(f"📤 Sending RESTART_COMFYUI command to daemon (PID: {pid})...")
+    print(f"[SEND] Sending RESTART_COMFYUI command to daemon (PID: {pid})...")
     if send_command('RESTART_COMFYUI', control_file):
-        print("✓ Command sent. ComfyUI will restart shortly.")
+        print("[OK] Command sent. ComfyUI will restart shortly.")
         return 0
     else:
-        print("❌ Failed to send command")
+        print("[ERROR] Failed to send command")
         return 1
 
 
@@ -217,15 +217,15 @@ def cmd_restart_controller(config: dict, project_root: Path):
     
     running, pid = is_daemon_running(pid_file)
     if not running:
-        print("❌ Daemon is not running")
+        print("[ERROR] Daemon is not running")
         return 1
     
-    print(f"📤 Sending RESTART_CONTROLLER command to daemon (PID: {pid})...")
+    print(f"[SEND] Sending RESTART_CONTROLLER command to daemon (PID: {pid})...")
     if send_command('RESTART_CONTROLLER', control_file):
-        print("✓ Command sent. Controller will restart shortly.")
+        print("[OK] Command sent. Controller will restart shortly.")
         return 0
     else:
-        print("❌ Failed to send command")
+        print("[ERROR] Failed to send command")
         return 1
 
 
@@ -242,9 +242,9 @@ def cmd_status(config: dict, project_root: Path):
     running, pid = is_daemon_running(pid_file)
     
     if running:
-        print(f"✓ Daemon: RUNNING (PID: {pid})")
+        print(f"[OK] Daemon: RUNNING (PID: {pid})")
     else:
-        print("❌ Daemon: NOT RUNNING")
+        print("[ERROR] Daemon: NOT RUNNING")
         if pid:
             print(f"   (stale PID file: {pid})")
         return 1
@@ -252,7 +252,7 @@ def cmd_status(config: dict, project_root: Path):
     # Read detailed status
     status = read_status(status_file)
     if not status:
-        print("⚠️  Could not read status.json")
+        print("[WARNING] Could not read status.json")
         return 1
     
     print("")

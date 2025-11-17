@@ -487,11 +487,15 @@ class DaemonManager:
             
             # Launch process
             self.logger.info(f"Launching: {' '.join(cmd)}")
+            # CRITICAL: Don't use PIPE for stdout/stderr!
+            # Pipes have limited buffer (~64KB) and will cause deadlock if parent doesn't read.
+            # Controller logs to file anyway, so we don't need to capture console output.
+            # Using DEVNULL prevents pipe buffer deadlock while keeping process hidden.
             self.controller_process = subprocess.Popen(
                 cmd,
                 cwd=self.project_root,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,  # Discard stdout (logs go to file anyway)
+                stderr=subprocess.DEVNULL,  # Discard stderr (logs go to file anyway)
                 startupinfo=startup_info,
                 creationflags=creation_flags if sys.platform == 'win32' else 0,
             )

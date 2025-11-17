@@ -194,22 +194,8 @@ class AsyncGenerationOrchestrator:
         self.start_time = None
         self.frames_generated = 0
         
-        # === PROFILING: CUDA Context Detection ===
-        if torch.cuda.is_available():
-            logger.info("=== CUDA Context Info ===")
-            logger.info(f"  Current device: {torch.cuda.current_device()}")
-            logger.info(f"  Device name: {torch.cuda.get_device_name(0)}")
-            logger.info(f"  CUDA streams: {torch.cuda.current_stream()}")
-            
-            # Check if multiple contexts exist (can cause issues)
-            try:
-                # This will show if contexts are being recreated
-                ctx_handle = torch.cuda.current_context()
-                logger.info(f"  Context handle: {ctx_handle}")
-            except Exception as e:
-                logger.debug(f"  Context check: {e}")
-            
-            logger.info("=========================")
+        # Note: CUDA profiling removed from __init__ to prevent hanging during initialization
+        # CUDA context queries can block if the GPU is busy or torch is still initializing
         
         logger.info("AsyncGenerationOrchestrator initialized")
         logger.info(f"  - Seed image: {seed_image}")

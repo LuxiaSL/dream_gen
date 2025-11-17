@@ -5,10 +5,6 @@ Sleek desktop widget for displaying AI-generated dream frames in real-time.
 ## 📋 Requirements
 
 1. **Rainmeter** 4.5.x or later - https://www.rainmeter.net/
-2. **RunCommand Plugin** (for daemon auto-launch)
-   - Download: https://forum.rainmeter.net/viewtopic.php?t=28865
-   - Place `RunCommand.dll` in `%APPDATA%\Rainmeter\Plugins\`
-   - Alternative: Manually start daemon before loading skin
 
 ## 🚀 Quick Install
 
@@ -19,10 +15,9 @@ Run from project root:
 
 Or manually:
 1. Install Rainmeter from https://www.rainmeter.net/
-2. Install RunCommand plugin (see Requirements above)
-3. Copy `rainmeter_skin/` to `%USERPROFILE%\Documents\Rainmeter\Skins\DreamWindow\`
-4. Edit `@Resources\Variables.inc` to set your project path
-5. Load in Rainmeter Manager
+2. Copy `rainmeter_skin/` to `%USERPROFILE%\Documents\Rainmeter\Skins\DreamWindow\`
+3. Edit `@Resources\Variables.inc` to set your project path
+4. Load in Rainmeter Manager
 
 ## 📊 Features
 
@@ -48,8 +43,6 @@ ScanlinesEnabled=0                  # CRT effect
 **Status not updating?** Backend must be running to generate `status.json`.
 
 **Loading overlay stuck?** Make sure daemon is running. Check `output/status.json` has `"is_buffering": false`.
-
-**Daemon won't auto-start?** RunCommand plugin may not be installed (see Requirements above).
 
 ---
 

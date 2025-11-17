@@ -79,9 +79,11 @@ def main():
     # Remove specific output files
     remove_file(root / "output" / "current_frame.png", "output/current_frame.png")
     remove_file(root / "output" / "status.json", "output/status.json")
+    remove_file(root / "output" / "daemon.pid", "output/daemon.pid")
     
     # Clear or truncate log file
     truncate_file(root / "logs" / "dream_controller.log", "logs/dream_controller.log")
+    truncate_file(root / "logs" / "daemon.log", "logs/daemon.log")
     
     # Clear cache directories
     clear_directory(root / "cache" / "images", "cache/images/*")

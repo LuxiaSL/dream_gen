@@ -284,7 +284,7 @@ game_detection:
   
 performance:
   max_queue_size: 60              # Max frames in generation queue
-  generation_timeout: 120          # Seconds before considering generation stuck (increased for Maxwell GPUs)
+  generation_timeout: 180          # Seconds before considering generation stuck (increased for Maxwell GPUs)
   enable_torch_compile: false     # PyTorch 2.0 optimization (experimental)
   async_file_operations: true     # Non-blocking file writes
 
