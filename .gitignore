@@ -32,6 +32,10 @@ env.bak/
 venv.bak/
 .uv/
 
+# UV lock file (CUDA-variant specific, regenerate locally)
+# Users generate their own based on GPU: cu124, cu121, or cu118
+uv.lock
+
 # IDE
 .vscode/
 .idea/

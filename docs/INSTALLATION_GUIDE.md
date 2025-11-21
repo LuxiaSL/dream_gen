@@ -289,21 +289,41 @@ You should see `(.venv)` appear at the start of your command line.
 
 ### Install PyTorch with CUDA Support
 
-PyTorch is the AI framework. We need the CUDA version for GPU acceleration:
+PyTorch is the AI framework. We need the CUDA version for GPU acceleration.
 
-```powershell
-uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-```
-
-This will download ~2-3GB. Wait patiently (5-10 minutes depending on your internet).
-
-### Install Dream Window Dependencies
+**For Modern GPUs (RTX 20/30/40 series, GTX 16 series, newer):**
 
 ```powershell
 uv sync
 ```
 
-This installs all other required packages (2-5 minutes).
+That's it! UV will automatically install PyTorch with CUDA 12.4 support using the configuration in `pyproject.toml`.
+
+**For Older GPUs (Maxwell/Pascal - GTX 10 series, Titan X, etc.):**
+
+If you have an older GPU and run into issues, you may need CUDA 12.1 or 11.8 instead:
+
+```powershell
+# For CUDA 12.1 (Pascal/GTX 10 series)
+uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# For CUDA 11.8 (Maxwell/older cards)
+uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+```
+
+Then run `uv sync` to install the other dependencies.
+
+**Note:** The download is ~2-3GB. Wait patiently (5-10 minutes depending on your internet).
+
+### Install Other Dependencies
+
+If you didn't already run `uv sync` in the previous step:
+
+```powershell
+uv sync
+```
+
+This installs all required packages (2-5 minutes).
 
 ### Verify Installation
 
@@ -312,9 +332,14 @@ python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA Av
 ```
 
 You should see:
-- PyTorch version (e.g., `2.1.0+cu121`)
+- PyTorch version (e.g., `2.5.0+cu124`, `2.5.0+cu121`, or `2.5.0+cu118` depending on what you installed)
 - `CUDA Available: True`
-- CUDA Version (e.g., `12.1`)
+- CUDA Version (e.g., `12.4`, `12.1`, or `11.8`)
+
+**CUDA Version Guide:**
+- `cu124` = CUDA 12.4 - **Modern default**, best for RTX 20/30/40, GTX 16 series
+- `cu121` = CUDA 12.1 - Good for GTX 10 series, Pascal, some Maxwell
+- `cu118` = CUDA 11.8 - Fallback for older Maxwell GPUs
 
 **If CUDA Available shows False:**
 - Your GPU might not be supported
@@ -726,10 +751,11 @@ Solution:
    ```powershell
    .venv\Scripts\activate
    ```
-3. Reinstall PyTorch:
+3. Reinstall PyTorch (modern GPU):
    ```powershell
-   uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+   uv sync
    ```
+4. For older GPUs, see "Install PyTorch with CUDA Support" section above
 
 **Problem: "CUDA not available" or "CUDA Available: False"**
 
@@ -739,10 +765,22 @@ Solutions:
    ```powershell
    nvidia-smi
    ```
-3. Reinstall PyTorch with CUDA:
+3. Try different CUDA version:
    ```powershell
+   # Modern GPUs - CUDA 12.4 (default via uv sync)
+   uv sync
+   
+   # Older GPUs - CUDA 12.1
    uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 --force-reinstall
+   
+   # Very old GPUs - CUDA 11.8
+   uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118 --force-reinstall
    ```
+4. Check which CUDA version your drivers support:
+   ```powershell
+   nvidia-smi
+   ```
+   Look for "CUDA Version" in the top-right. Use a PyTorch CUDA version <= that number.
 
 **Problem: "Cannot connect to ComfyUI"**
 

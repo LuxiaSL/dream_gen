@@ -58,8 +58,19 @@ cd dream_gen
 # Create virtual environment and install dependencies
 uv venv
 .venv\Scripts\activate
-uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# Modern GPUs (RTX 20+, GTX 16 series): Just use uv sync!
 uv sync
+
+# Older GPUs (GTX 10 series, Pascal): Use CUDA 12.1
+# uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# uv sync
+
+# Very old GPUs (Maxwell Titan X, etc): Use CUDA 11.8
+# uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+# uv sync
+
+# See docs/PYTORCH_CUDA_COMPATIBILITY.md for detailed GPU compatibility info
 
 # Configure paths in backend/config.yaml
 # Set your ComfyUI path, output directories, etc.

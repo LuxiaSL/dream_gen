@@ -83,6 +83,9 @@ def main():
     
     # Clear or truncate log file
     truncate_file(root / "logs" / "dream_controller.log", "logs/dream_controller.log")
+    truncate_file(root / "logs" / "dream_controller.log.1", "logs/dream_controller.log.1")
+    truncate_file(root / "logs" / "dream_controller.log.2", "logs/dream_controller.log.2")
+    truncate_file(root / "logs" / "dream_controller.log.3", "logs/dream_controller.log.3")
     truncate_file(root / "logs" / "daemon.log", "logs/daemon.log")
     
     # Clear cache directories

@@ -20,11 +20,12 @@ classifiers = [
 ]
 
 dependencies = [
-    # Core ML dependencies (Note: Install PyTorch with CUDA separately)
-    # Use: uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-    "torch>=2.1.0",
-    "torchvision>=0.16.0",
-    "torchaudio>=2.1.0",
+    # Core ML dependencies
+    # PyTorch is installed via the UV index specified at bottom of this file
+    # Modern systems use cu124 (CUDA 12.4). For older GPUs, see installation docs.
+    "torch>=2.8.0",
+    "torchvision>=0.21.0",
+    "torchaudio>=2.8.0",
     "numpy>=1.24.0,<2.0.0",
     "pillow>=10.1.0",
     # AI/ML
@@ -171,14 +172,17 @@ markers = [
 ]
 
 # UV configuration for PyTorch CUDA packages
+# Using cu124 (CUDA 12.4) for modern GPU compatibility
+# For older GPUs (Maxwell/Pascal), you may need to manually install cu121 or cu118
+# See docs/INSTALLATION_GUIDE.md for GPU-specific instructions
 [[tool.uv.index]]
-name = "pytorch-cu121"
-url = "https://download.pytorch.org/whl/cu121"
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
 explicit = true
 
 [tool.uv.sources]
-# PyTorch packages should be installed from the CUDA index
-torch = { index = "pytorch-cu121" }
-torchvision = { index = "pytorch-cu121" }
-torchaudio = { index = "pytorch-cu121" }
+# PyTorch packages should be installed from the CUDA 12.4 index (modern default)
+torch = { index = "pytorch-cu124" }
+torchvision = { index = "pytorch-cu124" }
+torchaudio = { index = "pytorch-cu124" }
 

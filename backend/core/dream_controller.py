@@ -682,7 +682,9 @@ class DreamController:
                                    f"INT: {gen_stats['interpolations_generated']} | "
                                    f"Displayed: {display_stats['frames_displayed']}")
                 
-                await asyncio.sleep(1.0)
+                # Update at 10 FPS (100ms) - faster than display rate (4 FPS = 250ms)
+                # This ensures Rainmeter always has fresh data to display
+                await asyncio.sleep(0.1)
                 
             except asyncio.CancelledError:
                 break
