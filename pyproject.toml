@@ -27,7 +27,7 @@ dependencies = [
     "torch",
     "torchvision",
     "torchaudio",
-    "triton",  # Required for torch.compile on modern GPUs (compute capability >= 7.0)
+    # Note: Triton is Linux-only, added as platform-specific dependency below
     "numpy>=1.24.0,<2.0.0",
     "pillow>=10.1.0",
     # AI/ML
@@ -79,8 +79,15 @@ windows = [
     "psutil>=5.9.6; platform_system=='Windows'",
 ]
 
+linux = [
+    # Linux-specific dependencies
+    # Triton: Required for torch.compile optimization on Linux
+    # (Windows uses different torch.compile backend, doesn't need Triton)
+    "triton; platform_system=='Linux'",
+]
+
 all = [
-    "dream-gen[dev,windows]",
+    "dream-gen[dev,windows,linux]",
 ]
 
 [project.urls]

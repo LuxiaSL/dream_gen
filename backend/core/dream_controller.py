@@ -145,12 +145,16 @@ class DreamController:
                 # Get target resolution from config to force resize
                 target_resolution = tuple(self.config['generation']['resolution'])  # [width, height]
                 
+                # Get torch.compile setting
+                enable_compile = self.config.get('system', {}).get('enable_torch_compile', False)
+                
                 self.latent_encoder = LatentEncoder(
                     device=device,
                     auto_load=True,
                     interpolation_resolution_divisor=resolution_divisor,
                     upscale_method=upscale_method,
-                    target_resolution=target_resolution
+                    target_resolution=target_resolution,
+                    enable_torch_compile=enable_compile
                 )
                 
                 # Synchronize CUDA after loading models to ensure context is fully initialized

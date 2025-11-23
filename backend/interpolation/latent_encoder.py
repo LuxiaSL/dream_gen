@@ -49,7 +49,8 @@ class LatentEncoder:
     
     def __init__(self, vae_path: Optional[Path] = None, device: str = "cuda", auto_load: bool = False,
                  interpolation_resolution_divisor: int = 1, upscale_method: str = "bilinear",
-                 downsample_method: str = "bilinear", target_resolution: Optional[Tuple[int, int]] = None):
+                 downsample_method: str = "bilinear", target_resolution: Optional[Tuple[int, int]] = None,
+                 enable_torch_compile: bool = True):
         """
         Initialize VAE encoder/decoder
         
@@ -61,10 +62,13 @@ class LatentEncoder:
             upscale_method: Method for upscaling after decode ("bilinear", "bicubic", "nearest")
             downsample_method: Method for downsampling before encode ("bilinear", "bicubic", "lanczos")
             target_resolution: Force resize to this resolution (width, height) to avoid CUDA issues
+            enable_torch_compile: Enable torch.compile optimization (may fail on some systems)
         """
         self.device = device if torch.cuda.is_available() else "cpu"
         self.vae = None
         self.vae_path = vae_path
+        self.enable_torch_compile = enable_torch_compile
+        self.vae_compiled = False  # Track if compilation was successful
         
         # Tensor caching for preprocessing optimization
         self._preprocess_cache = {}
@@ -116,32 +120,36 @@ class LatentEncoder:
             self.vae.eval()
             
             # OPTIMIZATION: Try to compile VAE decoder with torch.compile (PyTorch 2.0+)
-            # NOTE: Requires CUDA Capability >= 7.0 (Volta or newer)
+            # NOTE: Requires CUDA Capability >= 7.0 (Volta or newer) and Triton on Linux
             # Maxwell Titan X (5.2) and Pascal (6.x) GPUs cannot use torch.compile
-            try:
-                # Check if torch.compile is available and GPU is new enough
-                if hasattr(torch, 'compile') and torch.cuda.is_available():
-                    # Check CUDA compute capability
-                    compute_cap = torch.cuda.get_device_capability()
-                    compute_cap_num = compute_cap[0] + compute_cap[1] / 10
-                    
-                    if compute_cap_num >= 7.0:
-                        logger.info(f"  GPU compute capability: {compute_cap_num} (triton supported)")
-                        logger.info("  Attempting to compile VAE decoder with torch.compile...")
-                        # Compile the decoder for faster inference
-                        # mode='reduce-overhead' optimizes for repeated calls (our use case!)
-                        self.vae.decoder = torch.compile(
-                            self.vae.decoder,
-                            mode='reduce-overhead',
-                            fullgraph=True
-                        )
-                        logger.info("  [OK] VAE decoder compiled successfully")
-                    else:
-                        logger.info(f"  GPU compute capability: {compute_cap_num} (triton requires >= 7.0)")
-                        logger.info("  Skipping torch.compile (GPU too old for triton)")
-            except Exception as e:
-                logger.warning(f"  Could not compile VAE decoder: {e}")
-                logger.info("  Continuing with standard (uncompiled) decoder")
+            if self.enable_torch_compile:
+                try:
+                    # Check if torch.compile is available and GPU is new enough
+                    if hasattr(torch, 'compile') and torch.cuda.is_available():
+                        # Check CUDA compute capability
+                        compute_cap = torch.cuda.get_device_capability()
+                        compute_cap_num = compute_cap[0] + compute_cap[1] / 10
+                        
+                        if compute_cap_num >= 7.0:
+                            logger.info(f"  GPU compute capability: {compute_cap_num} (torch.compile supported)")
+                            logger.info("  Attempting to compile VAE decoder with torch.compile...")
+                            # Compile the decoder for faster inference
+                            # mode='reduce-overhead' optimizes for repeated calls (our use case!)
+                            self.vae.decoder = torch.compile(
+                                self.vae.decoder,
+                                mode='reduce-overhead',
+                                fullgraph=True
+                            )
+                            self.vae_compiled = True
+                            logger.info("  [OK] VAE decoder compiled (will verify on first use)")
+                        else:
+                            logger.info(f"  GPU compute capability: {compute_cap_num} (requires >= 7.0 for torch.compile)")
+                            logger.info("  Skipping torch.compile (GPU too old)")
+                except Exception as e:
+                    logger.warning(f"  Could not compile VAE decoder: {e}")
+                    logger.info("  Continuing with standard (uncompiled) decoder")
+            else:
+                logger.info("  torch.compile disabled via config")
             
             # VAE scaling factor for SD 1.5
             # This is the standard scale factor used in Stable Diffusion
@@ -282,8 +290,39 @@ class LatentEncoder:
         
         # Decode latent to image
         with torch.no_grad():
-            # VAE decode returns a sample (tensor)
-            image_tensor = self.vae.decode(latent).sample
+            try:
+                # VAE decode returns a sample (tensor)
+                image_tensor = self.vae.decode(latent).sample
+            except Exception as e:
+                # Check if this is a Triton-related error
+                error_str = str(e).lower()
+                if 'triton' in error_str and self.vae_compiled:
+                    logger.warning(f"Compiled VAE decoder failed (likely missing Triton): {type(e).__name__}")
+                    logger.info("Falling back to uncompiled decoder...")
+                    
+                    # Reload VAE without compilation
+                    try:
+                        from diffusers import AutoencoderKL
+                        logger.info("Reloading VAE without torch.compile...")
+                        self.vae = AutoencoderKL.from_pretrained(
+                            "runwayml/stable-diffusion-v1-5",
+                            subfolder="vae",
+                            torch_dtype=torch.float16,
+                            use_safetensors=True
+                        ).to(self.device)
+                        self.vae.eval()
+                        self.vae_compiled = False
+                        self.enable_torch_compile = False  # Disable for future operations
+                        logger.info("  [OK] VAE reloaded without compilation")
+                        
+                        # Retry decode
+                        image_tensor = self.vae.decode(latent).sample
+                    except Exception as fallback_error:
+                        logger.error(f"Fallback decode also failed: {fallback_error}")
+                        raise
+                else:
+                    # Different error, re-raise
+                    raise
         
         # OPTIMIZATION: Upscale on GPU if needed (much faster than CPU upscaling!)
         if upscale_to_target and self.target_resolution is not None and self.interpolation_resolution_divisor > 1:
