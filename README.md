@@ -178,7 +178,7 @@ system:
 
 generation:
   model: "sd15"                           # or whatever model you want to run inside comfyui
-  resolution: [512, 256]                  # Width x Height
+  resolution: [512, 256]                  # Width x Height (update Rainmeter dims too!)
   mode: "hybrid"                          # Recommended
   
   hybrid:
@@ -203,6 +203,28 @@ prompts:
       negative: "colors, warm tones, low quality..."
   rotation_interval: 20                   # Keyframes before theme rotation
 ```
+
+### 📐 Changing Generation Resolution
+
+To change the output resolution (e.g., to 512x512 or 1024x512):
+
+1. **Update backend config** (`backend/config.yaml`):
+   ```yaml
+   generation:
+     resolution: [1024, 512]  # [width, height]
+   ```
+
+2. **Update Rainmeter widget** (`rainmeter_skin/@Resources/Variables.inc`):
+   ```ini
+   ViewportWidth=1024      # Match width
+   ViewportHeight=512      # Match height
+   WidgetWidth=1040        # ViewportWidth + 16
+   WidgetHeight=608        # ViewportHeight + 96
+   ```
+
+3. **Restart both services** for changes to take effect
+
+**Note:** Larger resolutions will reduce FPS. Adjust `interpolation_resolution_divisor` for performance tuning.
 
 ## 🎨 Aesthetic Customization
 

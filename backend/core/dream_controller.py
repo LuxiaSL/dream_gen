@@ -138,16 +138,16 @@ class DreamController:
                 resolution_divisor = self.config['generation']['hybrid'].get('interpolation_resolution_divisor', 1)
                 upscale_method = self.config['generation']['hybrid'].get('interpolation_upscale_method', 'bilinear')
                 
-                # Use same GPU as ComfyUI for consistency
                 gpu_id = self.config.get('system', {}).get('gpu_id', 0)
                 device = f"cuda:{gpu_id}" if torch.cuda.is_available() else "cuda"
-                
+                self.logger.info(f"Using device: {device}")
+
                 # Get target resolution from config to force resize
                 target_resolution = tuple(self.config['generation']['resolution'])  # [width, height]
-                
+                self.logger.info(f"Target resolution: {target_resolution}")
                 # Get torch.compile setting
                 enable_compile = self.config.get('system', {}).get('enable_torch_compile', False)
-                
+                self.logger.info(f"Enable torch compile: {enable_compile}")
                 self.latent_encoder = LatentEncoder(
                     device=device,
                     auto_load=True,

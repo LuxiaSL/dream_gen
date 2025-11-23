@@ -29,7 +29,25 @@ generation:
   
   # Model selection
   model: "sd15"  # "sd15", "flux.1-schnell", or "sd21-unclip"
+  
+  # === GENERATION RESOLUTION ===
+  # IMPORTANT: If you change this, also update your Rainmeter skin dimensions!
+  # 
+  # To update Rainmeter display:
+  # 1. Open: rainmeter_skin/@Resources/Variables.inc
+  # 2. Set ViewportWidth and ViewportHeight to match [width, height] below
+  # 3. Calculate WidgetWidth = ViewportWidth + 16
+  # 4. Calculate WidgetHeight = ViewportHeight + 96
+  # 5. Save and refresh Rainmeter skin
+  #
+  # Common resolutions (Width x Height):
+  #   [512, 256]   - Default 2:1 wide (fast, cinematic)
+  #   [512, 512]   - Square 1:1 (balanced)
+  #   [768, 512]   - 3:2 wide (photo aspect ratio)
+  #   [1024, 512]  - 2:1 ultra-wide (slowest, very cinematic)
+  #
   resolution: [512, 256]    # Width x Height
+  
   mode: "hybrid"            # "interpolate", "img2img", or "hybrid" (recommended)
   
   # Flux.1 parameters (when model: "flux.1-schnell")

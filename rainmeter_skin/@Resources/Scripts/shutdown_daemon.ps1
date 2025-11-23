@@ -5,7 +5,7 @@
 # It gracefully shuts down the daemon using the daemon_control.py script.
 
 param(
-    [string]$ProjectPath = "C:\Users\luxia\Documents\projects\dream_gen"
+    [string]$ProjectPath = "C:\Users\[username_here]\Documents\projects\dream_gen"
 )
 
 # Change directory to project root

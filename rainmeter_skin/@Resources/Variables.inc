@@ -17,8 +17,24 @@ WindowX=50
 WindowY=300
 
 ; ========================================
-; DIMENSIONS
+; DIMENSIONS - MATCH YOUR BACKEND CONFIG!
 ; ========================================
+; IMPORTANT: These dimensions should match your backend/config.yaml
+; The generation resolution in config.yaml is [width, height]
+; Set ViewportWidth and ViewportHeight to match your generation resolution
+;
+; Current backend config: resolution: [512, 256]
+; 
+; Common resolutions:
+;   512x256 (default 2:1 aspect ratio)
+;   512x512 (square)
+;   768x512 (3:2 wide)
+;   1024x512 (2:1 ultra-wide)
+;
+; After changing these values, adjust WidgetWidth and WidgetHeight:
+;   WidgetWidth = ViewportWidth + 16 (padding)
+;   WidgetHeight = ViewportHeight + 96 (header + status bar)
+;
 ViewportWidth=512
 ViewportHeight=256
 WidgetWidth=528
