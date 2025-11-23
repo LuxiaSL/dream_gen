@@ -33,8 +33,11 @@ venv.bak/
 .uv/
 
 # UV lock file (CUDA-variant specific, regenerate locally)
-# Users generate their own based on GPU: cu124, cu121, or cu118
+# Users generate their own based on GPU: cu126, cu121, or cu118
 uv.lock
+
+# Developer scripts (optional, for local GPU-specific setups)
+setup-old-gpu.ps1
 
 # IDE
 .vscode/
