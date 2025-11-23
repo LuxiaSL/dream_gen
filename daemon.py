@@ -409,7 +409,7 @@ class DaemonManager:
             
             if web_server_ready and queue_ready:
                 elapsed = time.time() - start_time
-                self.logger.info(f"✓ ComfyUI FULLY READY in {elapsed:.1f}s")
+                self.logger.info(f"ComfyUI FULLY READY in {elapsed:.1f}s")
                 self.comfyui_status = "ready"
                 self._update_daemon_status()
                 return True
