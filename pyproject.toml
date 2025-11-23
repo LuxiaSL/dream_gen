@@ -21,11 +21,13 @@ classifiers = [
 
 dependencies = [
     # Core ML dependencies
-    # PyTorch is installed via the UV index specified at bottom of this file
-    # Modern systems use cu124 (CUDA 12.4). For older GPUs, see installation docs.
-    "torch>=2.8.0",
-    "torchvision>=0.21.0",
-    "torchaudio>=2.8.0",
+    # PyTorch is installed via UV index (specified at bottom of file)
+    # MUST specify CUDA index - PyPI defaults to CPU-only!
+    # Version unpinned - UV fetches latest compatible version
+    "torch",
+    "torchvision",
+    "torchaudio",
+    "triton",  # Required for torch.compile on modern GPUs (compute capability >= 7.0)
     "numpy>=1.24.0,<2.0.0",
     "pillow>=10.1.0",
     # AI/ML
@@ -171,18 +173,25 @@ markers = [
     "unit: marks tests as unit tests",
 ]
 
-# UV configuration for PyTorch CUDA packages
-# Using cu124 (CUDA 12.4) for modern GPU compatibility
-# For older GPUs (Maxwell/Pascal), you may need to manually install cu121 or cu118
-# See docs/INSTALLATION_GUIDE.md for GPU-specific instructions
+# PyTorch CUDA Configuration
+# CRITICAL: PyTorch on PyPI is CPU-only by default!
+# We MUST specify a CUDA index or users will get CPU-only PyTorch
+#
+# Using cu126 (CUDA 12.6) - modern default for PyTorch 2.8+
+# - Supports RTX 20/30/40, GTX 16 series, and some older Maxwell/Pascal GPUs
+# - PyTorch 2.8+ removed cu124 support (only cu126, cu128, cu129 available)
+#
+# For very old GPUs (Maxwell Titan X, etc.), users should manually install cu121
+# before running `uv sync`. See docs/INSTALLATION_GUIDE.md for details.
+
 [[tool.uv.index]]
-name = "pytorch-cu124"
-url = "https://download.pytorch.org/whl/cu124"
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
 explicit = true
 
 [tool.uv.sources]
-# PyTorch packages should be installed from the CUDA 12.4 index (modern default)
-torch = { index = "pytorch-cu124" }
-torchvision = { index = "pytorch-cu124" }
-torchaudio = { index = "pytorch-cu124" }
+# Force PyTorch packages to use CUDA index (prevents CPU-only installation)
+torch = { index = "pytorch-cu126" }
+torchvision = { index = "pytorch-cu126" }
+torchaudio = { index = "pytorch-cu126" }
 
