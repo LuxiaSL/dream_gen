@@ -55,6 +55,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+cloud = [
+    # Cloud mode dependencies (for VPS deployment)
+    # websockets is already in main deps
+    "msgpack>=1.0.7",  # Efficient binary serialization for state sync
+]
+
 dev = [
     # Testing
     "pytest>=7.4.3",

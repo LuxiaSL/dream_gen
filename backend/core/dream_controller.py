@@ -267,6 +267,21 @@ class DreamController:
         # Frame management
         self.max_output_frames = self.config.get('display', {}).get('max_output_frames', 100)
         
+        # Cloud mode initialization (optional)
+        self.cloud_enabled = self.config.get('cloud', {}).get('enabled', False)
+        self.vps_client = None
+        self.frame_pusher = None
+        self.state_sync = None
+        
+        if self.cloud_enabled:
+            self._init_cloud_mode()
+            # Set cloud callback on display selector if available
+            if self.display_selector and self.frame_pusher:
+                self.display_selector.on_frame_callback = self._on_frame_displayed
+                self.logger.info("Cloud callback attached to display selector")
+        else:
+            self.logger.info("Cloud mode: disabled (standalone Rainmeter mode)")
+        
         self.logger.info("[OK] Initialization complete")
         self.logger.info(f"Mode: {self.config['generation']['mode']}")
         self.logger.info(f"Resolution: {self.config['generation']['resolution']}")
@@ -305,6 +320,209 @@ class DreamController:
         except Exception as e:
             self.logger.error(f"Error during frame cleanup: {e}")
     
+    def _init_cloud_mode(self) -> None:
+        """
+        Initialize cloud mode components
+        
+        Sets up WebSocket client, frame pusher, and state sync for
+        pushing frames to VPS. This is only called when cloud.enabled is True.
+        """
+        self.logger.info("Initializing cloud mode...")
+        
+        try:
+            from cloud import VPSWebSocketClient, CloudFramePusher, CloudStateSync
+            
+            cloud_config = self.config['cloud']
+            
+            # Apply resolution override if specified
+            resolution_override = cloud_config.get('resolution_override')
+            if resolution_override:
+                self.logger.info(f"Cloud resolution override: {resolution_override}")
+                self.config['generation']['resolution'] = resolution_override
+            
+            # Create WebSocket client
+            self.vps_client = VPSWebSocketClient(cloud_config)
+            
+            # Set control callbacks
+            self.vps_client.set_callbacks(
+                on_pause=self._on_cloud_pause,
+                on_resume=self._on_cloud_resume,
+                on_save_state=self._on_cloud_save_state,
+                on_shutdown=self._on_cloud_shutdown,
+                on_load_state=self._on_cloud_load_state,
+            )
+            
+            # Create frame pusher
+            self.frame_pusher = CloudFramePusher(self.vps_client, cloud_config)
+            
+            # Create state sync
+            self.state_sync = CloudStateSync(self.vps_client, cloud_config)
+            
+            self.logger.info("[OK] Cloud mode initialized")
+            self.logger.info(f"  VPS URL: {cloud_config.get('vps_websocket_url')}")
+            self.logger.info(f"  Frame format: {cloud_config.get('frame_push', {}).get('format', 'webp')}")
+            self.logger.info(f"  State sync interval: {cloud_config.get('state_sync', {}).get('interval_keyframes', 10)} keyframes")
+        
+        except ImportError as e:
+            self.logger.error(f"Cloud mode dependencies not available: {e}")
+            self.logger.error("Install websockets and msgpack: pip install websockets msgpack")
+            self.cloud_enabled = False
+        except Exception as e:
+            self.logger.error(f"Failed to initialize cloud mode: {e}", exc_info=True)
+            self.cloud_enabled = False
+    
+    async def connect_to_vps(self) -> bool:
+        """
+        Connect to VPS WebSocket endpoint
+        
+        Called at start of generation when cloud mode is enabled.
+        
+        Returns:
+            True if connected successfully
+        """
+        if not self.cloud_enabled or not self.vps_client:
+            return False
+        
+        self.logger.info("Connecting to VPS...")
+        connected = await self.vps_client.connect()
+        
+        if connected:
+            self.logger.info("[OK] Connected to VPS")
+        else:
+            self.logger.warning("Failed to connect to VPS, will retry in background")
+        
+        return connected
+    
+    async def disconnect_from_vps(self) -> None:
+        """
+        Disconnect from VPS gracefully
+        
+        Pushes final state before disconnecting.
+        """
+        if not self.cloud_enabled or not self.vps_client:
+            return
+        
+        # Push final state
+        if self.state_sync:
+            try:
+                await self.state_sync.on_shutdown(
+                    cache_manager=self.cache,
+                    similarity_manager=self.similarity_manager
+                )
+            except Exception as e:
+                self.logger.error(f"Error pushing final state: {e}")
+        
+        # Disconnect
+        await self.vps_client.disconnect()
+        self.logger.info("Disconnected from VPS")
+    
+    async def push_frame_to_cloud(
+        self,
+        image: Image.Image,
+        is_keyframe: bool = False,
+        frame_number: int = 0,
+        keyframe_number: int = 0,
+    ) -> bool:
+        """
+        Push a frame to VPS if cloud mode is enabled
+        
+        Args:
+            image: PIL Image to push
+            is_keyframe: Whether this is a keyframe
+            frame_number: Sequential frame number
+            keyframe_number: Current keyframe number
+        
+        Returns:
+            True if pushed successfully (or cloud mode disabled)
+        """
+        if not self.cloud_enabled or not self.frame_pusher:
+            return True  # Not an error
+        
+        return await self.frame_pusher.push_frame(
+            image=image,
+            is_keyframe=is_keyframe,
+            frame_number=frame_number,
+            keyframe_number=keyframe_number,
+        )
+    
+    async def sync_state_to_cloud(
+        self,
+        keyframe_latent,
+        generation_state: dict,
+    ) -> bool:
+        """
+        Sync state to VPS if cloud mode is enabled
+        
+        Args:
+            keyframe_latent: Latent tensor from VAE encoding
+            generation_state: Dict with frame_count, keyframe_count, etc.
+        
+        Returns:
+            True if synced (or skipped based on interval)
+        """
+        if not self.cloud_enabled or not self.state_sync:
+            return True  # Not an error
+        
+        return await self.state_sync.on_keyframe_complete(
+            keyframe_latent=keyframe_latent,
+            generation_state=generation_state,
+            cache_manager=self.cache,
+            similarity_manager=self.similarity_manager,
+        )
+    
+    # Cloud control callbacks
+    async def _on_cloud_pause(self) -> None:
+        """Handle pause command from VPS"""
+        self.logger.info("Received pause command from VPS")
+        self.paused = True
+    
+    async def _on_cloud_resume(self) -> None:
+        """Handle resume command from VPS"""
+        self.logger.info("Received resume command from VPS")
+        self.paused = False
+    
+    async def _on_cloud_save_state(self) -> None:
+        """Handle save state command from VPS"""
+        self.logger.info("Received save state command from VPS")
+        if self.state_sync:
+            # Force immediate state push
+            await self.state_sync._push_state(
+                include_cache=True,
+                cache_manager=self.cache,
+                similarity_manager=self.similarity_manager,
+            )
+    
+    async def _on_cloud_shutdown(self) -> None:
+        """Handle shutdown command from VPS"""
+        self.logger.info("Received shutdown command from VPS")
+        self.running = False
+    
+    async def _on_cloud_load_state(self, state_bytes: bytes) -> None:
+        """Handle load state command from VPS"""
+        self.logger.info(f"Received load state command from VPS ({len(state_bytes)} bytes)")
+        # TODO: Implement state restoration
+        # This would involve deserializing the state and restoring the latent, etc.
+    
+    async def _on_frame_displayed(self, image: Image, frame_number: int, is_keyframe: bool) -> None:
+        """
+        Callback invoked when a frame is displayed
+        
+        Pushes the frame to cloud if enabled.
+        
+        Args:
+            image: PIL Image being displayed
+            frame_number: Sequential frame number
+            is_keyframe: Whether this is a keyframe
+        """
+        if not self.cloud_enabled or not self.frame_pusher:
+            return
+        
+        await self.frame_pusher.push_frame(
+            image=image,
+            is_keyframe=is_keyframe,
+            frame_number=frame_number,
+        )
+
     def get_random_seed_image(self) -> Path:
         """
         Get random seed image from seed directory
@@ -458,6 +676,10 @@ class DreamController:
         self.logger.info("=" * 70)
         self.logger.info("STARTING BUFFERED HYBRID MODE")
         self.logger.info("=" * 70)
+        
+        # Connect to VPS if cloud mode enabled
+        if self.cloud_enabled and self.vps_client:
+            await self.connect_to_vps()
         
         # Check if using async orchestrator
         use_async = self.config['generation'].get('use_async_orchestrator', False)
@@ -768,4 +990,20 @@ class DreamController:
         self.logger.info("\n" + "="*70)
         self.logger.info("SHUTTING DOWN")
         self.logger.info("="*70)
+        
+        # Disconnect from VPS if cloud mode enabled
+        if self.cloud_enabled and self.vps_client:
+            try:
+                # Run async disconnect in event loop
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Create task if loop is running
+                    asyncio.create_task(self.disconnect_from_vps())
+                else:
+                    # Run directly if loop is not running
+                    loop.run_until_complete(self.disconnect_from_vps())
+            except Exception as e:
+                self.logger.error(f"Error disconnecting from VPS: {e}")
+        
+        self.logger.info("Shutdown complete")
         

@@ -368,3 +368,54 @@ daemon:
   log_file: "logs/daemon.log"     # Daemon-specific log file
   log_level: "INFO"               # DEBUG, INFO, WARNING, ERROR
 
+# =============================================================================
+# CLOUD MODE (Optional - for web deployment)
+# =============================================================================
+# When enabled, frames are pushed to a VPS WebSocket endpoint in addition
+# to local Rainmeter output. This allows Dream Window to be viewed in browsers.
+#
+# To enable cloud mode:
+# 1. Set cloud.enabled to true
+# 2. Configure vps_websocket_url to point to your VPS
+# 3. Set auth_token (or DREAM_GEN_AUTH_TOKEN env var)
+# 4. Deploy the aethera dreams module on your VPS
+#
+# Cloud mode is ADDITIVE - local Rainmeter output continues to work.
+# =============================================================================
+
+cloud:
+  # Master toggle - false = original standalone behavior (Rainmeter only)
+  enabled: false
+  
+  # VPS WebSocket endpoint for frame pushing
+  # This should be the /ws/gpu endpoint on your aethera deployment
+  vps_websocket_url: "wss://aetherawi.red/ws/gpu"
+  
+  # Authentication token (can also use DREAM_GEN_AUTH_TOKEN env var)
+  # This should match what the VPS expects
+  auth_token: null  # "${DREAM_GEN_AUTH_TOKEN}"
+  
+  # Frame pushing settings
+  frame_push:
+    enabled: true
+    format: "webp"              # "webp" (recommended) or "png"
+    quality: 85                 # WebP quality 1-100 (85 is good balance)
+    include_interpolations: true  # Push all frames (true) or just keyframes (false)
+  
+  # State synchronization
+  # Pushes state to VPS for resume capability after GPU restart
+  state_sync:
+    enabled: true
+    interval_keyframes: 10      # Push state every N keyframes (~30 seconds)
+    push_on_shutdown: true      # Always push final state on graceful shutdown
+  
+  # Resolution override for cloud deployment
+  # Set to higher resolution when using better cloud GPUs
+  # null = use generation.resolution setting
+  resolution_override: [1024, 512]
+  
+  # Connection settings
+  connection:
+    reconnect_delay: 1.0        # Initial reconnect delay in seconds
+    max_reconnect_delay: 60.0   # Maximum reconnect delay (exponential backoff cap)
+    heartbeat_interval: 30.0    # Heartbeat interval in seconds

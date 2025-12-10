@@ -1,0 +1,135 @@
+# Docker Compose for Dream Window Cloud Testing
+#
+# This file is for LOCAL TESTING of the cloud configuration.
+# For production, deploy to RunPod Serverless directly.
+#
+# Usage:
+#   docker-compose -f docker/docker-compose.cloud.yml up
+#
+# With VPS connection:
+#   VPS_WEBSOCKET_URL=wss://aetherawi.red/ws/gpu docker-compose -f docker/docker-compose.cloud.yml up
+
+version: '3.8'
+
+services:
+  # ComfyUI Backend (separate for resource management)
+  comfyui:
+    image: nvidia/cuda:12.1-runtime-ubuntu22.04
+    container_name: dream-comfyui
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      - comfyui-data:/app/ComfyUI
+      - models-data:/app/ComfyUI/models
+    ports:
+      - "8188:8188"
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    command: >
+      bash -c "
+        if [ ! -d /app/ComfyUI/main.py ]; then
+          echo 'Installing ComfyUI...';
+          apt-get update && apt-get install -y python3 python3-pip git;
+          git clone https://github.com/comfyanonymous/ComfyUI.git /app/ComfyUI;
+          pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121;
+          pip install -r /app/ComfyUI/requirements.txt;
+        fi;
+        cd /app/ComfyUI && python main.py --listen 0.0.0.0 --port 8188
+      "
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8188/system_stats"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+  # Dream Window Generator
+  dream-gen:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.cloud
+      target: dev
+    container_name: dream-gen-cloud
+    depends_on:
+      comfyui:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      - ../backend:/app/backend:ro
+      - output-data:/app/output
+      - state-data:/app/state
+    environment:
+      - VPS_WEBSOCKET_URL=${VPS_WEBSOCKET_URL:-ws://host.docker.internal:8000/ws/gpu}
+      - DREAM_GEN_AUTH_TOKEN=${DREAM_GEN_AUTH_TOKEN:-}
+      - COMFYUI_HOST=comfyui
+      - COMFYUI_PORT=8188
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - NVIDIA_VISIBLE_DEVICES=all
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # Mock VPS (for isolated testing without real VPS)
+  mock-vps:
+    image: python:3.11-slim
+    container_name: dream-mock-vps
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../:/app:ro
+    working_dir: /app
+    environment:
+      - PYTHONPATH=/app
+    command: >
+      bash -c "
+        pip install fastapi uvicorn websockets;
+        python -c \"
+import asyncio
+import logging
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+import uvicorn
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger('mock-vps')
+
+app = FastAPI()
+
+@app.websocket('/ws/gpu')
+async def gpu_ws(ws: WebSocket):
+    await ws.accept()
+    logger.info('GPU connected')
+    try:
+        frame_count = 0
+        while True:
+            data = await ws.receive_bytes()
+            if data[0] == 0x01:  # Frame
+                frame_count += 1
+                if frame_count % 10 == 0:
+                    logger.info(f'Received frame {frame_count}')
+            elif data[0] == 0x02:  # State
+                logger.info(f'Received state ({len(data)} bytes)')
+    except WebSocketDisconnect:
+        logger.info('GPU disconnected')
+
+uvicorn.run(app, host='0.0.0.0', port=8000)
+        \"
+      "
+    profiles:
+      - testing
+
+volumes:
+  comfyui-data:
+  models-data:
+  output-data:
+  state-data:
+

@@ -16,7 +16,7 @@ import logging
 import time
 import asyncio
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Callable, Awaitable
 from PIL import Image
 
 from .frame_buffer import FrameBuffer
@@ -50,7 +50,8 @@ class DisplayFrameSelector:
         output_dir: Path,
         target_fps: float = 4.0,
         min_buffer_seconds: float = 30.0,
-        cleanup_displayed_frames: bool = False
+        cleanup_displayed_frames: bool = False,
+        on_frame_callback: Optional[Callable[[Image.Image, int, bool], Awaitable[None]]] = None
     ):
         """
         Initialize display frame selector
@@ -61,6 +62,8 @@ class DisplayFrameSelector:
             target_fps: Target frame rate for display
             min_buffer_seconds: Minimum buffer before starting playback
             cleanup_displayed_frames: Whether to delete frames immediately after display
+            on_frame_callback: Optional async callback(image, frame_num, is_keyframe) 
+                               called for each displayed frame (e.g., for cloud push)
         """
         self.buffer = frame_buffer
         self.output_dir = Path(output_dir)
@@ -83,6 +86,9 @@ class DisplayFrameSelector:
         # Output path
         self.current_frame_path = self.output_dir / "current_frame.png"
         
+        # Optional callback for cloud push or other processing
+        self.on_frame_callback = on_frame_callback
+        
         logger.info("DisplayFrameSelector initialized")
         logger.info(f"  Target FPS: {target_fps}")
         logger.info(f"  Frame interval: {self.frame_interval:.3f}s")
@@ -93,6 +99,9 @@ class DisplayFrameSelector:
             logger.info(f"  Auto-cleanup: ENABLED (delete after display)")
         else:
             logger.info(f"  Auto-cleanup: DISABLED")
+        
+        if self.on_frame_callback:
+            logger.info(f"  Frame callback: ENABLED")
     
     async def wait_for_initial_buffer(self, check_interval: float = 1.0) -> bool:
         """
@@ -166,8 +175,23 @@ class DisplayFrameSelector:
             return False
         
         try:
-            # Copy frame to current_frame.png ASYNC (don't block event loop)
-            await self._write_current_frame_async(frame_spec.file_path)
+            # Load image once (for both display and callback)
+            loop = asyncio.get_event_loop()
+            image = await loop.run_in_executor(
+                None,
+                lambda: Image.open(frame_spec.file_path)
+            )
+            
+            # Write to current_frame.png ASYNC (don't block event loop)
+            await self._write_current_frame_async(image)
+            
+            # Call optional callback (e.g., for cloud push)
+            if self.on_frame_callback:
+                try:
+                    is_keyframe = frame_spec.frame_type.value == 'keyframe'
+                    await self.on_frame_callback(image, self.frames_displayed, is_keyframe)
+                except Exception as callback_error:
+                    logger.warning(f"Frame callback error (non-fatal): {callback_error}")
             
             # Mark as displayed in buffer
             self.buffer.mark_displayed(frame_spec.sequence_num)
@@ -199,14 +223,14 @@ class DisplayFrameSelector:
             logger.error(f"Error displaying frame: {e}", exc_info=True)
             return False
     
-    async def _write_current_frame_async(self, frame_path: Path) -> None:
+    async def _write_current_frame_async(self, image: Image.Image) -> None:
         """
         Write frame to current_frame.png using async I/O (optimized)
         
-        Moves image loading and saving to executor to avoid blocking event loop.
+        Moves image saving to executor to avoid blocking event loop.
         
         Args:
-            frame_path: Path to frame to display
+            image: PIL Image to save
         """
         loop = asyncio.get_event_loop()
         
@@ -214,23 +238,20 @@ class DisplayFrameSelector:
         await loop.run_in_executor(
             None,
             self._write_current_frame_sync,
-            frame_path
+            image
         )
     
-    def _write_current_frame_sync(self, frame_path: Path) -> None:
+    def _write_current_frame_sync(self, image: Image.Image) -> None:
         """
         Sync I/O operations (runs in executor)
         
         Args:
-            frame_path: Path to frame to display
+            image: PIL Image to save
         """
         try:
             # Use atomic write with temp file
             import tempfile
             import shutil
-            
-            # Read source image
-            image = Image.open(frame_path)
             
             # Write to temp file in same directory
             with tempfile.NamedTemporaryFile(
