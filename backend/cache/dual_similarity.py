@@ -280,6 +280,32 @@ class DualMetricSimilarityManager:
             'color': self.color_encoder.from_serializable(serialized['color']),
             'struct': serialized['struct']  # Already a string
         }
+    
+    def serialize(self) -> bytes:
+        """
+        Serialize all cached embeddings for state persistence
+        
+        This is a no-op for now since embeddings are stored per-entry
+        in the CacheManager. The similarity manager itself is stateless.
+        
+        Returns:
+            Empty bytes (placeholder for future use)
+        """
+        # Currently stateless - embeddings are in cache entries
+        return b''
+    
+    def deserialize(self, data: bytes) -> None:
+        """
+        Restore serialized embeddings
+        
+        This is a no-op for now since embeddings are stored per-entry
+        in the CacheManager. The similarity manager itself is stateless.
+        
+        Args:
+            data: Serialized embeddings (currently ignored)
+        """
+        # Currently stateless - embeddings are in cache entries
+        pass
 
 
 # Test function

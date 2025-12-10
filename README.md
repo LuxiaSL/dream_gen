@@ -25,6 +25,7 @@ Dream Window is a desktop widget that displays endlessly evolving AI-generated a
 - **Zero Gaming Impact**: Runs on dedicated GPU with automatic game detection and VRAM management
 - **Desktop Integration**: Lightweight Rainmeter widget with configurable styling and live status indicators
 - **Production-Ready Daemon**: Autonomous process management with auto-restart, health monitoring, and graceful shutdown
+- **Cloud Mode**: Stream frames to a web server for browser-based viewing (optional)
 
 ## 🎯 What Makes This Different
 
@@ -134,6 +135,73 @@ Load the Dream Window skin in Rainmeter and watch the magic happen!
 5. **Display Selection**: Buffer provides frames at target FPS (default 4fps) to Rainmeter
 6. **Cache Injection**: Dual-metric similarity detection (ColorHist + pHash-8) prevents mode collapse
 
+## ☁️ Cloud Mode
+
+Dream Window can run on cloud GPUs and stream frames to a web server for browser-based viewing. This enables:
+
+- **Cross-Platform Access**: Watch Dream Window on any device with a browser
+- **Cost-Effective GPU Usage**: Pay only when viewers are present (per-second billing)
+- **State Persistence**: Generation resumes seamlessly across GPU restarts
+
+### Architecture
+
+```
+┌─────────────────┐     WebSocket      ┌─────────────────┐     WebSocket      ┌─────────────────┐
+│  Cloud GPU      │ ──────────────────► │  VPS (æthera)   │ ──────────────────► │  Browsers       │
+│  (RunPod)       │   Binary frames    │  Frame Hub      │   Binary frames    │  /dreams page   │
+│                 │   + State sync     │                 │   + Status msgs    │                 │
+└─────────────────┘                    └─────────────────┘                    └─────────────────┘
+```
+
+### Enabling Cloud Mode
+
+1. Set `cloud.enabled: true` in `backend/config.yaml`
+2. Configure the VPS WebSocket URL and auth token
+3. Deploy to RunPod using the provided Docker image
+
+```yaml
+# backend/config.yaml
+cloud:
+  enabled: true
+  vps_websocket_url: "wss://your-domain.com/ws/gpu"
+  auth_token: "your_secure_shared_secret"
+  
+  frame_push:
+    format: "webp"
+    quality: 85
+  
+  state_sync:
+    interval_keyframes: 10  # Save state every 10 keyframes
+    push_on_shutdown: true
+  
+  resolution_override: [1024, 512]  # Higher res for cloud
+```
+
+### Cloud Components
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| `VPSWebSocketClient` | `cloud/websocket_client.py` | Maintains connection to VPS |
+| `CloudFramePusher` | `cloud/frame_pusher.py` | Encodes and transmits frames |
+| `CloudStateSync` | `cloud/state_sync.py` | Periodic state snapshots |
+| `runpod_handler` | `cloud/runpod_handler.py` | Serverless entry point |
+
+### Backward Compatibility
+
+Cloud mode is **fully optional**. With `cloud.enabled: false` (default), Dream Window runs exactly as before — Rainmeter widget, local output, no external connections.
+
+When cloud mode is enabled, both outputs run simultaneously:
+- Local `output/current_frame.png` for Rainmeter
+- WebSocket stream to VPS for browsers
+
+### Deployment
+
+See `docs/CLOUD_DEPLOYMENT_PLAN.md` for the full deployment guide, including:
+- RunPod setup with Flashboot
+- Docker image building
+- VPS configuration
+- Cost projections
+
 ## 📁 Project Structure
 
 ```
@@ -150,6 +218,11 @@ dream-gen/
 │   │   ├── manager.py           # LRU cache manager
 │   │   ├── injection_strategy.py # Cache injection strategies
 │   │   └── collapse_detector.py # Mode collapse detection
+│   ├── cloud/                   # Cloud mode (optional)
+│   │   ├── websocket_client.py  # VPS WebSocket connection
+│   │   ├── frame_pusher.py      # Frame encoding + transmission
+│   │   ├── state_sync.py        # State persistence
+│   │   └── runpod_handler.py    # Serverless entry point
 │   ├── interpolation/           # Latent space interpolation
 │   │   ├── latent_encoder.py    # VAE encoding/decoding
 │   │   └── spherical_lerp.py    # Slerp implementation
@@ -161,6 +234,9 @@ dream-gen/
 │   └── config.yaml              # Main configuration
 ├── daemon.py                    # Production daemon manager
 ├── daemon_control.py            # Daemon control interface
+├── docker/                      # Cloud deployment
+│   ├── Dockerfile.cloud         # GPU container image
+│   └── docker-compose.cloud.yml # Local testing
 ├── rainmeter_skin/              # Desktop widget
 ├── comfyui_workflows/           # Workflow JSON templates
 ├── seeds/                       # Initial seed images

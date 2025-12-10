@@ -498,10 +498,103 @@ class DreamController:
         self.running = False
     
     async def _on_cloud_load_state(self, state_bytes: bytes) -> None:
-        """Handle load state command from VPS"""
+        """
+        Handle load state command from VPS
+        
+        Restores generation state from a previously saved snapshot, including:
+        - Last keyframe latent (for interpolation continuity)
+        - Frame/keyframe counters
+        - Theme index
+        - Cache metadata (if included)
+        
+        Args:
+            state_bytes: Serialized state bundle from VPS
+        """
         self.logger.info(f"Received load state command from VPS ({len(state_bytes)} bytes)")
-        # TODO: Implement state restoration
-        # This would involve deserializing the state and restoring the latent, etc.
+        
+        try:
+            # Import deserializer
+            from cloud.state_sync import deserialize_state
+            import torch
+            
+            # Deserialize the state bundle
+            bundle = deserialize_state(state_bytes)
+            
+            self.logger.info(f"State bundle contains: {list(bundle.keys())}")
+            
+            # Restore latent tensor for interpolation
+            if "latent" in bundle:
+                latent_np = bundle["latent"]
+                latent_tensor = torch.from_numpy(latent_np)
+                
+                # Determine device
+                if torch.cuda.is_available():
+                    device_id = self.config.get('system', {}).get('gpu_id', 0)
+                    device = f"cuda:{device_id}"
+                else:
+                    device = "cpu"
+                
+                latent_tensor = latent_tensor.to(device)
+                
+                self.logger.info(f"Restored latent: shape={latent_tensor.shape}, device={device}")
+                
+                # Inject into generation coordinator if available
+                if hasattr(self, 'generation_coordinator') and self.generation_coordinator:
+                    # Get the current keyframe number from restored state
+                    state = bundle.get("state", {})
+                    keyframe_count = state.get("keyframe_count", 1)
+                    
+                    # Store as the last keyframe latent
+                    self.generation_coordinator.keyframe_latents[keyframe_count] = latent_tensor
+                    self.logger.info(f"Injected latent as keyframe {keyframe_count}")
+                
+                # Store for async orchestrator if using that instead
+                if hasattr(self, 'orchestrator') and self.orchestrator:
+                    # The orchestrator handles this differently
+                    self.logger.info("Async orchestrator detected - latent restoration handled at startup")
+            
+            # Restore generation state counters
+            if "state" in bundle:
+                state = bundle["state"]
+                
+                if "frame_count" in state:
+                    self.frame_count = state["frame_count"]
+                    self.logger.info(f"Restored frame_count: {self.frame_count}")
+                
+                if "keyframe_count" in state and hasattr(self, 'generation_coordinator'):
+                    if self.generation_coordinator:
+                        self.generation_coordinator.keyframes_generated = state["keyframe_count"]
+                        self.logger.info(f"Restored keyframe_count: {state['keyframe_count']}")
+                
+                if "theme_index" in state:
+                    self.prompt_manager.current_theme_index = state["theme_index"]
+                    self.logger.info(f"Restored theme_index: {state['theme_index']}")
+                
+                if "last_seed" in state and hasattr(self, 'generator'):
+                    self.generator.last_seed = state["last_seed"]
+                    self.logger.info(f"Restored last_seed: {state['last_seed']}")
+            
+            # Restore cache metadata if included
+            if "cache_meta" in bundle:
+                try:
+                    self.cache.restore_metadata(bundle["cache_meta"])
+                    self.logger.info("Restored cache metadata")
+                except Exception as e:
+                    self.logger.warning(f"Could not restore cache metadata: {e}")
+            
+            # Restore similarity embeddings if included
+            if "embeddings" in bundle:
+                try:
+                    self.similarity_manager.deserialize(bundle["embeddings"])
+                    self.logger.info("Restored similarity embeddings")
+                except Exception as e:
+                    self.logger.warning(f"Could not restore embeddings: {e}")
+            
+            self.logger.info("[OK] State restoration complete")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to restore state: {e}", exc_info=True)
+            # Continue without restored state - will start fresh
     
     async def _on_frame_displayed(self, image: Image, frame_number: int, is_keyframe: bool) -> None:
         """

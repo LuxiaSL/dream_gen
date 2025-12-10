@@ -514,3 +514,55 @@ class CacheManager:
             "with_embeddings": with_embeddings,
             "without_embeddings": len(self.entries) - with_embeddings,
         }
+    
+    def get_metadata(self) -> Dict[str, Any]:
+        """
+        Get cache metadata for state persistence
+        
+        Returns minimal data needed to restore cache state:
+        - LRU order (just cache IDs in order)
+        - Entry count
+        - Does NOT include full entries (those would need file paths)
+        
+        Returns:
+            Dictionary with cache metadata
+        """
+        return {
+            "version": 1,
+            "entry_count": len(self.entries),
+            "lru_order": self.lru_order.copy(),
+            "max_size": self.max_size,
+        }
+    
+    def restore_metadata(self, metadata: Dict[str, Any]) -> None:
+        """
+        Restore cache metadata from a saved state
+        
+        Note: This only restores the LRU order for existing entries.
+        Entries themselves must already be loaded from disk.
+        
+        Args:
+            metadata: Metadata dict from get_metadata()
+        """
+        if not metadata:
+            return
+        
+        version = metadata.get("version", 0)
+        if version != 1:
+            logger.warning(f"Unknown metadata version {version}, skipping restore")
+            return
+        
+        # Restore LRU order (only for entries that still exist)
+        saved_lru = metadata.get("lru_order", [])
+        existing_ids = set(self.entries.keys())
+        
+        # Build new LRU with saved order, keeping only existing entries
+        new_lru = [cid for cid in saved_lru if cid in existing_ids]
+        
+        # Add any entries not in saved order at the end
+        for cid in existing_ids:
+            if cid not in new_lru:
+                new_lru.append(cid)
+        
+        self.lru_order = new_lru
+        logger.info(f"Restored LRU order for {len(new_lru)} cache entries")
