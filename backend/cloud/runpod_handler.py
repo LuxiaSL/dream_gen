@@ -162,11 +162,12 @@ except Exception as e:
     print(f"[DEBUG] runpod import error: {type(e).__name__}: {e}")
 
 
-def handler(job: Dict[str, Any]) -> Dict[str, Any]:
+async def handler(job: Dict[str, Any]) -> Dict[str, Any]:
     """
-    RunPod serverless handler entry point
+    RunPod serverless handler entry point (ASYNC)
     
     Called by RunPod when a job is submitted.
+    RunPod already runs an event loop, so this must be async.
     
     Args:
         job: Job dictionary with 'id' and 'input' keys
@@ -188,13 +189,11 @@ def handler(job: Dict[str, Any]) -> Dict[str, Any]:
         if not vps_url:
             return {"status": "error", "error": "vps_websocket_url required"}
         
-        # Run async generation
-        result = asyncio.run(
-            run_dream_generation(
-                vps_websocket_url=vps_url,
-                auth_token=auth_token,
-                initial_state=state,
-            )
+        # Already in async context - just await directly
+        result = await run_dream_generation(
+            vps_websocket_url=vps_url,
+            auth_token=auth_token,
+            initial_state=state,
         )
         
         return result
