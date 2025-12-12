@@ -1,0 +1,111 @@
+# Dream Window Cloud Configuration
+# ================================
+# This config is used when running on RunPod Serverless.
+# It overrides values from config.yaml for cloud-optimized settings.
+#
+# To use: Set CONFIG_PATH=/app/backend/config.cloud.yaml in environment
+# Or: The runpod_handler will merge these settings automatically.
+
+system:
+  comfyui_url: "http://127.0.0.1:8188"
+  output_dir: "/app/output"
+  cache_dir: "/app/cache"
+  seed_dir: "/app/seeds"
+  log_dir: "/app/logs"
+  gpu_id: 0
+  log_level: "INFO"
+
+generation:
+  use_async_orchestrator: true
+  model: "sd15"
+  
+  # Cloud resolution - higher for web viewing
+  resolution: [1024, 512]
+  
+  mode: "hybrid"
+  
+  sd:
+    # Faster steps for cloud - balance speed vs quality
+    steps: 8                # Slightly fewer steps for faster generation
+    cfg_scale: 6.0
+    sampler: "euler"
+    scheduler: "karras"
+  
+  hybrid:
+    # More interpolation frames for smoother streaming
+    interpolation_frames: 12
+    
+    # Lower denoise for more coherent evolution
+    denoise_strength: 0.18
+    
+    # Interpolation settings
+    interp_lerp_weight: 0.5
+    interp_method: "slerp"
+    
+    # Cache injection for variety
+    cache_injection_enabled: true
+    cache_injection_chance: 0.15
+    cache_injection_blend: 0.75
+    
+    # Collapse detection
+    collapse_detection_enabled: true
+    collapse_color_threshold: 0.15
+    collapse_struct_threshold: 0.08
+
+# Display settings  
+display:
+  target_fps: 3.5
+  buffer_target_seconds: 30.0
+  min_buffer_seconds: 10.0
+  auto_cleanup: true
+
+# Cloud mode - always enabled for this config
+cloud:
+  enabled: true
+  
+  # VPS connection (overridden by environment variables)
+  vps_websocket_url: "wss://aetherawi.red/ws/gpu"
+  # auth_token is read from DREAM_GEN_AUTH_TOKEN env var
+  
+  # Frame pushing
+  frame_push:
+    format: "webp"
+    quality: 85
+    include_interpolations: true
+  
+  # State persistence
+  state_sync:
+    interval_keyframes: 10
+    push_on_shutdown: true
+  
+  # Resolution override for cloud
+  resolution_override: [1024, 512]
+  
+  # Connection settings
+  connection:
+    heartbeat_interval: 30
+    reconnect_delay: 5
+    max_reconnect_attempts: 10
+
+# Cache settings
+cache:
+  max_entries: 100           # Larger cache for more variety
+  min_entries_for_injection: 10
+  
+  injection:
+    mode: "dissimilar"
+    blend_weight: 0.75
+    recent_tracking: 5
+  
+  similarity:
+    method: "dual_metric"
+    color_threshold: 1.92
+    struct_threshold: 0.80
+    logic: "any"
+
+# Worker queue sizes (larger for cloud GPU)
+workers:
+  keyframe_queue_size: 8
+  interpolation_queue_size: 15
+  cache_queue_size: 30
+

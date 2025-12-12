@@ -152,7 +152,15 @@ async def run_dream_generation(
     try:
         # Initialize controller with cloud mode
         logger.info("Initializing DreamController...")
-        controller = DreamController(config_path="backend/config.yaml")
+        # Use cloud config if available, otherwise fall back to default
+        config_path = os.environ.get("CONFIG_PATH", "backend/config.cloud.yaml")
+        if not Path(config_path).exists():
+            config_path = "backend/config.yaml"
+            logger.info(f"Cloud config not found, using default: {config_path}")
+        else:
+            logger.info(f"Using cloud config: {config_path}")
+        
+        controller = DreamController(config_path=config_path)
         
         # Cloud mode should already be enabled via config, but ensure it
         if not controller.cloud_enabled:
