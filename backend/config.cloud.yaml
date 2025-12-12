@@ -44,10 +44,11 @@ generation:
     # - Production FPS: 16 / 1.2 = ~13 FPS theoretical
     # - Target 7 FPS display leaves headroom for variance
     
-    # Increased from 10 to 15 - fills GPU idle time during keyframe gen
+    # 15 interp frames with VRAM fix (torch.cuda.empty_cache) should be stable
+    # VRAM starvation was caused by not releasing reserved memory, not frame count
     interpolation_frames: 15
     
-    # Target 7 FPS display rate (balanced with production capacity)
+    # Target 7 FPS display rate
     target_interpolation_fps: 7.0
     
     # Denoise strength for keyframes
@@ -132,9 +133,9 @@ display:
   # - Production: ~13 FPS theoretical
   # - Display: 7 FPS target
   # - Headroom: ~6 FPS buffer building rate
-  # - 45s buffer = 315 frames at 7 FPS = ~24s to fill from empty
-  buffer_target_seconds: 45.0       # Reduced from 60s - faster startup
-  min_buffer_seconds: 8.0           # Reduced from 10s - faster initial playback
+  # Larger buffer for stability and recovery headroom
+  buffer_target_seconds: 60.0       # 60 seconds of buffer (target)
+  min_buffer_seconds: 10.0          # 10 seconds minimum before playback starts
   
   cleanup_displayed_frames: true
   max_output_frames: 400            # Increased for higher FPS

@@ -423,11 +423,9 @@ class AsyncGenerationOrchestrator:
                 self.current_image_path = kf_path
                 self.current_keyframe_num = kf_num
                 
-                # === Cleanup old keyframes ===
-                # Keep last 2 keyframes for retry capability, delete older ones
-                # This is safe because keyframe N-1 is no longer needed as source
-                # once keyframe N is successfully generated
-                await self._cleanup_old_keyframes(kf_num)
+                # NOTE: Keyframe cleanup is now handled by display_selector after display
+                # This is safer because frames are only deleted AFTER they've been shown
+                # (Previously orchestrator cleanup caused race conditions with display)
                 
                 # Mark task done
                 self.keyframe_worker.result_queue.task_done()
