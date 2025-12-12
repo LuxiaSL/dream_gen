@@ -77,16 +77,13 @@ RUN echo "Downloading SD 1.5 model (~4GB, this will take a few minutes)..." \
     && echo "Model downloaded successfully!" \
     && ls -lh models/checkpoints/
 
-# ==================== Dream Gen Stage ====================
-FROM models AS dreamgen
+# ==================== Dependencies Stage ====================
+# Install all pip packages BEFORE copying code (better caching)
+FROM models AS dependencies
 
 WORKDIR /app
 
-# Copy dream_gen backend
-COPY backend/ /app/backend/
-COPY pyproject.toml /app/
-
-# Install dream_gen dependencies
+# Install dream_gen dependencies (cached unless requirements change)
 RUN pip install --no-cache-dir \
     websockets \
     msgpack \
@@ -94,10 +91,7 @@ RUN pip install --no-cache-dir \
     numpy \
     pyyaml \
     aiohttp \
-    runpod
-
-# Install additional cloud dependencies
-RUN pip install --no-cache-dir \
+    runpod \
     imagehash \
     scikit-image \
     diffusers \
@@ -106,7 +100,13 @@ RUN pip install --no-cache-dir \
 # Create directories
 RUN mkdir -p /app/output /app/logs /app/state /app/seeds
 
-# Copy seed images
+# ==================== Dream Gen Stage ====================
+# Only this stage rebuilds when code changes!
+FROM dependencies AS dreamgen
+
+# Copy dream_gen backend (this is the only layer that changes frequently)
+COPY backend/ /app/backend/
+COPY pyproject.toml /app/
 COPY seeds/ /app/seeds/
 
 # Set ownership
