@@ -170,10 +170,10 @@ RunPod's Flashboot pre-loads Docker images for faster cold starts:
 │  │  Shared: Jinja templates, static assets, logging                 │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────┘
-                              │
+                                    │
             WebSocket (GPU→VPS) │  Binary frames + control messages
                               │
-                              ▼
+                                    ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                    RunPod Serverless Worker                             │
 │                                                                         │

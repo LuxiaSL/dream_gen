@@ -16,7 +16,8 @@
 #   docker push <your-registry>/dream-window:cloud
 
 # ==================== Base Stage ====================
-FROM nvidia/cuda:12.1-runtime-ubuntu22.04 AS base
+# Using CUDA 12.1.0 runtime (full version required)
+FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04 AS base
 
 # Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
@@ -61,23 +62,20 @@ RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://
 # Create model directories
 RUN mkdir -p models/checkpoints models/vae models/loras models/embeddings
 
+# Install FSampler custom node for faster sampling
+# https://github.com/obisin/ComfyUI-FSampler
+RUN git clone https://github.com/obisin/ComfyUI-FSampler.git custom_nodes/ComfyUI-FSampler
+
 # ==================== Model Download Stage ====================
 FROM comfyui AS models
 
-# Download SD 1.5 model (or use a smaller model for testing)
-# Note: For production, consider using a pre-downloaded model volume
-ARG HF_TOKEN=""
-
-# Download SD 1.5 checkpoint (dreamshaper for variety)
-# Using wget with HuggingFace direct download
-RUN if [ -n "$HF_TOKEN" ]; then \
-        wget -q --header="Authorization: Bearer $HF_TOKEN" \
-        -O models/checkpoints/dreamshaper_8.safetensors \
-        "https://huggingface.co/Lykon/dreamshaper-8/resolve/main/dreamshaper_8.safetensors"; \
-    else \
-        echo "No HF_TOKEN provided, skipping model download"; \
-        echo "Models will need to be mounted at runtime"; \
-    fi
+# Download SD 1.5 model - this is a PUBLIC model, no token needed!
+# Using the official Comfy-Org archive for reliability
+RUN echo "Downloading SD 1.5 model (~4GB, this will take a few minutes)..." \
+    && wget -q --show-progress -O models/checkpoints/v1-5-pruned-emaonly.safetensors \
+        "https://huggingface.co/Comfy-Org/stable-diffusion-v1-5-archive/resolve/main/v1-5-pruned-emaonly.safetensors" \
+    && echo "Model downloaded successfully!" \
+    && ls -lh models/checkpoints/
 
 # ==================== Dream Gen Stage ====================
 FROM models AS dreamgen
@@ -108,8 +106,8 @@ RUN pip install --no-cache-dir \
 # Create directories
 RUN mkdir -p /app/output /app/logs /app/state /app/seeds
 
-# Copy seed images (if any)
-COPY seeds/ /app/seeds/ 2>/dev/null || true
+# Copy seed images
+COPY seeds/ /app/seeds/
 
 # Set ownership
 RUN chown -R dreamgen:dreamgen /app
@@ -121,7 +119,9 @@ USER dreamgen
 
 # Environment variables
 ENV COMFYUI_PATH=/app/ComfyUI
-ENV PYTHONPATH=/app
+# Include both /app and /app/backend in PYTHONPATH
+# /app for backend.cloud.xxx imports, /app/backend for core.xxx imports
+ENV PYTHONPATH=/app:/app/backend
 ENV LOG_LEVEL=INFO
 
 # Health check

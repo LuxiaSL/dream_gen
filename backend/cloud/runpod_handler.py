@@ -58,9 +58,10 @@ async def run_dream_generation(
         Final status dictionary
     """
     # Import here to avoid loading heavy dependencies before needed
-    from core.dream_controller import DreamController
-    from cloud import VPSWebSocketClient, CloudFramePusher, CloudStateSync
-    from cloud.state_sync import deserialize_state
+    # Use absolute imports from /app (PYTHONPATH root)
+    from backend.core.dream_controller import DreamController
+    from backend.cloud import VPSWebSocketClient, CloudFramePusher, CloudStateSync
+    from backend.cloud.state_sync import deserialize_state
     
     logger.info("=" * 60)
     logger.info("DREAM WINDOW RUNPOD HANDLER STARTING")

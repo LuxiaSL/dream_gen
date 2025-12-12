@@ -112,182 +112,113 @@ You should see colored test frames with frame numbers appearing in the browser!
 
 ## Part 1: VPS Setup (æthera)
 
-### 1.1 Deploy Updated æthera
+Your setup uses **Docker + GitHub Actions** for deployment. Most changes are automatic!
 
-SSH into your VPS and deploy the updated æthera with the Dreams module:
+### 1.1 What's Already Handled
 
-```bash
-# Connect to VPS
-ssh your-user@your-vps-ip
+When you push to `main`, the GitHub workflow automatically:
+1. Pulls latest code to `/opt/aethera`
+2. Builds Docker image with Dreams module included
+3. Restarts container with your `.env` file
 
-# Navigate to project
-cd /var/www/aethera  # or your deployment path
+**No manual deployment needed!** Just push to main.
 
-# Pull latest code
-git pull origin main
+### 1.2 Configure Environment Variables (One-Time Setup)
 
-# Install dependencies (if using uv)
-uv sync
-
-# Or with pip
-pip install -r requirements.txt
-```
-
-### 1.2 Configure Environment Variables
-
-Add the following to your `.env` file on the VPS:
+SSH to your VPS and add Dreams-specific variables to `/opt/aethera/.env`:
 
 ```bash
+# SSH to VPS
+ssh your-user@your-vps
+
+# Edit .env file
+nano /opt/aethera/.env
+
+# Add these lines (keep existing vars like AETHERA_TRIPCODE_SALT):
+
 # Generate a secure shared secret (32+ characters)
-DREAM_GEN_AUTH_TOKEN="your-super-secret-token-here-make-it-long-and-random"
+# Use: python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+DREAM_GEN_AUTH_TOKEN="your-super-secret-token-here"
 
-# RunPod API Key (get from RunPod dashboard)
+# RunPod API Key (get from RunPod dashboard → Settings → API Keys)
 RUNPOD_API_KEY="your-runpod-api-key"
 
-# RunPod Endpoint ID (will get after creating endpoint)
+# RunPod Endpoint ID (get after creating endpoint in Part 4)
 RUNPOD_ENDPOINT_ID="your-endpoint-id"
 ```
 
 **Generating a secure token:**
 
 ```bash
-# Option 1: Using Python
+# On your local machine or VPS
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"
-
-# Option 2: Using openssl
-openssl rand -base64 32
+# Example output: kB7xV2mN9pQ4wR1tY8uZ3cX6fA0hJ5sL
 ```
 
-### 1.3 Configure Reverse Proxy (Nginx or Caddy)
+**Important:** Save this token! You'll need the same value for RunPod.
 
-Your VPS needs a reverse proxy for:
-- SSL termination (HTTPS)
-- WebSocket proxying
+### 1.3 Caddy Configuration (Already Set Up!)
 
-**First, check what you're using:**
+You're using Caddy as your reverse proxy. **Good news:** Caddy handles WebSockets automatically!
+
+**Verify your Caddyfile includes aetherawi.red:**
 
 ```bash
-# Check for nginx
-which nginx && echo "Nginx is installed"
+# SSH to VPS
+ssh your-user@your-vps
 
-# Check for caddy
-which caddy && echo "Caddy is installed"
-
-# Check what's running
-sudo ss -tlnp | grep -E ':80|:443'
+# Check Caddy config
+sudo cat /etc/caddy/Caddyfile
 ```
 
-#### Option A: Nginx Configuration
-
-If you have Nginx, update the config for WebSocket support:
-
-```nginx
-# /etc/nginx/sites-available/aethera (or your config file)
-
-server {
-    listen 443 ssl http2;
-    server_name aetherawi.red;
-    
-    # SSL config (managed by certbot usually)
-    ssl_certificate /etc/letsencrypt/live/aetherawi.red/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/aetherawi.red/privkey.pem;
-    
-    # Regular HTTP routes
-    location / {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-    
-    # WebSocket routes (CRITICAL for Dreams!)
-    location /ws/ {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_read_timeout 86400;  # 24 hours for long-lived connections
-    }
-}
-```
-
-Test and reload:
-
-```bash
-sudo nginx -t
-sudo systemctl reload nginx
-```
-
-#### Option B: Caddy Configuration
-
-If you're using Caddy (simpler, auto-SSL):
+It should have something like:
 
 ```caddyfile
-# /etc/caddy/Caddyfile
-
 aetherawi.red {
     reverse_proxy localhost:8000
 }
 ```
 
-Caddy handles WebSockets automatically! Reload:
+**That's it!** Caddy will:
+- ✅ Auto-manage SSL certificates
+- ✅ Proxy WebSocket connections automatically
+- ✅ Handle `/ws/dreams` and `/ws/gpu` without extra config
+
+If you need to reload after any changes:
 
 ```bash
 sudo systemctl reload caddy
 ```
 
-#### Option C: No Reverse Proxy Yet?
+### 1.4 Deploy the Changes
 
-If you're running aethera directly without a reverse proxy:
+**Option A: Push to GitHub (Recommended)**
+
+The GitHub workflow will automatically deploy:
 
 ```bash
-# Check your current setup
-docker ps | grep aethera
-# If it shows "-p 80:8000" or "-p 443:8000", you're running directly
-
-# For production, you should add a reverse proxy for:
-# - SSL/HTTPS support
-# - WebSocket handling
-# - Better security
+# On your local machine
+cd aethera-mono/aethera
+git add .
+git commit -m "feat: add Dreams module environment config"
+git push origin main
+# GitHub Actions will deploy automatically!
 ```
 
-**Quick Nginx setup:**
+**Option B: Manual restart on VPS**
+
+If you just added env vars and want to restart:
 
 ```bash
-# Install nginx
-sudo apt update && sudo apt install nginx -y
+# SSH to VPS
+ssh your-user@your-vps
 
-# Install certbot for SSL
-sudo apt install certbot python3-certbot-nginx -y
+# Restart container to pick up new .env
+cd /opt/aethera
+docker restart aethera
 
-# Create config
-sudo nano /etc/nginx/sites-available/aethera
-# (paste the nginx config above)
-
-# Enable site
-sudo ln -s /etc/nginx/sites-available/aethera /etc/nginx/sites-enabled/
-
-# Get SSL cert
-sudo certbot --nginx -d aetherawi.red
-
-# Restart
-sudo systemctl restart nginx
-```
-
-Then update your Docker run command to use `127.0.0.1:8000` instead of `0.0.0.0:80`.
-
-### 1.4 Restart æthera
-
-```bash
-# If using systemd
-sudo systemctl restart aethera
-
-# Or if running directly
-pkill -f "aethera.main"
-cd /var/www/aethera && uv run python -m aethera.main &
+# Check it's running
+docker logs aethera --tail 20
 ```
 
 ### 1.5 Verify VPS is Ready
