@@ -65,7 +65,8 @@ class InterpolationWorker:
         vae_access,  # SharedVAEAccess instance
         frame_buffer,  # FrameBuffer instance
         config: Dict[str, Any],
-        max_queue_size: int = 10
+        max_queue_size: int = 10,
+        keyframe_worker=None  # Optional: KeyframeWorker for GPU coordination
     ):
         """
         Initialize interpolation worker
@@ -75,10 +76,14 @@ class InterpolationWorker:
             frame_buffer: FrameBuffer instance (for output)
             config: Configuration dictionary
             max_queue_size: Maximum pending pairs (backpressure control)
+            keyframe_worker: Optional KeyframeWorker instance - if provided, VAE decode
+                            will wait for keyframe generation to complete to avoid
+                            GPU resource contention
         """
         self.vae_access = vae_access
         self.frame_buffer = frame_buffer
         self.config = config
+        self.keyframe_worker = keyframe_worker  # For GPU coordination
         
         # Queue
         self.pair_queue = asyncio.Queue(maxsize=max_queue_size)
@@ -289,6 +294,17 @@ class InterpolationWorker:
         # === PHASE 2: Decode ALL latents in TRUE BATCH (single GPU call!) ===
         logger.debug(f"  Phase 2: Batch decoding {len(latents_and_specs)} frames...")
         t_decode_start = time.perf_counter()
+        
+        # === GPU COORDINATION: Wait for keyframe generation to complete ===
+        # ComfyUI and VAE batch decode can't run simultaneously without GPU contention
+        # This prevents the KSampler from getting starved during inference
+        if self.keyframe_worker and self.keyframe_worker.processing:
+            logger.info("  [GPU] Waiting for keyframe generation before VAE decode...")
+            wait_start = time.perf_counter()
+            while self.keyframe_worker.processing:
+                await asyncio.sleep(0.1)  # Poll every 100ms
+            wait_time = time.perf_counter() - wait_start
+            logger.info(f"  [GPU] Keyframe complete, waited {wait_time:.2f}s for GPU")
         
         # Extract just the latents for batch decode
         latent_list = [latent for latent, _, _ in latents_and_specs]

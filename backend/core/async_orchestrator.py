@@ -116,7 +116,8 @@ class AsyncGenerationOrchestrator:
             vae_access=vae_access,
             frame_buffer=frame_buffer,
             config=config,
-            max_queue_size=10
+            max_queue_size=10,
+            keyframe_worker=self.keyframe_worker  # For GPU coordination
         )
         
         self.cache_worker = CacheAnalysisWorker(
