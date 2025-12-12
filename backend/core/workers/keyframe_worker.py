@@ -179,11 +179,27 @@ class KeyframeWorker:
                     start_time = time.time()
                     
                     try:
-                        keyframe_path = await self.generator.generate_from_image_async(
-                            image_path=current_image,
-                            prompt=prompt,
-                            denoise=denoise
-                        )
+                        # Wrap generation in timeout to prevent infinite hangs
+                        # ComfyUI sometimes hangs on WebSocket wait
+                        generation_timeout = self.config.get('performance', {}).get('generation_timeout', 180)
+                        
+                        try:
+                            keyframe_path = await asyncio.wait_for(
+                                self.generator.generate_from_image_async(
+                                    image_path=current_image,
+                                    prompt=prompt,
+                                    denoise=denoise
+                                ),
+                                timeout=generation_timeout
+                            )
+                        except asyncio.TimeoutError:
+                            logger.error(
+                                f"Keyframe {keyframe_num} generation timed out after {generation_timeout}s "
+                                f"(attempt {attempt + 1}/{self.MAX_RETRIES})"
+                            )
+                            keyframe_path = None
+                            last_error = f"Generation timeout after {generation_timeout}s"
+                            continue  # Try again
                         
                         elapsed = time.time() - start_time
                         total_elapsed += elapsed
