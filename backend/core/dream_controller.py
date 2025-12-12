@@ -1006,9 +1006,13 @@ class DreamController:
                                    f"INT: {gen_stats['interpolations_generated']} | "
                                    f"Displayed: {display_stats['frames_displayed']}")
                 
-                # Update at 10 FPS (100ms) - faster than display rate (4 FPS = 250ms)
-                # This ensures Rainmeter always has fresh data to display
-                await asyncio.sleep(0.1)
+                # Update interval:
+                # - Cloud mode: 1s (only for logs, no Rainmeter to update)
+                # - Desktop mode: 100ms (10 FPS for smooth Rainmeter updates)
+                if self.cloud_enabled:
+                    await asyncio.sleep(1.0)  # Less CPU churn in cloud
+                else:
+                    await asyncio.sleep(0.1)  # Fast updates for Rainmeter
                 
             except asyncio.CancelledError:
                 break

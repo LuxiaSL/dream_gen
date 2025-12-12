@@ -115,10 +115,19 @@ class CloudFramePusher:
                 # Track timing
                 self._record_timing(total_time)
                 
+                # Log frame push timing (always log for profiling)
                 logger.debug(
                     f"Pushed frame {frame_number}: {len(frame_bytes)/1024:.1f}KB "
                     f"(encode: {encode_time*1000:.1f}ms, push: {push_time*1000:.1f}ms)"
                 )
+                
+                # Log slow pushes for performance debugging
+                if total_time > 0.1:  # > 100ms is concerning
+                    logger.info(
+                        f"[PERF] Slow frame push {frame_number}: {total_time*1000:.1f}ms total "
+                        f"(encode={encode_time*1000:.1f}ms, network={push_time*1000:.1f}ms, "
+                        f"size={len(frame_bytes)/1024:.1f}KB)"
+                    )
             
             return success
         

@@ -231,11 +231,20 @@ class VPSWebSocketClient:
             return False
         
         try:
+            t_start = time.time()
             message = bytes([msg_type]) + payload
             await self._websocket.send(message)
+            send_time_ms = (time.time() - t_start) * 1000
             
             self.stats.messages_sent += 1
             self.stats.bytes_sent += len(message)
+            
+            # Log slow sends (potential network issue)
+            if send_time_ms > 50:
+                logger.warning(
+                    f"[PERF] Slow WS send: {send_time_ms:.1f}ms for "
+                    f"{len(payload)/1024:.1f}KB (type={msg_type})"
+                )
             
             return True
         
