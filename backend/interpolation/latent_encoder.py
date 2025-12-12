@@ -379,7 +379,7 @@ class LatentEncoder:
     
     def decode_batch(self, latents: torch.Tensor) -> List[Image.Image]:
         """
-        Decode multiple latents to images
+        Decode multiple latents to images in a single GPU call
         
         Args:
             latents: Batched latent tensor (shape: [N, C, H, W])
@@ -392,9 +392,17 @@ class LatentEncoder:
             h, w = latents.shape[2] * 8, latents.shape[3] * 8
             return [Image.new('RGB', (w, h), color=(128, 128, 128)) for _ in range(latents.shape[0])]
         
-        # Decode batch
+        # Scale latents (diffusers VAE expects scaled latents)
+        scaled_latents = latents / self.vae_scale_factor
+        
+        # Decode batch - VAE returns DecoderOutput, extract .sample
         with torch.no_grad():
-            image_tensors = self.vae.decode(latents)
+            decoder_output = self.vae.decode(scaled_latents)
+            # Handle both tensor and DecoderOutput return types
+            if hasattr(decoder_output, 'sample'):
+                image_tensors = decoder_output.sample
+            else:
+                image_tensors = decoder_output
         
         # Convert to PIL Images
         images = []
