@@ -38,6 +38,61 @@ def setup_logging(log_level: str = "INFO") -> None:
     )
 
 
+async def start_comfyui() -> bool:
+    """
+    Start ComfyUI server and wait for it to be ready.
+    
+    Returns:
+        True if ComfyUI started successfully
+    """
+    import subprocess
+    import aiohttp
+    
+    comfyui_path = os.environ.get("COMFYUI_PATH", "/app/ComfyUI")
+    comfyui_port = 8188
+    startup_timeout = 120  # seconds
+    
+    logger.info(f"Starting ComfyUI from {comfyui_path}...")
+    
+    # Start ComfyUI in background
+    try:
+        process = subprocess.Popen(
+            ["python", "main.py", "--listen", "127.0.0.1", "--port", str(comfyui_port)],
+            cwd=comfyui_path,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        logger.info(f"ComfyUI process started (PID: {process.pid})")
+    except Exception as e:
+        logger.error(f"Failed to start ComfyUI: {e}")
+        return False
+    
+    # Wait for ComfyUI to be ready
+    health_url = f"http://127.0.0.1:{comfyui_port}/system_stats"
+    start_time = asyncio.get_event_loop().time()
+    
+    async with aiohttp.ClientSession() as session:
+        while True:
+            elapsed = asyncio.get_event_loop().time() - start_time
+            if elapsed > startup_timeout:
+                logger.error(f"ComfyUI failed to start within {startup_timeout}s")
+                process.terminate()
+                return False
+            
+            try:
+                async with session.get(health_url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    if resp.status == 200:
+                        logger.info(f"ComfyUI ready after {elapsed:.1f}s")
+                        return True
+            except Exception:
+                pass  # Still starting up
+            
+            await asyncio.sleep(2)
+            if int(elapsed) % 10 == 0:
+                logger.info(f"Waiting for ComfyUI... ({elapsed:.0f}s)")
+
+
 async def run_dream_generation(
     vps_websocket_url: str,
     auth_token: Optional[str] = None,
@@ -67,6 +122,20 @@ async def run_dream_generation(
     logger.info("DREAM WINDOW RUNPOD HANDLER STARTING")
     logger.info("=" * 60)
     logger.info(f"VPS WebSocket URL: {vps_websocket_url}")
+    
+    # Use auth token from param, or fall back to environment variable
+    if not auth_token:
+        auth_token = os.environ.get("DREAM_GEN_AUTH_TOKEN")
+        if auth_token:
+            logger.info("Using auth token from environment variable")
+    
+    logger.info(f"Auth token: {'set' if auth_token else 'NOT SET'}")
+    
+    # Step 1: Start ComfyUI server
+    logger.info("Step 1: Starting ComfyUI...")
+    if not await start_comfyui():
+        return {"status": "error", "error": "Failed to start ComfyUI"}
+    logger.info("ComfyUI is running!")
     
     # Override config for cloud mode
     config_overrides = {
@@ -182,12 +251,16 @@ async def handler(job: Dict[str, Any]) -> Dict[str, Any]:
     
     if job_type == "start" or job_type == "stream":
         # Main streaming job
-        vps_url = job_input.get("vps_websocket_url")
-        auth_token = job_input.get("auth_token")
+        # Get from job input, or fall back to environment variables
+        vps_url = job_input.get("vps_websocket_url") or os.environ.get("VPS_WEBSOCKET_URL")
+        auth_token = job_input.get("auth_token") or os.environ.get("DREAM_GEN_AUTH_TOKEN")
         state = job_input.get("state")
         
+        logger.info(f"VPS URL: {vps_url}")
+        logger.info(f"Auth token set: {bool(auth_token)}")
+        
         if not vps_url:
-            return {"status": "error", "error": "vps_websocket_url required"}
+            return {"status": "error", "error": "vps_websocket_url required (set VPS_WEBSOCKET_URL env var or provide in job input)"}
         
         # Already in async context - just await directly
         result = await run_dream_generation(
