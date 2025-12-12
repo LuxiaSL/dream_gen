@@ -1110,6 +1110,99 @@ class AsyncGenerationOrchestrator:
         logger.info(f"  Recovery complete. Next generation: KF{next_kf}")
         logger.warning(f"=== RECOVERY COMPLETE ===")
     
+    async def hard_reset(self) -> None:
+        """
+        Perform a complete system reset - nuclear option when all recovery fails.
+        
+        This clears all state and restarts generation from scratch using a seed image.
+        Called by display selector when multiple consecutive recoveries have failed.
+        
+        DOES NOT delete existing files - just resets internal state and restarts.
+        """
+        logger.error("=" * 60)
+        logger.error("HARD RESET - Restarting generation pipeline from scratch")
+        logger.error("=" * 60)
+        
+        try:
+            # === 1. Clear buffer state ===
+            logger.warning("  Clearing buffer...")
+            self.buffer.frames.clear()
+            self.buffer.next_sequence_num = 0
+            self.buffer.display_sequence_num = 0
+            self.keyframe_sequences.clear()
+            
+            # === 2. Reset orchestrator state ===
+            logger.warning("  Resetting orchestrator state...")
+            self.current_keyframe_num = 0
+            self.cache_injections = 0
+            
+            # === 3. Find a seed image to restart from ===
+            # Priority: 1) Recent keyframe on disk, 2) Seed directory, 3) Cache
+            restart_image = None
+            
+            # Try to find any existing keyframe
+            keyframe_dir = self.buffer.keyframe_dir if hasattr(self.buffer, 'keyframe_dir') else None
+            if keyframe_dir and keyframe_dir.exists():
+                keyframes = sorted(keyframe_dir.glob("keyframe_*.png"), reverse=True)
+                if keyframes:
+                    restart_image = keyframes[0]  # Most recent keyframe
+                    logger.warning(f"  Found restart image: {restart_image.name}")
+            
+            # Fallback to seed directory
+            if not restart_image:
+                seed_dir = Path(self.config['system'].get('seed_dir', 'seeds'))
+                if seed_dir.exists():
+                    seeds = list(seed_dir.glob("*.png")) + list(seed_dir.glob("*.jpg"))
+                    if seeds:
+                        import random
+                        restart_image = random.choice(seeds)
+                        logger.warning(f"  Using seed image: {restart_image.name}")
+            
+            if not restart_image:
+                logger.error("  No restart image found - cannot perform hard reset!")
+                return
+            
+            # === 4. Reinitialize generation ===
+            logger.warning(f"  Restarting from: {restart_image}")
+            self.current_image_path = restart_image
+            
+            # Register first keyframe
+            first_kf_seq = self.buffer.register_keyframe(1)
+            self.keyframe_sequences[1] = first_kf_seq
+            
+            # Mark it as ready (using the restart image)
+            self.buffer.mark_ready(first_kf_seq, restart_image)
+            
+            # Copy restart image to keyframe_001 for consistency
+            if keyframe_dir:
+                target_path = keyframe_dir / "keyframe_001.png"
+                if not target_path.exists() or restart_image != target_path:
+                    import shutil
+                    shutil.copy(str(restart_image), str(target_path))
+                    self.current_image_path = target_path
+            
+            self.current_keyframe_num = 1
+            
+            # Pre-register second keyframe cycle
+            interp_frames = self.config['generation']['hybrid']['interpolation_frames']
+            self.buffer.register_interpolations(1, 2, interp_frames)
+            second_kf_seq = self.buffer.register_keyframe(2)
+            self.keyframe_sequences[2] = second_kf_seq
+            
+            # Update interpolation worker's keyframe paths
+            if self.interpolation_worker:
+                self.interpolation_worker.keyframe_paths[1] = self.current_image_path
+            
+            logger.warning("=" * 60)
+            logger.warning("HARD RESET COMPLETE - Generation restarting")
+            logger.warning(f"  Restart image: {self.current_image_path.name}")
+            logger.warning(f"  First keyframe: seq {first_kf_seq}")
+            logger.warning(f"  Registered: {interp_frames} interps + KF2")
+            logger.warning("=" * 60)
+            
+        except Exception as e:
+            logger.error(f"Hard reset failed: {e}", exc_info=True)
+    
     def get_stats(self) -> Dict[str, Any]:
         """
         Get generation statistics including mode collapse metrics

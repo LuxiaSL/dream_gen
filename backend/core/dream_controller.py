@@ -237,14 +237,15 @@ class DreamController:
             # (frames are pushed directly via WebSocket, disk write is unnecessary)
             cloud_mode = self.config.get('cloud', {}).get('enabled', False)
             
-            # Create display selector
+            # Create display selector with hard reset callback
             self.display_selector = DisplayFrameSelector(
                 frame_buffer=self.frame_buffer,
                 output_dir=self.output_dir,
                 target_fps=target_fps,
                 min_buffer_seconds=min_buffer_seconds,
                 cleanup_displayed_frames=cleanup_enabled,
-                skip_disk_write=cloud_mode  # Skip disk I/O in cloud mode
+                skip_disk_write=cloud_mode,  # Skip disk I/O in cloud mode
+                on_hard_reset_callback=self._trigger_hard_reset  # Nuclear option
             )
             
             self.logger.info("[OK] Buffered frame system initialized")
@@ -934,6 +935,26 @@ class DreamController:
         self.logger.info("=" * 70)
         self.logger.info("BUFFERED HYBRID MODE STOPPED")
         self.logger.info("=" * 70)
+    
+    async def _trigger_hard_reset(self) -> None:
+        """
+        Nuclear option: Reset the entire generation pipeline when all recovery fails.
+        
+        Called by display selector when consecutive recovery attempts have all failed.
+        This restarts generation from scratch without killing the process.
+        """
+        self.logger.error("=" * 70)
+        self.logger.error("HARD RESET TRIGGERED BY DISPLAY SELECTOR")
+        self.logger.error("=" * 70)
+        
+        if self.generation_coordinator:
+            try:
+                await self.generation_coordinator.hard_reset()
+                self.logger.warning("Hard reset completed - generation should resume")
+            except Exception as e:
+                self.logger.error(f"Hard reset failed: {e}", exc_info=True)
+        else:
+            self.logger.error("No generation coordinator available for hard reset!")
     
     async def _update_buffer_status_loop(self) -> None:
         """

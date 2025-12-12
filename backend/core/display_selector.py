@@ -52,7 +52,8 @@ class DisplayFrameSelector:
         min_buffer_seconds: float = 30.0,
         cleanup_displayed_frames: bool = False,
         on_frame_callback: Optional[Callable[[Image.Image, int, bool], Awaitable[None]]] = None,
-        skip_disk_write: bool = False
+        skip_disk_write: bool = False,
+        on_hard_reset_callback: Optional[Callable[[], Awaitable[None]]] = None
     ):
         """
         Initialize display frame selector
@@ -66,6 +67,7 @@ class DisplayFrameSelector:
             on_frame_callback: Optional async callback(image, frame_num, is_keyframe) 
                                called for each displayed frame (e.g., for cloud push)
             skip_disk_write: If True, skip writing current_frame.png (cloud mode optimization)
+            on_hard_reset_callback: Optional async callback triggered when recovery completely fails
         """
         self.buffer = frame_buffer
         self.output_dir = Path(output_dir)
@@ -89,12 +91,15 @@ class DisplayFrameSelector:
         self.skipped_frames = 0
         self.last_frame_time = 0
         self._depletion_count = 0
+        self._consecutive_recovery_failures = 0
+        self._max_recovery_failures = 3  # Trigger hard reset after 3 failed recoveries
         
         # Output path
         self.current_frame_path = self.output_dir / "current_frame.png"
         
-        # Optional callback for cloud push or other processing
+        # Optional callbacks
         self.on_frame_callback = on_frame_callback
+        self.on_hard_reset_callback = on_hard_reset_callback
         
         logger.info("DisplayFrameSelector initialized")
         logger.info(f"  Target FPS: {target_fps}")
@@ -484,6 +489,7 @@ class DisplayFrameSelector:
                 self.skipped_frames += skipped
             
             logger.warning(f"Buffer recovery complete - now at seq {latest_seq}")
+            self._consecutive_recovery_failures = 0  # Reset on successful recovery
         else:
             # No ready frames at all - check if buffer has any registered frames
             if self.buffer.frames:
@@ -496,10 +502,35 @@ class DisplayFrameSelector:
                     # Jump to the earliest pending and wait
                     self.buffer.display_sequence_num = earliest[0]
                     logger.warning(f"Recovery: Jumping to seq {earliest[0]} to wait for generation")
+                    self._consecutive_recovery_failures = 0
                 else:
-                    logger.error("No ready or pending frames - buffer is completely empty!")
+                    self._consecutive_recovery_failures += 1
+                    logger.error(f"No ready or pending frames - recovery failed ({self._consecutive_recovery_failures}/{self._max_recovery_failures})")
+                    await self._check_hard_reset()
             else:
-                logger.error("No frames in buffer at all - waiting for generation to start")
+                self._consecutive_recovery_failures += 1
+                logger.error(f"No frames in buffer at all - recovery failed ({self._consecutive_recovery_failures}/{self._max_recovery_failures})")
+                await self._check_hard_reset()
+    
+    async def _check_hard_reset(self) -> None:
+        """
+        Check if we should trigger a hard reset after too many failed recoveries.
+        """
+        if self._consecutive_recovery_failures >= self._max_recovery_failures:
+            logger.error("=" * 60)
+            logger.error("HARD RESET TRIGGERED - Too many consecutive recovery failures!")
+            logger.error("=" * 60)
+            
+            if self.on_hard_reset_callback:
+                try:
+                    await self.on_hard_reset_callback()
+                    self._consecutive_recovery_failures = 0
+                    self._depletion_count = 0
+                    logger.warning("Hard reset callback completed - system should restart")
+                except Exception as e:
+                    logger.error(f"Hard reset callback failed: {e}", exc_info=True)
+            else:
+                logger.warning("No hard reset callback configured - waiting for manual intervention")
     
     def get_stats(self) -> Dict:
         """
