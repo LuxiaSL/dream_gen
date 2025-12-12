@@ -199,6 +199,12 @@ class KeyframeWorker:
                             )
                             keyframe_path = None
                             last_error = f"Generation timeout after {generation_timeout}s"
+                            
+                            # Wait before retry (exponential backoff)
+                            if attempt < self.MAX_RETRIES - 1:
+                                retry_delay = min(5.0 * (2 ** attempt), 30.0)
+                                logger.info(f"Waiting {retry_delay:.0f}s before retry...")
+                                await asyncio.sleep(retry_delay)
                             continue  # Try again
                         
                         elapsed = time.time() - start_time
