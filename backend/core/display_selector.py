@@ -184,7 +184,24 @@ class DisplayFrameSelector:
             return False
         
         if not frame_spec.file_path or not frame_spec.file_path.exists():
-            logger.error(f"Frame file missing: {frame_spec.file_path}")
+            # Frame file is missing - this is a serious error
+            # Skip this frame and move to the next one to avoid tight error loop
+            logger.error(f"Frame file missing: {frame_spec.file_path} - SKIPPING to next frame")
+            
+            # Mark as displayed (even though we couldn't show it) to advance
+            self.buffer.mark_displayed(frame_spec.sequence_num)
+            self.buffer.advance_display()
+            self.skipped_frames += 1
+            
+            # Rate limit error logging to avoid log spam
+            if not hasattr(self, '_last_missing_frame_log'):
+                self._last_missing_frame_log = 0
+            import time
+            now = time.time()
+            if now - self._last_missing_frame_log > 1.0:  # Log at most once per second
+                logger.error(f"Missing frame files detected - skipped {self.skipped_frames} frames total")
+                self._last_missing_frame_log = now
+            
             return False
         
         try:

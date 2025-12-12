@@ -963,8 +963,9 @@ class AsyncGenerationOrchestrator:
         """
         Clean up old keyframe files that are no longer needed.
         
-        Keeps the last `keep_count` keyframes for retry capability.
-        Called after a keyframe is successfully generated.
+        Only deletes keyframes that:
+        1. Are older than (current - keep_count) for generation
+        2. Have ALREADY BEEN DISPLAYED (critical for safety!)
         
         Args:
             current_kf_num: The keyframe that was just successfully generated
@@ -975,8 +976,24 @@ class AsyncGenerationOrchestrator:
             if not keyframe_dir or not keyframe_dir.exists():
                 return
             
-            # Delete keyframes older than (current - keep_count)
-            min_to_keep = current_kf_num - keep_count
+            # Safety: Never delete keyframes that haven't been displayed yet!
+            # Find the keyframe number that corresponds to the current display position
+            current_display_seq = self.buffer.display_sequence_num
+            
+            # Find the highest keyframe number that has been displayed
+            # (displayed means display_sequence_num is past it)
+            max_displayed_kf = 0
+            for kf_num, seq_num in self.keyframe_sequences.items():
+                if seq_num < current_display_seq:
+                    max_displayed_kf = max(max_displayed_kf, kf_num)
+            
+            # Calculate safe minimum based on BOTH generation and display
+            min_to_keep_generation = current_kf_num - keep_count
+            min_to_keep_display = max_displayed_kf - keep_count
+            
+            # Use the MORE CONSERVATIVE (higher) minimum
+            min_to_keep = min(min_to_keep_generation, min_to_keep_display)
+            
             if min_to_keep <= 0:
                 return  # Nothing to clean up yet
             
@@ -987,7 +1004,9 @@ class AsyncGenerationOrchestrator:
                     kf_num_str = kf_file.stem.replace("keyframe_", "")
                     kf_num = int(kf_num_str)
                     
-                    if kf_num < min_to_keep:
+                    # Double safety: Also check if this keyframe's sequence is past display
+                    kf_seq = self.keyframe_sequences.get(kf_num, float('inf'))
+                    if kf_num < min_to_keep and kf_seq < current_display_seq:
                         kf_file.unlink()
                         deleted_count += 1
                         logger.debug(f"Cleaned up old keyframe: {kf_file.name}")
@@ -995,7 +1014,7 @@ class AsyncGenerationOrchestrator:
                     logger.debug(f"Could not cleanup {kf_file.name}: {e}")
             
             if deleted_count > 0:
-                logger.debug(f"Cleaned up {deleted_count} old keyframe(s) (keeping last {keep_count})")
+                logger.debug(f"Cleaned up {deleted_count} old keyframe(s) (keeping >= KF{min_to_keep})")
                 
         except Exception as e:
             # Non-fatal - just log and continue
