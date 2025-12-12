@@ -121,6 +121,25 @@ async def run_dream_generation(
     logger.info("=" * 60)
     logger.info("DREAM WINDOW RUNPOD HANDLER STARTING")
     logger.info("=" * 60)
+    
+    # Log GPU info for performance debugging
+    try:
+        import torch
+        if torch.cuda.is_available():
+            gpu_name = torch.cuda.get_device_name(0)
+            gpu_mem_total = torch.cuda.get_device_properties(0).total_memory / 1024**3
+            gpu_mem_free = (torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated(0)) / 1024**3
+            compute_cap = torch.cuda.get_device_capability(0)
+            logger.info(f"GPU: {gpu_name}")
+            logger.info(f"  VRAM: {gpu_mem_total:.1f}GB total, {gpu_mem_free:.1f}GB free")
+            logger.info(f"  Compute capability: {compute_cap[0]}.{compute_cap[1]}")
+            logger.info(f"  CUDA version: {torch.version.cuda}")
+            logger.info(f"  cuDNN: {torch.backends.cudnn.version() if torch.backends.cudnn.is_available() else 'N/A'}")
+        else:
+            logger.warning("CUDA not available!")
+    except Exception as e:
+        logger.warning(f"Failed to get GPU info: {e}")
+    
     logger.info(f"VPS WebSocket URL: {vps_websocket_url}")
     
     # Use auth token from param, or fall back to environment variable

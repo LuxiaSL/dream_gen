@@ -303,14 +303,22 @@ class InterpolationWorker:
                 decoded_images.append((image, frame_spec, sequence_num))
         except Exception as e:
             logger.error(f"Batch decode failed, falling back to sequential: {e}", exc_info=True)
-            # Fallback to sequential decode
+            # Fallback to sequential decode with per-frame timing
             decoded_images = []
-            for latent, frame_spec, sequence_num in latents_and_specs:
+            decode_times = []
+            for i, (latent, frame_spec, sequence_num) in enumerate(latents_and_specs):
                 try:
+                    t_single = time.perf_counter()
                     image = await self.vae_access.decode_async(latent, upscale_to_target=True)
+                    decode_times.append(time.perf_counter() - t_single)
                     decoded_images.append((image, frame_spec, sequence_num))
                 except Exception as e2:
                     logger.error(f"Failed to decode latent: {e2}", exc_info=True)
+            
+            # Log sequential decode performance
+            if decode_times:
+                avg_time = sum(decode_times) / len(decode_times) * 1000
+                logger.info(f"[PERF] Sequential decode: {len(decode_times)} frames, avg {avg_time:.1f}ms/frame")
         
         timings['decode_all'] = time.perf_counter() - t_decode_start
         

@@ -279,20 +279,46 @@ class LatentEncoder:
         4. Denormalize from [-1, 1] to [0, 255]
         5. Convert to PIL Image
         """
+        import time
+        t_start = time.perf_counter()
+        
         if self.vae is None:
             logger.warning("VAE not loaded - returning mock image")
             # Fallback: return mock image with correct dimensions
             h, w = latent.shape[2] * 8, latent.shape[3] * 8
             return Image.new('RGB', (w, h), color=(128, 128, 128))
         
+        # Check latent device
+        latent_device = latent.device
+        
         # Unscale latent (reverse the encoding scaling)
         latent = latent / self.vae_scale_factor
+        
+        t_pre = time.perf_counter()
         
         # Decode latent to image
         with torch.no_grad():
             try:
+                # Sync CUDA before decode to get accurate timing
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                t_decode_start = time.perf_counter()
+                
                 # VAE decode returns a sample (tensor)
                 image_tensor = self.vae.decode(latent).sample
+                
+                # Sync CUDA after decode
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                t_decode_end = time.perf_counter()
+                
+                # Log timing to diagnose performance
+                decode_ms = (t_decode_end - t_decode_start) * 1000
+                if decode_ms > 50:  # Log slow decodes
+                    logger.info(
+                        f"[PERF] VAE decode: {decode_ms:.1f}ms, "
+                        f"latent: {latent_device}, shape: {latent.shape}"
+                    )
             except Exception as e:
                 # Check if this is a Triton-related error
                 error_str = str(e).lower()
