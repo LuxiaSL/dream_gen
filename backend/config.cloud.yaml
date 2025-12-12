@@ -120,8 +120,8 @@ display:
   # - Generation takes ~2s per keyframe + ~4s for 20 interps = ~6s per cycle
   # - So we produce 2.1s of content every 6s (ratio ~0.35)
   # - Buffer should be modest to avoid long initial waits
-  buffer_target_seconds: 30.0       # 30 seconds of buffer (target)
-  min_buffer_seconds: 5.0           # 5 seconds minimum before playback starts
+  buffer_target_seconds: 60.0       # 60 seconds of buffer (target)
+  min_buffer_seconds: 10.0           # 10 seconds minimum before playback starts
   
   cleanup_displayed_frames: true
   max_output_frames: 200            # Keep more frames in memory for cloud
