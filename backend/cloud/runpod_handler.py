@@ -165,6 +165,17 @@ async def run_dream_generation(
         return {"status": "error", "error": "Failed to start ComfyUI"}
     logger.info("ComfyUI is running!")
     
+    # Log VRAM after ComfyUI starts (to see how much it uses)
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+            allocated = torch.cuda.memory_allocated(0) / 1024**3
+            reserved = torch.cuda.memory_reserved(0) / 1024**3
+            logger.info(f"VRAM after ComfyUI: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved")
+    except Exception as e:
+        logger.warning(f"Failed to get VRAM: {e}")
+    
     # Override config for cloud mode
     config_overrides = {
         'cloud': {

@@ -425,6 +425,19 @@ class LatentEncoder:
         import time
         t_decode = time.perf_counter()
         
+        # Log VRAM before decode (every 10th batch to avoid spam)
+        if not hasattr(self, '_decode_count'):
+            self._decode_count = 0
+        self._decode_count += 1
+        
+        if self._decode_count % 10 == 1:
+            try:
+                allocated = torch.cuda.memory_allocated(0) / 1024**3
+                reserved = torch.cuda.memory_reserved(0) / 1024**3
+                logger.debug(f"VRAM before batch decode: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved")
+            except:
+                pass
+        
         with torch.no_grad():
             decoder_output = self.vae.decode(scaled_latents)
             # Handle both tensor and DecoderOutput return types
