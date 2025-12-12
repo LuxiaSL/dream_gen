@@ -156,7 +156,7 @@ game_detection:
 # Performance - tuned for cloud GPU
 performance:
   max_queue_size: 100             # Larger queue for cloud
-  generation_timeout: 180
+  generation_timeout: 60          # Reduced from 180s - faster recovery on hung generations
   enable_torch_compile: false
   async_file_operations: true
 

@@ -81,7 +81,9 @@ class DisplayFrameSelector:
         self.running = False
         self.paused = False
         self.frames_displayed = 0
+        self.skipped_frames = 0
         self.last_frame_time = 0
+        self._depletion_count = 0
         
         # Output path
         self.current_frame_path = self.output_dir / "current_frame.png"
@@ -359,12 +361,29 @@ class DisplayFrameSelector:
                     
                     if success:
                         self.last_frame_time = current_time
+                        self._depletion_count = 0  # Reset on success
                     else:
                         # Frame not ready, check buffer status
                         status = self.buffer.get_buffer_status()
                         if status['frames_ready'] == 0:
-                            logger.warning("Buffer depleted! Waiting for frames...")
-                            # Wait a bit longer before next check
+                            # Track how long we've been depleted
+                            if not hasattr(self, '_depletion_count'):
+                                self._depletion_count = 0
+                            self._depletion_count += 1
+                            
+                            if self._depletion_count == 1:
+                                logger.warning("Buffer depleted! Waiting for frames...")
+                            elif self._depletion_count % 10 == 0:
+                                logger.warning(f"Buffer still depleted ({self._depletion_count}s)...")
+                            
+                            # After 30 seconds of depletion, try to recover
+                            if self._depletion_count >= 30:
+                                logger.error(
+                                    f"Buffer depleted for {self._depletion_count}s - triggering recovery!"
+                                )
+                                await self._trigger_buffer_recovery()
+                                self._depletion_count = 0
+                            
                             await asyncio.sleep(1.0)
                             continue
                 
@@ -395,6 +414,59 @@ class DisplayFrameSelector:
         self.running = False
         logger.info("Display stopping...")
     
+    async def _trigger_buffer_recovery(self) -> None:
+        """
+        Attempt to recover from buffer depletion.
+        
+        This is called when the buffer has been empty for too long,
+        indicating a stuck generation pipeline. We skip the stuck frame
+        and try to resume from wherever we can.
+        """
+        logger.warning("=" * 60)
+        logger.warning("BUFFER RECOVERY TRIGGERED")
+        logger.warning("=" * 60)
+        
+        # Find the next frame that's actually ready
+        current_seq = self.buffer.display_sequence_num
+        
+        # Look ahead for any ready frames
+        for offset in range(1, 50):
+            check_seq = current_seq + offset
+            if check_seq in self.buffer.frames:
+                frame_spec = self.buffer.frames[check_seq]
+                if frame_spec.state.value == "ready":
+                    logger.warning(
+                        f"Recovery: Skipping to ready frame at seq {check_seq} "
+                        f"(skipped {offset} frames)"
+                    )
+                    # Update the display sequence to skip stuck frames
+                    self.buffer.display_sequence_num = check_seq
+                    self.skipped_frames += offset
+                    logger.warning("Buffer recovery complete - resuming display")
+                    return
+        
+        # No ready frames found - reset to latest ready keyframe
+        logger.error("No ready frames found in lookahead - attempting keyframe reset")
+        
+        # Find the last ready keyframe
+        ready_keyframes = [
+            (seq, spec) for seq, spec in self.buffer.frames.items()
+            if spec.is_keyframe and spec.state.value == "ready"
+        ]
+        
+        if ready_keyframes:
+            # Sort by sequence number and get the latest
+            ready_keyframes.sort(key=lambda x: x[0], reverse=True)
+            latest_seq, latest_spec = ready_keyframes[0]
+            
+            skipped = latest_seq - current_seq if latest_seq > current_seq else 0
+            logger.warning(f"Recovery: Jumping to latest keyframe at seq {latest_seq}")
+            self.buffer.display_sequence_num = latest_seq
+            if skipped > 0:
+                self.skipped_frames += skipped
+        else:
+            logger.error("No ready keyframes found - waiting for generation")
+    
     def get_stats(self) -> Dict:
         """
         Get display statistics
@@ -404,6 +476,7 @@ class DisplayFrameSelector:
         """
         stats = {
             "frames_displayed": self.frames_displayed,
+            "skipped_frames": self.skipped_frames,
             "target_fps": self.target_fps,
             "frame_interval": self.frame_interval,
             "is_paused": self.paused,
