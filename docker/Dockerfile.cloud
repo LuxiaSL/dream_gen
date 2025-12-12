@@ -31,6 +31,13 @@ COPY backend/ /app/backend/
 COPY pyproject.toml /app/
 COPY seeds/ /app/seeds/
 
+# Embed build info for debugging
+ARG BUILD_DATE=unknown
+ARG GIT_COMMIT=unknown
+RUN echo "BUILD_DATE=${BUILD_DATE}" > /app/BUILD_INFO && \
+    echo "GIT_COMMIT=${GIT_COMMIT}" >> /app/BUILD_INFO && \
+    echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /app/BUILD_INFO
+
 # Set ownership
 RUN chown -R dreamgen:dreamgen /app/backend /app/pyproject.toml /app/seeds
 

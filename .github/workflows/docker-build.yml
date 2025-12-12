@@ -135,6 +135,8 @@ jobs:
             ${{ env.MAIN_IMAGE }}:${{ github.sha }}
           build-args: |
             BASE_IMAGE=${{ env.BASE_IMAGE }}:latest
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            GIT_COMMIT=${{ github.sha }}
           cache-from: type=registry,ref=${{ env.MAIN_IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.MAIN_IMAGE }}:buildcache,mode=max
       

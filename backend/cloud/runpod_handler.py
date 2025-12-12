@@ -122,6 +122,15 @@ async def run_dream_generation(
     logger.info("DREAM WINDOW RUNPOD HANDLER STARTING")
     logger.info("=" * 60)
     
+    # Log build info for debugging deployment issues
+    build_info_path = Path("/app/BUILD_INFO")
+    if build_info_path.exists():
+        build_info = build_info_path.read_text().strip()
+        for line in build_info.split('\n'):
+            logger.info(f"  {line}")
+    else:
+        logger.warning("BUILD_INFO not found - using development build")
+    
     # Log GPU info for performance debugging
     try:
         import torch
