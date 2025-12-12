@@ -358,6 +358,11 @@ class DreamController:
             # Create state sync
             self.state_sync = CloudStateSync(self.vps_client, cloud_config)
             
+            # Attach callback to display selector for pushing frames
+            if self.display_selector and self.frame_pusher:
+                self.display_selector.on_frame_callback = self._on_frame_displayed
+                self.logger.info("  Cloud callback attached to display selector")
+            
             self.logger.info("[OK] Cloud mode initialized")
             self.logger.info(f"  VPS URL: {cloud_config.get('vps_websocket_url')}")
             self.logger.info(f"  Frame format: {cloud_config.get('frame_push', {}).get('format', 'webp')}")
