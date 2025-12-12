@@ -89,12 +89,9 @@ RUN pip install --no-cache-dir \
     accelerate
 
 # Create directories and set ownership
-# ComfyUI needs write access to: user/, output/, input/, custom_nodes/
+# Give dreamgen ownership of EVERYTHING (ComfyUI creates many dirs at runtime)
 RUN mkdir -p /app/output /app/logs /app/state /app/seeds /app/cache \
-    && mkdir -p /app/ComfyUI/user /app/ComfyUI/output /app/ComfyUI/input \
-    && chown -R dreamgen:dreamgen /app/output /app/logs /app/state /app/seeds /app/cache \
-    && chown -R dreamgen:dreamgen /app/ComfyUI/user /app/ComfyUI/output /app/ComfyUI/input /app/ComfyUI/custom_nodes \
-    && chown dreamgen:dreamgen /app
+    && chown -R dreamgen:dreamgen /app
 
 # ==================== Final Base Image ====================
 FROM dependencies AS final
