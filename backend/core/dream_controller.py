@@ -770,8 +770,8 @@ class DreamController:
         self.logger.info("STARTING BUFFERED HYBRID MODE")
         self.logger.info("=" * 70)
         
-        # Connect to VPS if cloud mode enabled
-        if self.cloud_enabled and self.vps_client:
+        # Connect to VPS if cloud mode enabled (skip if already connected)
+        if self.cloud_enabled and self.vps_client and not self.vps_client.connected:
             await self.connect_to_vps()
         
         # Check if using async orchestrator
