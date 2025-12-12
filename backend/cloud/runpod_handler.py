@@ -153,9 +153,13 @@ async def run_dream_generation(
 try:
     import runpod
     HAS_RUNPOD = True
-except ImportError:
+    print(f"[DEBUG] runpod module loaded successfully: {runpod.__version__}")
+except ImportError as e:
     HAS_RUNPOD = False
-    logger.debug("runpod module not available (local testing mode)")
+    print(f"[DEBUG] runpod import failed: {e}")
+except Exception as e:
+    HAS_RUNPOD = False
+    print(f"[DEBUG] runpod import error: {type(e).__name__}: {e}")
 
 
 def handler(job: Dict[str, Any]) -> Dict[str, Any]:
@@ -254,6 +258,11 @@ async def local_test_mode():
 def main():
     """Entry point for both RunPod and local testing"""
     setup_logging(os.environ.get("LOG_LEVEL", "INFO"))
+    
+    # Debug info
+    print(f"[DEBUG] sys.argv: {sys.argv}")
+    print(f"[DEBUG] HAS_RUNPOD: {HAS_RUNPOD}")
+    print(f"[DEBUG] '--local' in argv: {'--local' in sys.argv}")
     
     # Check for local test mode
     if "--local" in sys.argv or not HAS_RUNPOD:

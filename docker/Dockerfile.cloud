@@ -112,7 +112,22 @@ COPY seeds/ /app/seeds/
 # Set ownership
 RUN chown -R dreamgen:dreamgen /app
 
-# ==================== Runtime Stage ====================
+# ==================== Development Stage ====================
+# NOTE: This must come BEFORE runtime so that runtime is the default build target
+FROM dreamgen AS dev
+
+# Install dev dependencies
+RUN pip install --no-cache-dir \
+    pytest \
+    pytest-asyncio \
+    black \
+    ruff
+
+# Development command: Run with live reload
+CMD ["python", "-m", "backend.cloud.runpod_handler", "--local"]
+
+# ==================== Runtime Stage (DEFAULT) ====================
+# This is the LAST stage, so it's the default when building without --target
 FROM dreamgen AS runtime
 
 USER dreamgen
@@ -131,23 +146,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 # Expose ComfyUI port (for debugging)
 EXPOSE 8188
 
-# Default command: Run the RunPod handler
+# Default command: Run the RunPod handler (NO --local flag!)
 CMD ["python", "-m", "backend.cloud.runpod_handler"]
-
-# ==================== Development Stage ====================
-FROM runtime AS dev
-
-USER root
-
-# Install dev dependencies
-RUN pip install --no-cache-dir \
-    pytest \
-    pytest-asyncio \
-    black \
-    ruff
-
-USER dreamgen
-
-# Development command: Run with live reload
-CMD ["python", "-m", "backend.cloud.runpod_handler", "--local"]
 
