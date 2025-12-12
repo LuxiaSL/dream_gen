@@ -49,11 +49,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 # Expose ComfyUI port
 EXPOSE 8188
 
-# Run the RunPod handler
-CMD ["python", "-m", "backend.cloud.runpod_handler"]
-
-
-# ==================== Development Stage ====================
+# ==================== Development Stage (build with: --target dev) ====================
 FROM runtime AS dev
 
 USER root
@@ -69,3 +65,11 @@ USER dreamgen
 
 # Dev mode with local flag
 CMD ["python", "-m", "backend.cloud.runpod_handler", "--local"]
+
+
+# ==================== Production Stage (DEFAULT) ====================
+# This MUST be the LAST stage so it's used by default
+FROM runtime AS production
+
+# Run the RunPod handler (no --local flag!)
+CMD ["python", "-m", "backend.cloud.runpod_handler"]
