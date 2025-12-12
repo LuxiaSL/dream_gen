@@ -448,24 +448,48 @@ class DisplayFrameSelector:
         # No ready frames found - reset to latest ready keyframe
         logger.error("No ready frames found in lookahead - attempting keyframe reset")
         
-        # Find the last ready keyframe
-        ready_keyframes = [
+        # Find ANY ready frame in the buffer (not just ahead of current)
+        ready_frames = [
             (seq, spec) for seq, spec in self.buffer.frames.items()
-            if spec.is_keyframe and spec.state.value == "ready"
+            if spec.state.value == "ready"
         ]
         
-        if ready_keyframes:
+        if ready_frames:
             # Sort by sequence number and get the latest
-            ready_keyframes.sort(key=lambda x: x[0], reverse=True)
-            latest_seq, latest_spec = ready_keyframes[0]
+            ready_frames.sort(key=lambda x: x[0], reverse=True)
+            latest_seq, latest_spec = ready_frames[0]
             
-            skipped = latest_seq - current_seq if latest_seq > current_seq else 0
-            logger.warning(f"Recovery: Jumping to latest keyframe at seq {latest_seq}")
+            # If we're behind the latest ready frame, jump forward
+            if latest_seq > current_seq:
+                skipped = latest_seq - current_seq
+                logger.warning(f"Recovery: Jumping FORWARD to latest ready frame at seq {latest_seq}")
+            else:
+                # We're ahead of all ready frames - wait, or jump back?
+                # Jump back to the latest ready frame to keep showing something
+                skipped = 0
+                logger.warning(f"Recovery: Jumping BACK to latest ready frame at seq {latest_seq}")
+            
             self.buffer.display_sequence_num = latest_seq
             if skipped > 0:
                 self.skipped_frames += skipped
+            
+            logger.warning(f"Buffer recovery complete - now at seq {latest_seq}")
         else:
-            logger.error("No ready keyframes found - waiting for generation")
+            # No ready frames at all - check if buffer has any registered frames
+            if self.buffer.frames:
+                # Find any pending frame and wait for it
+                pending = [(seq, spec) for seq, spec in self.buffer.frames.items() 
+                          if spec.state.value in ("pending", "generating")]
+                if pending:
+                    earliest = min(pending, key=lambda x: x[0])
+                    logger.warning(f"Recovery: Found {len(pending)} pending frames, earliest at seq {earliest[0]}")
+                    # Jump to the earliest pending and wait
+                    self.buffer.display_sequence_num = earliest[0]
+                    logger.warning(f"Recovery: Jumping to seq {earliest[0]} to wait for generation")
+                else:
+                    logger.error("No ready or pending frames - buffer is completely empty!")
+            else:
+                logger.error("No frames in buffer at all - waiting for generation to start")
     
     def get_stats(self) -> Dict:
         """

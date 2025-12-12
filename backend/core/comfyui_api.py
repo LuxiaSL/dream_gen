@@ -242,6 +242,10 @@ class ComfyUIClient:
                     
                     except asyncio.TimeoutError:
                         # No message received in this interval, continue waiting
+                        # Log periodic status to help debug stalls
+                        elapsed_now = time.time() - start_time
+                        if int(elapsed_now) % 10 == 0 and int(elapsed_now) > 0:
+                            logger.debug(f"Still waiting for prompt {prompt_id[:8]}... ({elapsed_now:.0f}s)")
                         continue
                     except json.JSONDecodeError as e:
                         logger.warning(f"Failed to decode WebSocket message: {e}")
