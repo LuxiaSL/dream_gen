@@ -422,6 +422,9 @@ class LatentEncoder:
         scaled_latents = latents / self.vae_scale_factor
         
         # Decode batch - VAE returns DecoderOutput, extract .sample
+        import time
+        t_decode = time.perf_counter()
+        
         with torch.no_grad():
             decoder_output = self.vae.decode(scaled_latents)
             # Handle both tensor and DecoderOutput return types
@@ -429,12 +432,46 @@ class LatentEncoder:
                 image_tensors = decoder_output.sample
             else:
                 image_tensors = decoder_output
+            
+            # Sync to get accurate timing
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
         
-        # Convert to PIL Images
+        decode_ms = (time.perf_counter() - t_decode) * 1000
+        
+        # BATCHED postprocessing - do ALL GPU ops first, then ONE transfer
+        t_post = time.perf_counter()
+        
+        # Convert from [-1, 1] to [0, 255] - BATCHED on GPU
+        image_tensors = (image_tensors * 0.5 + 0.5) * 255.0
+        image_tensors = torch.clamp(image_tensors, 0.0, 255.0)
+        image_tensors = image_tensors.to(dtype=torch.uint8)
+        
+        # Channels last: (N, C, H, W) -> (N, H, W, C) - still on GPU
+        image_tensors = image_tensors.permute(0, 2, 3, 1)
+        
+        # SINGLE GPU→CPU transfer for entire batch!
+        image_arrays = image_tensors.cpu().numpy()
+        
+        post_ms = (time.perf_counter() - t_post) * 1000
+        
+        # Convert to PIL Images (CPU-only now)
+        t_pil = time.perf_counter()
         images = []
-        for i in range(image_tensors.shape[0]):
-            img = self._postprocess_image(image_tensors[i:i+1])
+        for i in range(image_arrays.shape[0]):
+            img = Image.fromarray(image_arrays[i], mode='RGB')
             images.append(img)
+        
+        pil_ms = (time.perf_counter() - t_pil) * 1000
+        
+        # Log detailed timing for batch decode
+        total_ms = decode_ms + post_ms + pil_ms
+        if total_ms > 200:  # Log if slow
+            logger.info(
+                f"[PERF] Batch decode {len(images)} frames: "
+                f"VAE={decode_ms:.0f}ms, postproc={post_ms:.0f}ms, PIL={pil_ms:.0f}ms, "
+                f"total={total_ms:.0f}ms ({total_ms/len(images):.0f}ms/frame)"
+            )
         
         return images
     
