@@ -25,14 +25,14 @@ class KeyframeWorker:
     - Maintain queue of generation requests
     - Execute generations via async generator (non-blocking HTTP)
     - Report completions to coordinator
-    - Handle errors and retries
+    - Handle errors and retries with exponential backoff
     
     Queue Flow:
         Coordinator → submit_request() → request_queue
         ↓
-        run() loop processes requests
+        run() loop processes requests (with retries)
         ↓
-        result_queue → Coordinator reads completions
+        result_queue → Coordinator reads completions (success or failure)
     
     Usage:
         worker = KeyframeWorker(generator, config)
@@ -49,8 +49,14 @@ class KeyframeWorker:
         
         # Wait for result
         result = await worker.result_queue.get()
-        # {'keyframe_num': 5, 'path': Path(...), 'prompt': '...'}
+        # Success: {'keyframe_num': 5, 'path': Path(...), 'prompt': '...', 'success': True}
+        # Failure: {'keyframe_num': 5, 'success': False, 'error': '...'}
     """
+    
+    # Retry configuration
+    MAX_RETRIES = 3
+    INITIAL_RETRY_DELAY = 1.0  # seconds
+    MAX_RETRY_DELAY = 10.0  # seconds
     
     def __init__(
         self,
@@ -83,9 +89,10 @@ class KeyframeWorker:
         # Statistics
         self.requests_processed = 0
         self.requests_failed = 0
+        self.requests_retried = 0
         self.total_generation_time = 0.0
         
-        logger.info(f"KeyframeWorker initialized (max queue: {max_queue_size})")
+        logger.info(f"KeyframeWorker initialized (max queue: {max_queue_size}, max retries: {self.MAX_RETRIES})")
     
     async def submit_request(
         self,
@@ -126,6 +133,7 @@ class KeyframeWorker:
         Main worker loop
         
         Processes generation requests from queue and reports completions.
+        Implements retry logic with exponential backoff for transient errors.
         Runs until stop() is called.
         """
         self.running = True
@@ -159,71 +167,123 @@ class KeyframeWorker:
                 # Get denoise from config
                 denoise = self.config['generation']['hybrid']['keyframe_denoise']
                 
-                # Generate keyframe (ASYNC - doesn't block event loop!)
+                # Generate keyframe with retry logic
                 import time
-                start_time = time.time()
+                import shutil
                 
-                try:
-                    keyframe_path = await self.generator.generate_from_image_async(
-                        image_path=current_image,
-                        prompt=prompt,
-                        denoise=denoise
-                    )
+                success = False
+                last_error = None
+                total_elapsed = 0.0
+                
+                for attempt in range(self.MAX_RETRIES):
+                    start_time = time.time()
                     
-                    elapsed = time.time() - start_time
-                    
-                    if keyframe_path and keyframe_path.exists():
-                        # Move to keyframe directory with proper naming
-                        # Generator outputs to: output/frame_XXXXX.png
-                        # We need: output/keyframes/keyframe_XXX.png
-                        target_path = self.frame_buffer.keyframe_dir / f"keyframe_{keyframe_num:03d}.png"
-                        
-                        # Move to target location (removes duplicate from output root)
-                        import shutil
-                        shutil.move(str(keyframe_path), str(target_path))
-                        
-                        logger.debug(f"Moved keyframe: {keyframe_path.name} -> {target_path}")
-                        
-                        # Success! Report to coordinator
-                        result = {
-                            'keyframe_num': keyframe_num,
-                            'sequence_num': sequence_num,
-                            'path': target_path,  # Use the final path
-                            'prompt': prompt,
-                            'generation_time': elapsed
-                        }
-                        
-                        await self.result_queue.put(result)
-                        
-                        self.requests_processed += 1
-                        self.total_generation_time += elapsed
-                        
-                        logger.info(
-                            f"[OK] Keyframe {keyframe_num} generated in {elapsed:.2f}s "
-                            f"(total: {self.requests_processed})"
+                    try:
+                        keyframe_path = await self.generator.generate_from_image_async(
+                            image_path=current_image,
+                            prompt=prompt,
+                            denoise=denoise
                         )
-                    else:
-                        # Generation failed
-                        logger.error(f"Keyframe {keyframe_num} generation failed")
-                        self.requests_failed += 1
                         
-                        # Could implement retry logic here
-                        # For now, just report failure and continue
+                        elapsed = time.time() - start_time
+                        total_elapsed += elapsed
+                        
+                        if keyframe_path and keyframe_path.exists():
+                            # Move to keyframe directory with proper naming
+                            target_path = self.frame_buffer.keyframe_dir / f"keyframe_{keyframe_num:03d}.png"
+                            shutil.move(str(keyframe_path), str(target_path))
+                            
+                            logger.debug(f"Moved keyframe: {keyframe_path.name} -> {target_path}")
+                            
+                            # Success! Report to coordinator
+                            result = {
+                                'keyframe_num': keyframe_num,
+                                'sequence_num': sequence_num,
+                                'path': target_path,
+                                'prompt': prompt,
+                                'generation_time': total_elapsed,
+                                'success': True,
+                                'retries': attempt
+                            }
+                            
+                            await self.result_queue.put(result)
+                            
+                            self.requests_processed += 1
+                            self.total_generation_time += total_elapsed
+                            
+                            if attempt > 0:
+                                logger.info(
+                                    f"[OK] Keyframe {keyframe_num} generated in {total_elapsed:.2f}s "
+                                    f"(after {attempt} retries, total: {self.requests_processed})"
+                                )
+                            else:
+                                logger.info(
+                                    f"[OK] Keyframe {keyframe_num} generated in {elapsed:.2f}s "
+                                    f"(total: {self.requests_processed})"
+                                )
+                            
+                            success = True
+                            break
+                        else:
+                            # Generation returned None or file doesn't exist
+                            last_error = "Generation returned no output"
+                            logger.warning(f"Keyframe {keyframe_num} attempt {attempt + 1}/{self.MAX_RETRIES} failed: {last_error}")
+                    
+                    except Exception as e:
+                        elapsed = time.time() - start_time
+                        total_elapsed += elapsed
+                        last_error = str(e)
+                        
+                        # Check for transient errors that are worth retrying
+                        error_str = str(e).lower()
+                        is_transient = any(x in error_str for x in [
+                            'broken pipe', 'connection', 'timeout', 'reset', 
+                            'refused', 'temporarily unavailable', 'resource busy'
+                        ])
+                        
+                        if is_transient and attempt < self.MAX_RETRIES - 1:
+                            # Calculate backoff delay
+                            delay = min(
+                                self.INITIAL_RETRY_DELAY * (2 ** attempt),
+                                self.MAX_RETRY_DELAY
+                            )
+                            logger.warning(
+                                f"Keyframe {keyframe_num} attempt {attempt + 1}/{self.MAX_RETRIES} failed "
+                                f"(transient error: {e}), retrying in {delay:.1f}s..."
+                            )
+                            self.requests_retried += 1
+                            await asyncio.sleep(delay)
+                        else:
+                            # Non-transient error or final retry
+                            logger.error(f"Keyframe {keyframe_num} attempt {attempt + 1}/{self.MAX_RETRIES} failed: {e}")
+                            if attempt == self.MAX_RETRIES - 1:
+                                break
                 
-                except Exception as e:
-                    logger.error(f"Error generating keyframe {keyframe_num}: {e}", exc_info=True)
+                # If all retries failed, report failure to orchestrator
+                if not success:
+                    logger.error(f"[FAIL] Keyframe {keyframe_num} failed after {self.MAX_RETRIES} attempts: {last_error}")
                     self.requests_failed += 1
+                    
+                    # CRITICAL: Report failure so orchestrator can recover
+                    failure_result = {
+                        'keyframe_num': keyframe_num,
+                        'sequence_num': sequence_num,
+                        'success': False,
+                        'error': last_error,
+                        'retries': self.MAX_RETRIES
+                    }
+                    await self.result_queue.put(failure_result)
                 
-                finally:
-                    # Mark task as done
-                    self.request_queue.task_done()
-                    self.processing = False
+                # Mark task as done
+                self.request_queue.task_done()
+                self.processing = False
             
             except asyncio.CancelledError:
                 logger.info("KeyframeWorker cancelled")
                 break
             except Exception as e:
                 logger.error(f"Error in keyframe worker loop: {e}", exc_info=True)
+                self.processing = False
                 await asyncio.sleep(1.0)  # Back off on error
         
         logger.info("KeyframeWorker stopped")
@@ -251,6 +311,7 @@ class KeyframeWorker:
         return {
             'requests_processed': self.requests_processed,
             'requests_failed': self.requests_failed,
+            'requests_retried': self.requests_retried,
             'avg_generation_time': avg_time,
             'queue_depth': self.request_queue.qsize(),
             'result_queue_depth': self.result_queue.qsize(),

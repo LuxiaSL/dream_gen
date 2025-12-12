@@ -94,12 +94,16 @@ class InterpolationWorker:
         # Slerp precomputed parameters cache
         self.slerp_precomputed: Dict[Tuple[int, int], Dict] = {}
         
+        # GPU slerp mode: run spherical lerp on GPU instead of CPU thread pool
+        # This reduces context switching overhead on cloud GPUs with headroom
+        self.gpu_slerp = config.get('generation', {}).get('hybrid', {}).get('gpu_slerp', False)
+        
         # Statistics
         self.pairs_processed = 0
         self.frames_generated = 0
         self.total_interpolation_time = 0.0
         
-        logger.info(f"InterpolationWorker initialized (max queue: {max_queue_size})")
+        logger.info(f"InterpolationWorker initialized (max queue: {max_queue_size}, gpu_slerp: {self.gpu_slerp})")
     
     async def submit_pair(
         self,
@@ -224,17 +228,25 @@ class InterpolationWorker:
         pair_key = (start_kf_num, end_kf_num)
         if pair_key not in self.slerp_precomputed:
             t_precompute = time.perf_counter()
-            loop = asyncio.get_event_loop()
-            self.slerp_precomputed[pair_key] = await loop.run_in_executor(
-                None,
-                precompute_slerp_params,
-                start_latent,
-                end_latent
-            )
+            if self.gpu_slerp:
+                # GPU mode: precompute directly (tensors already on GPU)
+                self.slerp_precomputed[pair_key] = precompute_slerp_params(
+                    start_latent,
+                    end_latent
+                )
+            else:
+                # CPU mode: run in executor to avoid blocking
+                loop = asyncio.get_event_loop()
+                self.slerp_precomputed[pair_key] = await loop.run_in_executor(
+                    None,
+                    precompute_slerp_params,
+                    start_latent,
+                    end_latent
+                )
             timings['slerp_precompute'] = time.perf_counter() - t_precompute
         
         # === PHASE 1: Generate ALL latents (no VAE lock needed) ===
-        logger.debug(f"  Phase 1: Generating {count} latents...")
+        logger.debug(f"  Phase 1: Generating {count} latents{'(GPU)' if self.gpu_slerp else '(CPU)'}...")
         t_slerp_start = time.perf_counter()
         
         latents_and_specs = []
@@ -246,16 +258,26 @@ class InterpolationWorker:
                 frame_spec = self.frame_buffer.frames[sequence_num]
                 t = frame_spec.interpolation_t
                 
-                # Slerp in executor (CPU-bound, no lock)
-                interpolated_latent = await loop.run_in_executor(
-                    None,
-                    spherical_lerp,
-                    start_latent,
-                    end_latent,
-                    t,
-                    1e-6,
-                    self.slerp_precomputed[pair_key]
-                )
+                if self.gpu_slerp:
+                    # GPU mode: run slerp directly (tensors on GPU, fast)
+                    interpolated_latent = spherical_lerp(
+                        start_latent,
+                        end_latent,
+                        t,
+                        1e-6,
+                        self.slerp_precomputed[pair_key]
+                    )
+                else:
+                    # CPU mode: run in executor to avoid blocking event loop
+                    interpolated_latent = await loop.run_in_executor(
+                        None,
+                        spherical_lerp,
+                        start_latent,
+                        end_latent,
+                        t,
+                        1e-6,
+                        self.slerp_precomputed[pair_key]
+                    )
                 
                 latents_and_specs.append((interpolated_latent, frame_spec, sequence_num))
                 

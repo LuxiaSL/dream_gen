@@ -45,6 +45,10 @@ generation:
     interpolation_resolution_divisor: 1
     interpolation_upscale_method: "bilinear"
     interpolation_downsample_method: "bicubic"
+    
+    # GPU-accelerated slerp: Run spherical lerp on GPU instead of CPU thread pool
+    # Cloud GPUs have headroom for this, reduces context switching overhead
+    gpu_slerp: true
   
   # img2img parameters
   img2img:
@@ -110,12 +114,17 @@ generation:
 
 # Display settings - at root level, not under generation!
 display:
-  # Large buffer for cloud resilience
-  buffer_target_seconds: 180.0      # 3 minutes of buffer
-  min_buffer_seconds: 60.0          # 1 minute minimum before playback
+  # Buffer sizing for cloud:
+  # At 10 FPS with 20 interp frames per keyframe (~2s generation):
+  # - Each keyframe cycle = 21 frames = 2.1s of content
+  # - Generation takes ~2s per keyframe + ~4s for 20 interps = ~6s per cycle
+  # - So we produce 2.1s of content every 6s (ratio ~0.35)
+  # - Buffer should be modest to avoid long initial waits
+  buffer_target_seconds: 30.0       # 30 seconds of buffer (target)
+  min_buffer_seconds: 5.0           # 5 seconds minimum before playback starts
   
   cleanup_displayed_frames: true
-  max_output_frames: 100
+  max_output_frames: 200            # Keep more frames in memory for cloud
 
 # Prompts - same as default
 prompts:

@@ -384,10 +384,25 @@ class AsyncGenerationOrchestrator:
                     continue
                 
                 kf_num = result['keyframe_num']
+                sequence_num = result.get('sequence_num')
+                
+                # === CHECK FOR FAILURE ===
+                if not result.get('success', True):
+                    # Keyframe generation failed! Need to recover.
+                    error = result.get('error', 'Unknown error')
+                    retries = result.get('retries', 0)
+                    logger.error(f"[FAIL] Keyframe {kf_num} failed after {retries} retries: {error}")
+                    
+                    # Mark task done
+                    self.keyframe_worker.result_queue.task_done()
+                    
+                    # === RECOVERY: Skip this keyframe and its pending interpolations ===
+                    await self._handle_keyframe_failure(kf_num, sequence_num)
+                    continue
+                
                 kf_path = result['path']
                 prompt = result['prompt']
                 gen_time = result.get('generation_time', 0.0)
-                sequence_num = result.get('sequence_num')
                 
                 logger.info(f"[OK] Keyframe {kf_num} completed: {kf_path.name}")
                 
@@ -937,6 +952,85 @@ class AsyncGenerationOrchestrator:
         except Exception as e:
             logger.error(f"Injection failed: {e}", exc_info=True)
             return None
+    
+    async def _handle_keyframe_failure(self, kf_num: int, sequence_num: Optional[int]) -> None:
+        """
+        Handle a failed keyframe by cleaning up orphaned interpolations and continuing
+        
+        Recovery strategy:
+        1. Mark the failed keyframe as skipped/failed in buffer
+        2. Remove any pending interpolations that depend on this keyframe
+        3. Use the PREVIOUS keyframe as the current image for next generation
+        4. Re-register a new keyframe to replace the failed one
+        
+        Args:
+            kf_num: The failed keyframe number
+            sequence_num: The sequence number in buffer (if known)
+        """
+        logger.warning(f"=== RECOVERING FROM KEYFRAME {kf_num} FAILURE ===")
+        
+        # === 1. Mark failed keyframe in buffer ===
+        if sequence_num is not None:
+            try:
+                # Mark as failed/skipped
+                self.buffer.mark_failed(sequence_num)
+                logger.info(f"  Marked keyframe {kf_num} (seq {sequence_num}) as failed")
+            except AttributeError:
+                # Buffer might not have mark_failed - just remove it
+                if sequence_num in self.buffer.frames:
+                    del self.buffer.frames[sequence_num]
+                    logger.info(f"  Removed failed keyframe {kf_num} from buffer")
+        
+        # === 2. Remove orphaned interpolations ===
+        # Find all interpolations that depend on the failed keyframe
+        orphaned_seqs = []
+        for seq, frame in list(self.buffer.frames.items()):
+            if frame.is_interpolated():
+                pair = frame.keyframe_pair
+                if pair and kf_num in pair:
+                    orphaned_seqs.append(seq)
+        
+        if orphaned_seqs:
+            logger.info(f"  Found {len(orphaned_seqs)} orphaned interpolations to remove")
+            for seq in orphaned_seqs:
+                try:
+                    if seq in self.buffer.frames:
+                        del self.buffer.frames[seq]
+                except Exception as e:
+                    logger.warning(f"  Failed to remove orphaned frame {seq}: {e}")
+            logger.info(f"  Cleaned up {len(orphaned_seqs)} orphaned interpolations")
+        
+        # === 3. Find the last successful keyframe to use as base ===
+        # Look for the most recent ready keyframe
+        last_good_kf = kf_num - 1
+        last_good_path = None
+        
+        while last_good_kf > 0:
+            last_good_seq = self.keyframe_sequences.get(last_good_kf)
+            if last_good_seq is not None and last_good_seq in self.buffer.frames:
+                frame = self.buffer.frames[last_good_seq]
+                if frame.is_ready() and frame.file_path and frame.file_path.exists():
+                    last_good_path = frame.file_path
+                    break
+            last_good_kf -= 1
+        
+        if last_good_path:
+            self.current_image_path = last_good_path
+            self.current_keyframe_num = last_good_kf
+            logger.info(f"  Falling back to keyframe {last_good_kf}: {last_good_path.name}")
+        else:
+            logger.warning(f"  No previous keyframe found, keeping current state")
+        
+        # === 4. Register a NEW keyframe to replace the failed one ===
+        # This creates a "skip" - we'll generate a new keyframe in place of the failed one
+        next_kf = self.current_keyframe_num + 1
+        
+        # Calculate new sequence number (after the last good keyframe + its interps)
+        # For simplicity, we'll let the normal generation loop handle this
+        # Just log the recovery and continue
+        
+        logger.info(f"  Recovery complete. Next generation: KF{next_kf}")
+        logger.warning(f"=== RECOVERY COMPLETE ===")
     
     def get_stats(self) -> Dict[str, Any]:
         """

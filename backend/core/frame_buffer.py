@@ -35,6 +35,7 @@ class FrameState(Enum):
     GENERATING = "generating"    # Currently being generated
     READY = "ready"              # Generated and saved to disk
     DISPLAYED = "displayed"      # Already shown to user
+    FAILED = "failed"            # Generation failed (will be skipped)
 
 
 @dataclass
@@ -262,6 +263,12 @@ class FrameBuffer:
                 self.frames[sequence_num].file_path = file_path
             self.frames[sequence_num].generated_at = time.time()
             logger.debug(f"Marked ready: {self.frames[sequence_num]}")
+    
+    def mark_failed(self, sequence_num: int) -> None:
+        """Mark a frame as failed (generation error, will be skipped)"""
+        if sequence_num in self.frames:
+            self.frames[sequence_num].state = FrameState.FAILED
+            logger.info(f"Marked failed: {self.frames[sequence_num]}")
     
     def mark_displayed(self, sequence_num: int) -> None:
         """Mark a frame as displayed"""
