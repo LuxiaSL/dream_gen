@@ -31,23 +31,27 @@ generation:
   
   # Hybrid mode - optimized for streaming
   hybrid:
-    # 20 interpolation frames per keyframe
-    # With ~1.5s keyframe generation = 20 frames / ~1.5s = ~13 FPS effective
-    interpolation_frames: 20
+    # PERFORMANCE TUNING:
+    # - VAE decode: ~230ms/frame at 1024x512
+    # - WebP encode: ~100ms/frame
+    # - Target: ~5 FPS effective (more achievable with current hardware)
     
-    # Target 10 FPS display rate
-    target_interpolation_fps: 10.0
+    # Reduced from 20 to 10 for better performance
+    # 10 frames still provides smooth interpolation
+    interpolation_frames: 10
+    
+    # Target 5 FPS display rate (realistic for 1024x512 + VAE decode)
+    target_interpolation_fps: 5.0
     
     # Denoise strength for keyframes
     keyframe_denoise: 0.20
     
-    # Full resolution interpolation (cloud has more GPU headroom)
+    # Full resolution interpolation
     interpolation_resolution_divisor: 1
     interpolation_upscale_method: "bilinear"
     interpolation_downsample_method: "bicubic"
     
     # GPU-accelerated slerp: Run spherical lerp on GPU instead of CPU thread pool
-    # Cloud GPUs have headroom for this, reduces context switching overhead
     gpu_slerp: true
   
   # img2img parameters
@@ -173,8 +177,8 @@ cloud:
   # Frame pushing
   frame_push:
     enabled: true
-    format: "webp"
-    quality: 85
+    format: "jpeg"           # JPEG is much faster than WebP (~10ms vs ~100ms)
+    quality: 80              # Good quality/size balance for streaming
     include_interpolations: true
   
   # State sync
