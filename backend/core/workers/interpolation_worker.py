@@ -286,19 +286,31 @@ class InterpolationWorker:
         
         timings['slerp_all'] = time.perf_counter() - t_slerp_start
         
-        # === PHASE 2: Decode ALL latents in BATCH (single VAE lock acquisition) ===
-        logger.debug(f"  Phase 2: Decoding {len(latents_and_specs)} frames in batch...")
+        # === PHASE 2: Decode ALL latents in TRUE BATCH (single GPU call!) ===
+        logger.debug(f"  Phase 2: Batch decoding {len(latents_and_specs)} frames...")
         t_decode_start = time.perf_counter()
         
-        decoded_images = []
-        for latent, frame_spec, sequence_num in latents_and_specs:
-            try:
-                # Each decode still goes through vae_access, but they happen
-                # back-to-back without other workers interrupting
-                image = await self.vae_access.decode_async(latent, upscale_to_target=True)
+        # Extract just the latents for batch decode
+        latent_list = [latent for latent, _, _ in latents_and_specs]
+        
+        try:
+            # Single GPU call to decode all latents at once!
+            images = await self.vae_access.decode_batch_async(latent_list, upscale_to_target=True)
+            
+            # Pair images back with their frame specs
+            decoded_images = []
+            for i, (image, (_, frame_spec, sequence_num)) in enumerate(zip(images, latents_and_specs)):
                 decoded_images.append((image, frame_spec, sequence_num))
-            except Exception as e:
-                logger.error(f"Failed to decode latent: {e}", exc_info=True)
+        except Exception as e:
+            logger.error(f"Batch decode failed, falling back to sequential: {e}", exc_info=True)
+            # Fallback to sequential decode
+            decoded_images = []
+            for latent, frame_spec, sequence_num in latents_and_specs:
+                try:
+                    image = await self.vae_access.decode_async(latent, upscale_to_target=True)
+                    decoded_images.append((image, frame_spec, sequence_num))
+                except Exception as e2:
+                    logger.error(f"Failed to decode latent: {e2}", exc_info=True)
         
         timings['decode_all'] = time.perf_counter() - t_decode_start
         
