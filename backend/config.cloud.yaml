@@ -1,10 +1,7 @@
 # Dream Window Cloud Configuration
 # ================================
-# This config is used when running on RunPod Serverless.
-# It overrides values from config.yaml for cloud-optimized settings.
-#
-# To use: Set CONFIG_PATH=/app/backend/config.cloud.yaml in environment
-# Or: The runpod_handler will merge these settings automatically.
+# Optimized for RunPod Serverless deployment.
+# Matches structure of config.yaml exactly.
 
 system:
   comfyui_url: "http://127.0.0.1:8188"
@@ -20,92 +17,168 @@ generation:
   model: "sd15"
   
   # Cloud resolution - higher for web viewing
+  # NOTE: This is the BASE resolution. cloud.resolution_override takes precedence.
   resolution: [1024, 512]
   
   mode: "hybrid"
   
+  # SD 1.5 parameters
   sd:
-    # Faster steps for cloud - balance speed vs quality
-    steps: 8                # Slightly fewer steps for faster generation
+    steps: 12                 # Balance speed vs quality
     cfg_scale: 6.0
     sampler: "euler"
     scheduler: "karras"
   
+  # Hybrid mode - optimized for streaming
   hybrid:
-    # More interpolation frames for smoother streaming
-    interpolation_frames: 12
+    # 20 interpolation frames per keyframe
+    # With ~1.5s keyframe generation = 20 frames / ~1.5s = ~13 FPS effective
+    interpolation_frames: 20
     
-    # Lower denoise for more coherent evolution
-    denoise_strength: 0.18
+    # Target 10 FPS display rate
+    target_interpolation_fps: 10.0
     
-    # Interpolation settings
-    interp_lerp_weight: 0.5
-    interp_method: "slerp"
+    # Denoise strength for keyframes
+    keyframe_denoise: 0.20
     
-    # Cache injection for variety
-    cache_injection_enabled: true
-    cache_injection_chance: 0.15
-    cache_injection_blend: 0.75
+    # Full resolution interpolation (cloud has more GPU headroom)
+    interpolation_resolution_divisor: 1
+    interpolation_upscale_method: "bilinear"
+    interpolation_downsample_method: "bicubic"
+  
+  # img2img parameters
+  img2img:
+    denoise: 0.3
+  
+  # Cache system - larger for cloud
+  cache:
+    max_size: 100                   # Larger cache
     
-    # Collapse detection
-    collapse_detection_enabled: true
-    collapse_color_threshold: 0.15
-    collapse_struct_threshold: 0.08
+    similarity_method: "dual_metric"
+    population_mode: "selective"
+    cache_interpolations: true
+    cache_diversity_logic: "all"
+    
+    # Color histogram settings
+    color_histogram:
+      bins_per_channel: 32
+      diversity_threshold: 1.92
+      dissimilarity_range: [1.18, 2.05]
+      convergence_threshold: 0.15
+      force_cache_threshold: 0.30
+    
+    # Perceptual hash settings
+    phash:
+      hash_size: 8
+      diversity_threshold: 0.80
+      dissimilarity_range: [0.68, 0.92]
+      convergence_threshold: 0.08
+      force_cache_threshold: 0.15
+    
+    injection_logic: "any"
+    injection_mode: "dissimilar"
+    injection_probability: 0.15
+    blend_weight: 0.75
+    
+    injection_cooldown: 2
+    seed_injection_cooldown: 2
+    embedding_history_reset: "partial"
+    embedding_history_keep_recent: 10
+    
+    collapse_detection: true
+    warmup_keyframes: 10
+    convergence_mode: "absolute"
+    log_convergence_stats: true
+    
+    seed_injection_floor: 0.02
+    seed_injection_max: 0.15
+    seed_injection_ramp: 50
+    seed_injection_boost_threshold: 10
+    seed_injection_boost_probability: 0.20
+    force_seed_injection_frequency: 0.30
+    blend_seed_injection: true
+    seed_blend_weight: 0.85
+    
+    log_diversity_stats: true
+    diversity_check_interval: 10
+    
+    advanced_monitoring:
+      enabled: false
+      eviction_strategy: "lru"
+      acceptance_logic: "average"
+      diversity_matrix_refresh: 50
 
-# Display settings  
+# Display settings - at root level, not under generation!
 display:
-  target_fps: 3.5
-  buffer_target_seconds: 30.0
-  min_buffer_seconds: 10.0
-  auto_cleanup: true
+  # Large buffer for cloud resilience
+  buffer_target_seconds: 180.0      # 3 minutes of buffer
+  min_buffer_seconds: 60.0          # 1 minute minimum before playback
+  
+  cleanup_displayed_frames: true
+  max_output_frames: 100
 
-# Cloud mode - always enabled for this config
+# Prompts - same as default
+prompts:
+  theme_pairs:
+    - positive: "black, white, ethereal digital angel, dissolving into particles, flowing white lines, technical wireframe overlay, monochrome, sparse color accents, architectural diagrams, high contrast, abstract geometry"
+      negative: "colors, red, blue, green, yellow, orange, purple, pink, brown, low quality, text, watermark, signature, jpeg artifacts, muddy colors, brown tones, warm colors"
+    - positive: "abstract geometry, technical wireframe, architectural diagrams, flowing lines, blueprint aesthetic, monochrome with data corruption, cyberpunk overlay, grid patterns, high contrast"
+      negative: "organic forms, curves, nature, soft edges, blur, low quality, text, watermark, signature, jpeg artifacts, low contrast, muddy colors"
+    - positive: "cyberpunk angel, glitch art aesthetic, digital corruption, technical overlay, particle dissolution, monochrome with red and cyan accents, wireframe structure, abstract form, high contrast"
+      negative: "smooth, clean, pristine, perfect, polished, blur, low quality, text, watermark, signature, jpeg artifacts, low contrast, natural lighting"
+    - positive: "black, white, ethereal figure in data stream, technical readouts, flowing particles, architectural wireframe, monochrome with blue highlights, digital dissolution, abstract geometry, high contrast"
+      negative: "solid forms, static, stable, grounded, physical, blur, low quality, text, watermark, signature, jpeg artifacts, low contrast, warm colors"
+  
+  modifiers:
+    enabled: true
+    time_based: true
+    system_based: false
+  
+  rotation_interval: 20
+
+# Disable game detection on cloud
+game_detection:
+  enabled: false
+
+# Performance - tuned for cloud GPU
+performance:
+  max_queue_size: 100             # Larger queue for cloud
+  generation_timeout: 180
+  enable_torch_compile: false
+  async_file_operations: true
+
+# Daemon disabled on cloud (runpod_handler manages lifecycle)
+daemon:
+  enabled: false
+
+# Cloud mode - ENABLED and configured
 cloud:
   enabled: true
   
-  # VPS connection (overridden by environment variables)
+  # VPS WebSocket endpoint (can be overridden by VPS_WEBSOCKET_URL env var)
   vps_websocket_url: "wss://aetherawi.red/ws/gpu"
-  # auth_token is read from DREAM_GEN_AUTH_TOKEN env var
+  
+  # Auth token from environment
+  auth_token: null  # Read from DREAM_GEN_AUTH_TOKEN env var
   
   # Frame pushing
   frame_push:
+    enabled: true
     format: "webp"
     quality: 85
     include_interpolations: true
   
-  # State persistence
+  # State sync
   state_sync:
+    enabled: true
     interval_keyframes: 10
     push_on_shutdown: true
   
-  # Resolution override for cloud
+  # Resolution override - THIS takes precedence over generation.resolution
   resolution_override: [1024, 512]
   
   # Connection settings
   connection:
-    heartbeat_interval: 30
-    reconnect_delay: 5
-    max_reconnect_attempts: 10
-
-# Cache settings
-cache:
-  max_entries: 100           # Larger cache for more variety
-  min_entries_for_injection: 10
-  
-  injection:
-    mode: "dissimilar"
-    blend_weight: 0.75
-    recent_tracking: 5
-  
-  similarity:
-    method: "dual_metric"
-    color_threshold: 1.92
-    struct_threshold: 0.80
-    logic: "any"
-
-# Worker queue sizes (larger for cloud GPU)
-workers:
-  keyframe_queue_size: 8
-  interpolation_queue_size: 15
-  cache_queue_size: 30
-
+    reconnect_delay: 1.0
+    max_reconnect_delay: 60.0
+    heartbeat_interval: 30.0

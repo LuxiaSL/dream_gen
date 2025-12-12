@@ -1,120 +1,62 @@
 # Dream Window Cloud Dockerfile
-# 
-# Optimized for RunPod Serverless with Flashboot:
-# - Pre-baked ComfyUI with SD 1.5 model
-# - All Python dependencies installed
-# - Fast cold start (~30-60s)
+# =============================
+# Builds on top of dreamgen-base for FAST iteration.
+# Only the backend code layer changes - no 4GB model download!
+#
+# Prerequisites:
+#   docker pull luxiasl/dreamgen-base:latest
+#   (or build it: docker build -f docker/Dockerfile.base -t luxiasl/dreamgen-base:latest .)
 #
 # Build:
-#   docker build -f docker/Dockerfile.cloud -t dream-window:cloud .
+#   docker build -f docker/Dockerfile.cloud -t luxiasl/dreamgen:latest .
 #
-# Run locally:
-#   docker run --gpus all -e VPS_WEBSOCKET_URL=ws://localhost:8000/ws/gpu dream-window:cloud
-#
-# Push to RunPod:
-#   docker tag dream-window:cloud <your-registry>/dream-window:cloud
-#   docker push <your-registry>/dream-window:cloud
+# Push:
+#   docker push luxiasl/dreamgen:latest
 
-# ==================== Base Stage ====================
-# Using CUDA 12.1.0 runtime (full version required)
-FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04 AS base
+# ==================== Use Pre-built Base ====================
+# This image contains: CUDA, Python, ComfyUI, SD 1.5 model, all pip dependencies
+# It's ~4GB but rarely changes, so we don't rebuild it.
+ARG BASE_IMAGE=luxiasl/dreamgen-base:latest
+FROM ${BASE_IMAGE} AS base
 
-# Prevent interactive prompts during package installation
-ENV DEBIAN_FRONTEND=noninteractive
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONDONTWRITEBYTECODE=1
+# ==================== Code Layer (FAST - only this changes!) ====================
+FROM base AS runtime
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 \
-    python3.11-venv \
-    python3-pip \
-    git \
-    curl \
-    wget \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Set Python 3.11 as default
-RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 \
-    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
-
-# Create app user for security
-RUN useradd -m -s /bin/bash dreamgen
-WORKDIR /app
-
-# ==================== ComfyUI Stage ====================
-FROM base AS comfyui
-
-# Install ComfyUI
-RUN git clone https://github.com/comfyanonymous/ComfyUI.git /app/ComfyUI
-
-WORKDIR /app/ComfyUI
-
-# Install ComfyUI dependencies
-RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 \
-    && pip install --no-cache-dir -r requirements.txt
-
-# Create model directories
-RUN mkdir -p models/checkpoints models/vae models/loras models/embeddings
-
-# Install FSampler custom node for faster sampling
-# https://github.com/obisin/ComfyUI-FSampler
-RUN git clone https://github.com/obisin/ComfyUI-FSampler.git custom_nodes/ComfyUI-FSampler
-
-# ==================== Model Download Stage ====================
-FROM comfyui AS models
-
-# Download SD 1.5 model - this is a PUBLIC model, no token needed!
-# Using the official Comfy-Org archive for reliability
-RUN echo "Downloading SD 1.5 model (~4GB, this will take a few minutes)..." \
-    && wget -q --show-progress -O models/checkpoints/v1-5-pruned-emaonly.safetensors \
-        "https://huggingface.co/Comfy-Org/stable-diffusion-v1-5-archive/resolve/main/v1-5-pruned-emaonly.safetensors" \
-    && echo "Model downloaded successfully!" \
-    && ls -lh models/checkpoints/
-
-# ==================== Dependencies Stage ====================
-# Install all pip packages BEFORE copying code (better caching)
-FROM models AS dependencies
+USER root
 
 WORKDIR /app
 
-# Install dream_gen dependencies (cached unless requirements change)
-RUN pip install --no-cache-dir \
-    websockets \
-    msgpack \
-    pillow \
-    numpy \
-    pyyaml \
-    aiohttp \
-    runpod \
-    imagehash \
-    scikit-image \
-    diffusers \
-    huggingface-hub
-
-# Create directories
-RUN mkdir -p /app/output /app/logs /app/state /app/seeds
-
-# ==================== Dream Gen Stage ====================
-# Only this stage rebuilds when code changes!
-FROM dependencies AS dreamgen
-
-# Copy dream_gen backend (this is the only layer that changes frequently)
+# Copy ONLY the backend code and configs
 COPY backend/ /app/backend/
 COPY pyproject.toml /app/
 COPY seeds/ /app/seeds/
 
 # Set ownership
-RUN chown -R dreamgen:dreamgen /app
+RUN chown -R dreamgen:dreamgen /app/backend /app/pyproject.toml /app/seeds
+
+USER dreamgen
+
+# Environment variables
+ENV COMFYUI_PATH=/app/ComfyUI
+ENV PYTHONPATH=/app:/app/backend
+ENV LOG_LEVEL=INFO
+ENV CONFIG_PATH=/app/backend/config.cloud.yaml
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD python -c "print('healthy')" || exit 1
+
+# Expose ComfyUI port
+EXPOSE 8188
+
+# Run the RunPod handler
+CMD ["python", "-m", "backend.cloud.runpod_handler"]
+
 
 # ==================== Development Stage ====================
-# NOTE: This must come BEFORE runtime so that runtime is the default build target
-FROM dreamgen AS dev
+FROM runtime AS dev
+
+USER root
 
 # Install dev dependencies
 RUN pip install --no-cache-dir \
@@ -123,29 +65,7 @@ RUN pip install --no-cache-dir \
     black \
     ruff
 
-# Development command: Run with live reload
-CMD ["python", "-m", "backend.cloud.runpod_handler", "--local"]
-
-# ==================== Runtime Stage (DEFAULT) ====================
-# This is the LAST stage, so it's the default when building without --target
-FROM dreamgen AS runtime
-
 USER dreamgen
 
-# Environment variables
-ENV COMFYUI_PATH=/app/ComfyUI
-# Include both /app and /app/backend in PYTHONPATH
-# /app for backend.cloud.xxx imports, /app/backend for core.xxx imports
-ENV PYTHONPATH=/app:/app/backend
-ENV LOG_LEVEL=INFO
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD python -c "print('healthy')" || exit 1
-
-# Expose ComfyUI port (for debugging)
-EXPOSE 8188
-
-# Default command: Run the RunPod handler (NO --local flag!)
-CMD ["python", "-m", "backend.cloud.runpod_handler"]
-
+# Dev mode with local flag
+CMD ["python", "-m", "backend.cloud.runpod_handler", "--local"]
