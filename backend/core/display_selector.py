@@ -51,7 +51,8 @@ class DisplayFrameSelector:
         target_fps: float = 4.0,
         min_buffer_seconds: float = 30.0,
         cleanup_displayed_frames: bool = False,
-        on_frame_callback: Optional[Callable[[Image.Image, int, bool], Awaitable[None]]] = None
+        on_frame_callback: Optional[Callable[[Image.Image, int, bool], Awaitable[None]]] = None,
+        skip_disk_write: bool = False
     ):
         """
         Initialize display frame selector
@@ -64,6 +65,7 @@ class DisplayFrameSelector:
             cleanup_displayed_frames: Whether to delete frames immediately after display
             on_frame_callback: Optional async callback(image, frame_num, is_keyframe) 
                                called for each displayed frame (e.g., for cloud push)
+            skip_disk_write: If True, skip writing current_frame.png (cloud mode optimization)
         """
         self.buffer = frame_buffer
         self.output_dir = Path(output_dir)
@@ -73,6 +75,9 @@ class DisplayFrameSelector:
         # Storage management
         self.cleanup_enabled = cleanup_displayed_frames
         self.frames_deleted = 0
+        
+        # Cloud mode optimization - skip disk write for current_frame.png
+        self.skip_disk_write = skip_disk_write
         
         # Timing
         self.frame_interval = 1.0 / target_fps if target_fps > 0 else 0.25
@@ -96,6 +101,7 @@ class DisplayFrameSelector:
         logger.info(f"  Frame interval: {self.frame_interval:.3f}s")
         logger.info(f"  Min buffer: {min_buffer_seconds}s")
         logger.info(f"  Output: {self.current_frame_path}")
+        logger.info(f"  Skip disk write: {skip_disk_write}")
         
         if self.cleanup_enabled:
             logger.info(f"  Auto-cleanup: ENABLED (delete after display)")
@@ -184,8 +190,9 @@ class DisplayFrameSelector:
                 lambda: Image.open(frame_spec.file_path)
             )
             
-            # Write to current_frame.png ASYNC (don't block event loop)
-            await self._write_current_frame_async(image)
+            # Write to current_frame.png ASYNC (skip in cloud mode for performance)
+            if not self.skip_disk_write:
+                await self._write_current_frame_async(image)
             
             # Call optional callback (e.g., for cloud push)
             if self.on_frame_callback:
