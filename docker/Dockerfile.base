@@ -88,11 +88,10 @@ RUN pip install --no-cache-dir \
     huggingface-hub \
     accelerate
 
-# Create directories
-RUN mkdir -p /app/output /app/logs /app/state /app/seeds /app/cache
-
-# Set ownership
-RUN chown -R dreamgen:dreamgen /app
+# Create directories and set ownership (skip large model files)
+RUN mkdir -p /app/output /app/logs /app/state /app/seeds /app/cache \
+    && chown -R dreamgen:dreamgen /app/output /app/logs /app/state /app/seeds /app/cache \
+    && chown dreamgen:dreamgen /app
 
 # ==================== Final Base Image ====================
 FROM dependencies AS final
