@@ -422,6 +422,12 @@ class AsyncGenerationOrchestrator:
                 self.current_image_path = kf_path
                 self.current_keyframe_num = kf_num
                 
+                # === Cleanup old keyframes ===
+                # Keep last 2 keyframes for retry capability, delete older ones
+                # This is safe because keyframe N-1 is no longer needed as source
+                # once keyframe N is successfully generated
+                await self._cleanup_old_keyframes(kf_num)
+                
                 # Mark task done
                 self.keyframe_worker.result_queue.task_done()
                 
@@ -953,6 +959,48 @@ class AsyncGenerationOrchestrator:
             logger.error(f"Injection failed: {e}", exc_info=True)
             return None
     
+    async def _cleanup_old_keyframes(self, current_kf_num: int, keep_count: int = 2) -> None:
+        """
+        Clean up old keyframe files that are no longer needed.
+        
+        Keeps the last `keep_count` keyframes for retry capability.
+        Called after a keyframe is successfully generated.
+        
+        Args:
+            current_kf_num: The keyframe that was just successfully generated
+            keep_count: How many old keyframes to keep (default 2)
+        """
+        try:
+            keyframe_dir = self.buffer.keyframe_dir if hasattr(self.buffer, 'keyframe_dir') else None
+            if not keyframe_dir or not keyframe_dir.exists():
+                return
+            
+            # Delete keyframes older than (current - keep_count)
+            min_to_keep = current_kf_num - keep_count
+            if min_to_keep <= 0:
+                return  # Nothing to clean up yet
+            
+            deleted_count = 0
+            for kf_file in keyframe_dir.glob("keyframe_*.png"):
+                try:
+                    # Extract keyframe number from filename
+                    kf_num_str = kf_file.stem.replace("keyframe_", "")
+                    kf_num = int(kf_num_str)
+                    
+                    if kf_num < min_to_keep:
+                        kf_file.unlink()
+                        deleted_count += 1
+                        logger.debug(f"Cleaned up old keyframe: {kf_file.name}")
+                except (ValueError, OSError) as e:
+                    logger.debug(f"Could not cleanup {kf_file.name}: {e}")
+            
+            if deleted_count > 0:
+                logger.debug(f"Cleaned up {deleted_count} old keyframe(s) (keeping last {keep_count})")
+                
+        except Exception as e:
+            # Non-fatal - just log and continue
+            logger.debug(f"Keyframe cleanup error: {e}")
+    
     async def _handle_keyframe_failure(self, kf_num: int, sequence_num: Optional[int]) -> None:
         """
         Handle a failed keyframe by cleaning up orphaned interpolations and continuing
@@ -1001,33 +1049,63 @@ class AsyncGenerationOrchestrator:
             logger.info(f"  Cleaned up {len(orphaned_seqs)} orphaned interpolations")
         
         # === 3. Find the last successful keyframe to use as base ===
-        # Look for the most recent ready keyframe
+        # Look for the most recent keyframe with an existing file
+        # (keyframes are no longer cleaned up, so files should exist)
         last_good_kf = kf_num - 1
         last_good_path = None
+        last_good_seq = None
         
-        while last_good_kf > 0:
-            last_good_seq = self.keyframe_sequences.get(last_good_kf)
-            if last_good_seq is not None and last_good_seq in self.buffer.frames:
-                frame = self.buffer.frames[last_good_seq]
-                if frame.is_ready() and frame.file_path and frame.file_path.exists():
-                    last_good_path = frame.file_path
-                    break
+        # Get keyframe directory from buffer
+        keyframe_dir = self.buffer.keyframe_dir if hasattr(self.buffer, 'keyframe_dir') else None
+        
+        while last_good_kf > 0 and keyframe_dir:
+            # Check if keyframe file exists on disk
+            kf_path = keyframe_dir / f"keyframe_{last_good_kf:03d}.png"
+            if kf_path.exists():
+                last_good_path = kf_path
+                last_good_seq = self.keyframe_sequences.get(last_good_kf)
+                break
             last_good_kf -= 1
         
         if last_good_path:
             self.current_image_path = last_good_path
             self.current_keyframe_num = last_good_kf
             logger.info(f"  Falling back to keyframe {last_good_kf}: {last_good_path.name}")
+            
+            # === 4. Reset display position if we have orphaned display ===
+            # If display is waiting on the failed keyframe's interpolations,
+            # reset it to the last good keyframe
+            if last_good_seq is not None:
+                current_display = self.buffer.display_sequence_num
+                min_orphan = min(orphaned_seqs) if orphaned_seqs else float('inf')
+                
+                if orphaned_seqs and current_display in orphaned_seqs:
+                    # Display was pointing at an orphaned frame - reset to last good keyframe
+                    self.buffer.display_sequence_num = last_good_seq
+                    logger.warning(f"  Reset display from seq {current_display} to {last_good_seq} (last good KF)")
+                elif current_display >= min_orphan:
+                    # Display is past the orphaned range - still reset to be safe
+                    self.buffer.display_sequence_num = last_good_seq
+                    logger.warning(f"  Reset display to seq {last_good_seq} (was {current_display})")
         else:
-            logger.warning(f"  No previous keyframe found, keeping current state")
+            logger.warning(f"  No previous keyframe file found, keeping current state")
         
-        # === 4. Register a NEW keyframe to replace the failed one ===
-        # This creates a "skip" - we'll generate a new keyframe in place of the failed one
+        # === 5. Trigger immediate re-generation ===
+        # Re-register the next keyframe and its interpolations
         next_kf = self.current_keyframe_num + 1
+        interp_frames = self.config['generation']['hybrid']['interpolation_frames']
         
-        # Calculate new sequence number (after the last good keyframe + its interps)
-        # For simplicity, we'll let the normal generation loop handle this
-        # Just log the recovery and continue
+        # Calculate new sequence number after the last good keyframe
+        if last_good_seq is not None:
+            # Pre-register interpolations and keyframe
+            self.buffer.register_interpolations(
+                self.current_keyframe_num, 
+                next_kf, 
+                interp_frames
+            )
+            new_kf_seq = self.buffer.register_keyframe(next_kf)
+            self.keyframe_sequences[next_kf] = new_kf_seq
+            logger.info(f"  Re-registered KF{next_kf} at seq {new_kf_seq} with {interp_frames} interps")
         
         logger.info(f"  Recovery complete. Next generation: KF{next_kf}")
         logger.warning(f"=== RECOVERY COMPLETE ===")

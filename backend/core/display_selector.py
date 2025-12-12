@@ -210,9 +210,12 @@ class DisplayFrameSelector:
             
             self.frames_displayed += 1
             
-            # Delete the source frame immediately after successful display (if cleanup enabled)
-            # This is safe because we've already copied it to current_frame.png
-            if self.cleanup_enabled:
+            # Delete frames after display (if cleanup enabled)
+            # NOTE: Keyframe cleanup is handled by the orchestrator after the NEXT
+            # keyframe is successfully generated (to allow retries). Display selector
+            # only cleans up interpolations immediately.
+            is_keyframe = frame_spec.frame_type.value == 'keyframe'
+            if self.cleanup_enabled and not is_keyframe:
                 await self._delete_frame_async(frame_spec.file_path)
             
             # Log every 10th frame
