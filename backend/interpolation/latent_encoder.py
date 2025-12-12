@@ -367,6 +367,9 @@ class LatentEncoder:
         # Post-process tensor to PIL Image
         image = self._postprocess_image(image_tensor)
         
+        # Release reserved VRAM for ComfyUI
+        torch.cuda.empty_cache()
+        
         return image
     
     def encode_batch(self, images: List[Union[Image.Image, Path]]) -> torch.Tensor:
@@ -485,6 +488,12 @@ class LatentEncoder:
                 f"VAE={decode_ms:.0f}ms, postproc={post_ms:.0f}ms, PIL={pil_ms:.0f}ms, "
                 f"total={total_ms:.0f}ms ({total_ms/len(images):.0f}ms/frame)"
             )
+        
+        # CRITICAL: Release reserved VRAM back to system!
+        # PyTorch reserves memory for future allocations, but this prevents
+        # ComfyUI (separate process) from using the GPU effectively.
+        # Without this, VRAM grows to ~19GB reserved and ComfyUI hangs.
+        torch.cuda.empty_cache()
         
         return images
     
