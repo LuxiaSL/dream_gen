@@ -453,6 +453,14 @@ class InterpolationWorker:
                 end_kf_path = pair['end_kf_path']
                 interp_sequence_nums = pair['interp_sequence_nums']
                 
+                # Guard against empty sequence list (can happen during recovery)
+                if not interp_sequence_nums:
+                    logger.warning(
+                        f"Skipping interpolation pair KF{start_kf_num}->KF{end_kf_num}: "
+                        f"no sequence numbers (possibly orphaned during recovery)"
+                    )
+                    continue
+                
                 logger.info(
                     f"Processing interpolation pair: KF{start_kf_num}->KF{end_kf_num} "
                     f"(seq {interp_sequence_nums[0]}-{interp_sequence_nums[-1]})"
