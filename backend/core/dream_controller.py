@@ -36,6 +36,7 @@ from utils.file_ops import atomic_write_image_with_retry
 from utils.game_detector import GameDetector
 from cache.manager import CacheManager
 from cache.dual_similarity import DualMetricSimilarityManager
+from utils.perf_stats import get_perf_stats
 
 # Setup logging
 def setup_logging(log_dir: Path, log_level: str = "INFO"):
@@ -197,6 +198,20 @@ class DreamController:
                 # Create SharedVAEAccess wrapper for thread-safe VAE operations
                 self.vae_access = SharedVAEAccess(self.latent_encoder)
                 
+                # Create DEDICATED second VAE for injection blending
+                # This eliminates lock contention between interpolation and injection
+                # Cost: ~160MB VRAM (trivial vs 15+ GB headroom)
+                self.logger.info("Loading secondary VAE for injection blending (zero contention)...")
+                self.injection_vae = LatentEncoder(
+                    device=device,
+                    auto_load=True,
+                    interpolation_resolution_divisor=resolution_divisor,
+                    upscale_method=upscale_method,
+                    target_resolution=target_resolution,
+                    enable_torch_compile=False  # Simpler for occasional use
+                )
+                self.logger.info("[OK] Secondary VAE loaded for injection (dual-VAE architecture)")
+                
                 # Get seed image for bootstrap
                 seed_image = self.get_random_seed_image()
                 
@@ -209,7 +224,8 @@ class DreamController:
                     cache_manager=self.cache,
                     similarity_manager=self.similarity_manager,
                     config=self.config,
-                    seed_image=seed_image
+                    seed_image=seed_image,
+                    injection_vae=self.injection_vae  # Dedicated VAE for injection blending
                 )
                 
                 self.logger.info("  Workers: KeyframeWorker, InterpolationWorker, CacheAnalysisWorker")
@@ -959,6 +975,9 @@ class DreamController:
                 gen_stats = self.generation_coordinator.get_stats()
                 display_stats = self.display_selector.get_stats()
                 
+                # Record buffer status to perf stats (for trend analysis)
+                get_perf_stats().record_buffer_status(buffer_status['seconds_buffered'])
+                
                 # Update status.json with comprehensive stats from new system
                 status_data = {
                     "frame_number": display_stats['frames_displayed'],
@@ -1023,6 +1042,10 @@ class DreamController:
                                    f"KF: {gen_stats['keyframes_generated']} | "
                                    f"INT: {gen_stats['interpolations_generated']} | "
                                    f"Displayed: {display_stats['frames_displayed']}")
+                
+                # Log detailed perf summary every 60 seconds (for headroom analysis)
+                if int(time.time()) % 60 == 0:
+                    get_perf_stats().log_summary()
                 
                 # Update interval:
                 # - Cloud mode: 1s (only for logs, no Rainmeter to update)

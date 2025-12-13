@@ -30,6 +30,110 @@ logger = logging.getLogger(__name__)
 # Global handle for ComfyUI log file (prevents garbage collection)
 _comfyui_log_file = None
 
+# Global watchdog instance
+_watchdog = None
+
+
+class ActivityWatchdog:
+    """
+    Monitors system activity and triggers restart on prolonged inactivity.
+    
+    The watchdog tracks the last time any meaningful activity occurred
+    (frame pushed, keyframe generated, etc.). If no activity happens for
+    the timeout period, it triggers a full system restart.
+    
+    Usage:
+        watchdog = ActivityWatchdog(timeout_seconds=90, max_restarts=3)
+        watchdog.heartbeat()  # Call whenever activity occurs
+        await watchdog.run(restart_callback)  # Background monitoring task
+    """
+    
+    def __init__(self, timeout_seconds: float = 90.0, max_restarts: int = 3):
+        """
+        Initialize the watchdog.
+        
+        Args:
+            timeout_seconds: Seconds of inactivity before triggering restart
+            max_restarts: Maximum restart attempts before giving up
+        """
+        import time
+        self.timeout = timeout_seconds
+        self.max_restarts = max_restarts
+        self.restart_count = 0
+        self.last_activity = time.time()
+        self._running = False
+        self._check_interval = 10.0  # Check every 10 seconds
+        
+        logger.info(f"ActivityWatchdog initialized: timeout={timeout_seconds}s, max_restarts={max_restarts}")
+    
+    def heartbeat(self):
+        """
+        Signal that activity occurred. Call this from frame_pusher, 
+        keyframe_worker, or interpolation_worker whenever work completes.
+        """
+        import time
+        self.last_activity = time.time()
+    
+    def time_since_activity(self) -> float:
+        """Get seconds since last activity."""
+        import time
+        return time.time() - self.last_activity
+    
+    def is_stalled(self) -> bool:
+        """Check if system has been inactive for too long."""
+        return self.time_since_activity() > self.timeout
+    
+    def can_restart(self) -> bool:
+        """Check if we haven't exceeded max restart attempts."""
+        return self.restart_count < self.max_restarts
+    
+    async def run(self, restart_callback) -> None:
+        """
+        Background monitoring task. Checks for inactivity and triggers restart.
+        
+        Args:
+            restart_callback: Async function to call for restart
+        """
+        self._running = True
+        logger.info("Watchdog monitoring started")
+        
+        while self._running:
+            await asyncio.sleep(self._check_interval)
+            
+            idle_time = self.time_since_activity()
+            
+            # Log periodic status
+            if idle_time > 30:
+                logger.warning(f"WATCHDOG: No activity for {idle_time:.0f}s (timeout: {self.timeout}s)")
+            
+            if self.is_stalled():
+                if self.can_restart():
+                    self.restart_count += 1
+                    logger.error(
+                        f"WATCHDOG: No activity for {idle_time:.0f}s! "
+                        f"Triggering restart ({self.restart_count}/{self.max_restarts})..."
+                    )
+                    try:
+                        await restart_callback()
+                        self.heartbeat()  # Reset after restart attempt
+                        logger.info("WATCHDOG: Restart completed, resuming monitoring")
+                    except Exception as e:
+                        logger.error(f"WATCHDOG: Restart failed: {e}")
+                else:
+                    logger.error(
+                        f"WATCHDOG: Max restarts ({self.max_restarts}) exceeded. "
+                        f"System is unrecoverable. Stopping watchdog."
+                    )
+                    self._running = False
+                    break
+        
+        logger.info("Watchdog monitoring stopped")
+    
+    def stop(self):
+        """Stop the watchdog monitoring loop."""
+        self._running = False
+        logger.info("Watchdog stop requested")
+
 
 def setup_logging(log_level: str = "INFO") -> None:
     """Configure logging for RunPod environment"""
@@ -259,6 +363,13 @@ async def run_dream_generation(
                 logger.error("Failed to connect to VPS")
                 return {"status": "error", "error": "VPS connection failed"}
             logger.info("[OK] Connected to VPS")
+            
+            # Send target FPS configuration to VPS for smooth playback pacing
+            target_fps = config.get('generation', {}).get('hybrid', {}).get('target_interpolation_fps', 5.0)
+            import json
+            fps_config = json.dumps({"target_fps": target_fps}).encode('utf-8')
+            await vps_client.send_status(fps_config)
+            logger.info(f"[OK] Sent target FPS to VPS: {target_fps}")
         else:
             logger.error("VPS client not initialized")
             return {"status": "error", "error": "VPS client not initialized"}
@@ -274,12 +385,134 @@ async def run_dream_generation(
                 logger.error(f"Failed to restore state: {e}")
                 # Continue without state restoration
         
-        # Run generation loop
-        logger.info("Starting generation loop...")
+        # Run generation loop with watchdog monitoring
+        logger.info("Starting generation loop with watchdog...")
         controller.running = True
         
-        # Start buffered hybrid loop (async)
-        await controller.run_buffered_hybrid_loop()
+        # Create watchdog with 90s timeout, max 3 restarts
+        global _watchdog
+        _watchdog = ActivityWatchdog(timeout_seconds=90.0, max_restarts=3)
+        
+        # Hook watchdog heartbeat to frame pusher via callback (clean, no monkey-patching)
+        if hasattr(controller, 'frame_pusher') and controller.frame_pusher:
+            controller.frame_pusher.set_push_callback(_watchdog.heartbeat)
+            logger.info("Watchdog heartbeat registered via frame pusher callback")
+        else:
+            logger.warning("No frame_pusher available - watchdog may not receive heartbeats")
+        
+        # Restart callback for watchdog
+        # This is a "nuclear" restart - we stop everything and let the outer
+        # exception handler clean up. The job will be marked as failed and
+        # can be resubmitted (or RunPod may auto-retry depending on settings).
+        async def watchdog_restart():
+            logger.error("WATCHDOG RESTART: System stalled! Initiating full restart...")
+            
+            # Stop the controller gracefully
+            if controller:
+                try:
+                    controller.stop()
+                except Exception as e:
+                    logger.warning(f"Controller stop failed: {e}")
+            
+            # Kill ComfyUI to ensure clean state
+            import subprocess
+            try:
+                subprocess.run(["pkill", "-f", "ComfyUI.*main.py"], timeout=5)
+                logger.info("ComfyUI process killed")
+            except Exception as e:
+                logger.warning(f"ComfyUI kill failed: {e}")
+            
+            # Clear CUDA cache
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+                    logger.info("CUDA cache cleared")
+            except Exception as e:
+                logger.warning(f"CUDA cache clear failed: {e}")
+            
+            # Wait a moment for cleanup
+            await asyncio.sleep(2)
+            
+            # Restart ComfyUI
+            logger.info("WATCHDOG RESTART: Restarting ComfyUI...")
+            if not await start_comfyui():
+                logger.error("Failed to restart ComfyUI!")
+                raise RuntimeError("Watchdog restart failed: ComfyUI won't start")
+            
+            # Restart the controller's generation loop
+            # This is done by simply returning - the generation_task will be
+            # cancelled and restarted in the outer loop
+            logger.info("WATCHDOG RESTART: ComfyUI restarted, attempting to resume...")
+            
+            # Reset controller state for fresh start
+            if controller:
+                controller.running = True
+                # Clear any stuck queues
+                if hasattr(controller, 'generation_coordinator') and controller.generation_coordinator:
+                    coord = controller.generation_coordinator
+                    if hasattr(coord, 'keyframe_worker') and coord.keyframe_worker:
+                        # Clear the request queue
+                        while not coord.keyframe_worker.request_queue.empty():
+                            try:
+                                coord.keyframe_worker.request_queue.get_nowait()
+                            except:
+                                break
+                    if hasattr(coord, 'interpolation_worker') and coord.interpolation_worker:
+                        # Clear the pair queue
+                        while not coord.interpolation_worker.pair_queue.empty():
+                            try:
+                                coord.interpolation_worker.pair_queue.get_nowait()
+                            except:
+                                break
+                logger.info("Cleared worker queues for fresh start")
+        
+        # Track if we need to restart and current task
+        restart_requested = False
+        current_generation_task = None
+        
+        # Modified restart callback that signals for restart
+        async def watchdog_restart_signal():
+            nonlocal restart_requested, current_generation_task
+            await watchdog_restart()
+            restart_requested = True
+            # Cancel the current generation task to trigger restart
+            if current_generation_task and not current_generation_task.done():
+                current_generation_task.cancel()
+        
+        # Run with restart loop
+        while _watchdog.can_restart() or _watchdog.restart_count == 0:
+            restart_requested = False
+            
+            # Run generation and watchdog in parallel
+            current_generation_task = asyncio.create_task(controller.run_buffered_hybrid_loop())
+            watchdog_task = asyncio.create_task(_watchdog.run(watchdog_restart_signal))
+            
+            try:
+                # Wait for generation to complete
+                await current_generation_task
+                # If we get here normally, generation completed successfully
+                logger.info("Generation loop completed normally")
+                break
+                
+            except asyncio.CancelledError:
+                if restart_requested:
+                    logger.info("Generation cancelled for watchdog restart, restarting loop...")
+                    # Give the system a moment before restarting
+                    await asyncio.sleep(1)
+                    continue
+                else:
+                    logger.info("Generation cancelled externally")
+                    raise
+                    
+            finally:
+                _watchdog.stop()
+                watchdog_task.cancel()
+                try:
+                    await watchdog_task
+                except asyncio.CancelledError:
+                    pass
         
         logger.info("Generation loop completed")
         

@@ -16,6 +16,7 @@ from typing import Optional, Dict, Any, Tuple, List
 import torch
 
 from utils.vram_profiler import dump_vram_on_oom, is_oom_error
+from utils.perf_stats import get_perf_stats
 
 logger = logging.getLogger(__name__)
 
@@ -377,6 +378,13 @@ class InterpolationWorker:
         logger.info(f"    - Decode all:    {timings['decode_all']:.3f}s ({avg_decode*1000:.1f}ms per frame)")
         logger.info(f"    - Save all:      {timings['save_all']:.3f}s ({avg_save*1000:.1f}ms per frame)")
         logger.info(f"  [BATCHED] Single VAE lock acquisition for {count} frames")
+        
+        # Record to perf stats
+        perf = get_perf_stats()
+        perf.record_interpolation_batch(count, timings['total'])
+        # Record per-frame decode time for bottleneck analysis
+        if count > 0:
+            perf.record_decode_time(timings['decode_all'] / count)
         
         # === CACHE INTERPOLATION MIDPOINT (for diversity) ===
         # Only cache the midpoint (t≈0.5) frame - naturally diverse transitions

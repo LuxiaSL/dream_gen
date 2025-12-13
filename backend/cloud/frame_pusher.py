@@ -12,12 +12,16 @@ import asyncio
 import logging
 import time
 import io
-from typing import Optional
+from typing import Optional, Callable
 from PIL import Image
 
 from .websocket_client import VPSWebSocketClient
+from utils.perf_stats import get_perf_stats
 
 logger = logging.getLogger(__name__)
+
+# Type alias for push callbacks
+PushCallback = Callable[[], None]
 
 
 class CloudFramePusher:
@@ -47,6 +51,9 @@ class CloudFramePusher:
         self.quality = frame_config.get('quality', 85)
         self.include_interpolations = frame_config.get('include_interpolations', True)
         
+        # Optional callback invoked after each successful push (for watchdog heartbeat, etc.)
+        self._on_push_callback: Optional[PushCallback] = None
+        
         # Statistics
         self.frames_pushed = 0
         self.keyframes_pushed = 0
@@ -59,6 +66,22 @@ class CloudFramePusher:
         self._buffer = io.BytesIO()
         
         logger.info(f"CloudFramePusher initialized: format={self.format}, quality={self.quality}")
+    
+    def set_push_callback(self, callback: Optional[PushCallback]) -> None:
+        """
+        Set a callback to be invoked after each successful frame push.
+        
+        Useful for watchdog heartbeat, metrics, etc. The callback is called
+        synchronously after each successful push (not for skipped frames).
+        
+        Args:
+            callback: Function to call after push, or None to clear
+        """
+        self._on_push_callback = callback
+        if callback:
+            logger.debug("Push callback registered")
+        else:
+            logger.debug("Push callback cleared")
     
     async def push_frame(
         self,
@@ -128,6 +151,16 @@ class CloudFramePusher:
                         f"(encode={encode_time*1000:.1f}ms, network={push_time*1000:.1f}ms, "
                         f"size={len(frame_bytes)/1024:.1f}KB)"
                     )
+                
+                # Invoke callback (for watchdog heartbeat, etc.)
+                if self._on_push_callback:
+                    try:
+                        self._on_push_callback()
+                    except Exception as e:
+                        logger.warning(f"Push callback failed: {e}")
+                
+                # Record to perf stats (tracks push throughput to VPS)
+                get_perf_stats().record_frame_push(total_time)
             
             return success
         

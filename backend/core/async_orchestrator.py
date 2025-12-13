@@ -81,7 +81,8 @@ class AsyncGenerationOrchestrator:
         cache_manager,  # CacheManager instance
         similarity_manager,  # DualMetricSimilarityManager instance
         config: Dict[str, Any],
-        seed_image: Optional[Path] = None
+        seed_image: Optional[Path] = None,
+        injection_vae=None  # Dedicated LatentEncoder for injection blending (zero contention)
     ):
         """
         Initialize async generation orchestrator
@@ -95,6 +96,8 @@ class AsyncGenerationOrchestrator:
             similarity_manager: DualMetricSimilarityManager for embeddings
             config: Configuration dictionary
             seed_image: Optional seed image to start generation
+            injection_vae: Optional dedicated LatentEncoder for injection blending.
+                          If provided, eliminates lock contention with interpolation.
         """
         self.buffer = frame_buffer
         self.generator = generator
@@ -103,6 +106,7 @@ class AsyncGenerationOrchestrator:
         self.cache = cache_manager
         self.similarity_manager = similarity_manager
         self.config = config
+        self.injection_vae = injection_vae  # Dedicated VAE for injection (no contention)
         
         # === Create Workers ===
         self.keyframe_worker = KeyframeWorker(
@@ -157,14 +161,26 @@ class AsyncGenerationOrchestrator:
         
         # Initialize injection strategy (always enabled when cache/similarity available)
         if cache_manager and similarity_manager:
-            self.injection_strategy = CacheInjectionStrategy(
-                config=self.config,
-                cache_manager=cache_manager,
-                similarity_manager=similarity_manager,
-                vae_access=vae_access,  # Pass SharedVAEAccess (not encoder)
-                buffer=frame_buffer
-            )
-            logger.info("Injection strategy initialized (async with VAE lock)")
+            # Use dedicated injection VAE if available (zero contention with interpolation)
+            # Otherwise fall back to shared VAE access (with lock)
+            if injection_vae:
+                self.injection_strategy = CacheInjectionStrategy(
+                    config=self.config,
+                    cache_manager=cache_manager,
+                    similarity_manager=similarity_manager,
+                    latent_encoder=injection_vae,  # Dedicated VAE - no lock needed!
+                    buffer=frame_buffer
+                )
+                logger.info("Injection strategy initialized (dedicated VAE - zero contention)")
+            else:
+                self.injection_strategy = CacheInjectionStrategy(
+                    config=self.config,
+                    cache_manager=cache_manager,
+                    similarity_manager=similarity_manager,
+                    vae_access=vae_access,  # Shared VAE with lock (legacy path)
+                    buffer=frame_buffer
+                )
+                logger.info("Injection strategy initialized (shared VAE with lock)")
         
         # === State Tracking ===
         self.running = False

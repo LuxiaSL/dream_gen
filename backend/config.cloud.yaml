@@ -38,13 +38,13 @@ generation:
     
     # Reduced from 20 to 10 for better performance
     # 10 frames still provides smooth interpolation
-    interpolation_frames: 10
+    interpolation_frames: 15
     
     # Target 5 FPS display rate (realistic for 1024x512 + VAE decode)
     target_interpolation_fps: 5.0
     
-    # Denoise strength for keyframes
-    keyframe_denoise: 0.20
+    # Denoise strength for keyframesxz
+    keyframe_denoise: 0.45
     
     # Full resolution interpolation
     interpolation_resolution_divisor: 1
@@ -56,7 +56,7 @@ generation:
   
   # img2img parameters
   img2img:
-    denoise: 0.3
+    denoise: 0.45
   
   # Cache system - larger for cloud
   cache:

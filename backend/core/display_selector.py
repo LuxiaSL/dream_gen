@@ -20,6 +20,7 @@ from typing import Optional, Dict, Any, Callable, Awaitable
 from PIL import Image
 
 from .frame_buffer import FrameBuffer
+from utils.perf_stats import get_perf_stats
 
 logger = logging.getLogger(__name__)
 
@@ -221,6 +222,9 @@ class DisplayFrameSelector:
             self.buffer.advance_display()
             
             self.frames_displayed += 1
+            
+            # Record to perf stats (tracks actual display rate)
+            get_perf_stats().record_display_frame()
             
             # Delete the source frame immediately after successful display (if cleanup enabled)
             # This is safe because we've already copied it to current_frame.png

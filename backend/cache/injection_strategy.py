@@ -276,14 +276,16 @@ class CacheInjectionStrategy:
                         for_interpolation=True
                     )
                 else:
-                    # Legacy sync mode (no lock - only safe in single-threaded context)
-                    current_latent = self.latent_encoder.encode(
-                        current_image_path,
-                        for_interpolation=True
+                    # Dedicated VAE mode (no lock - runs in executor to avoid blocking)
+                    import asyncio
+                    loop = asyncio.get_event_loop()
+                    current_latent = await loop.run_in_executor(
+                        None,
+                        lambda: self.latent_encoder.encode(current_image_path, for_interpolation=True)
                     )
-                    cached_latent = self.latent_encoder.encode(
-                        selected_entry.image_path,
-                        for_interpolation=True
+                    cached_latent = await loop.run_in_executor(
+                        None,
+                        lambda: self.latent_encoder.encode(selected_entry.image_path, for_interpolation=True)
                     )
                 
                 # Blend: weighted towards cached (breaking collapse)
@@ -300,9 +302,10 @@ class CacheInjectionStrategy:
                         upscale_to_target=True
                     )
                 else:
-                    blended_image = self.latent_encoder.decode(
-                        blended_latent,
-                        upscale_to_target=True
+                    # Dedicated VAE mode (runs in executor to avoid blocking event loop)
+                    blended_image = await loop.run_in_executor(
+                        None,
+                        lambda: self.latent_encoder.decode(blended_latent, upscale_to_target=True)
                     )
                 
                 # Save blended frame
@@ -495,14 +498,16 @@ class CacheInjectionStrategy:
                         for_interpolation=True
                     )
                 else:
-                    # Legacy sync mode
-                    current_latent = self.latent_encoder.encode(
-                        current_image_path,
-                        for_interpolation=True
+                    # Dedicated VAE mode (runs in executor to avoid blocking)
+                    import asyncio
+                    loop = asyncio.get_event_loop()
+                    current_latent = await loop.run_in_executor(
+                        None,
+                        lambda: self.latent_encoder.encode(current_image_path, for_interpolation=True)
                     )
-                    seed_latent = self.latent_encoder.encode(
-                        seed_path,
-                        for_interpolation=True
+                    seed_latent = await loop.run_in_executor(
+                        None,
+                        lambda: self.latent_encoder.encode(seed_path, for_interpolation=True)
                     )
                 
                 blend_weight = self.cache_config.get('seed_blend_weight', 0.5)
@@ -518,9 +523,10 @@ class CacheInjectionStrategy:
                         upscale_to_target=True
                     )
                 else:
-                    blended_image = self.latent_encoder.decode(
-                        blended_latent,
-                        upscale_to_target=True
+                    # Dedicated VAE mode
+                    blended_image = await loop.run_in_executor(
+                        None,
+                        lambda: self.latent_encoder.decode(blended_latent, upscale_to_target=True)
                     )
                 
                 # Save blended seed

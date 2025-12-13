@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 
 from utils.vram_profiler import dump_vram_on_oom
+from utils.perf_stats import get_perf_stats
 
 logger = logging.getLogger(__name__)
 
@@ -278,6 +279,9 @@ class KeyframeWorker:
                             
                             self.requests_processed += 1
                             self.total_generation_time += total_elapsed
+                            
+                            # Record to perf stats
+                            get_perf_stats().record_keyframe_time(total_elapsed)
                             
                             if attempt > 0:
                                 logger.info(
