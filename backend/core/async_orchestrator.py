@@ -1070,7 +1070,7 @@ class AsyncGenerationOrchestrator:
         logger.info(f"  Registered KF{next_kf} at seq {new_kf_seq}")
         
         # === 6. Submit the new keyframe request ===
-        prompt = self.prompt_manager.get_prompt()
+        prompt = self.prompt_manager.get_next_prompt()
         
         await self.keyframe_worker.submit_request(
             current_image=self.current_image_path,

@@ -149,6 +149,19 @@ class CloudFramePusher:
         self._buffer.seek(0)
         self._buffer.truncate()
         
+        # Convert RGBA to RGB for formats that don't support alpha
+        if image.mode == 'RGBA' and self.format in ('jpeg', 'jpg'):
+            # Create white background and composite
+            background = Image.new('RGB', image.size, (255, 255, 255))
+            background.paste(image, mask=image.split()[3])  # Use alpha as mask
+            image = background
+        elif image.mode == 'RGBA' and self.format == 'webp':
+            # WebP supports RGBA, but RGB is smaller and we don't need alpha
+            image = image.convert('RGB')
+        elif image.mode not in ('RGB', 'L'):
+            # Convert any other mode to RGB
+            image = image.convert('RGB')
+        
         if self.format == 'webp':
             # WebP encoding with quality setting
             image.save(
