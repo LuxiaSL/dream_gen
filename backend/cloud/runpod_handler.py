@@ -365,7 +365,7 @@ async def run_dream_generation(
             logger.info("[OK] Connected to VPS")
             
             # Send target FPS configuration to VPS for smooth playback pacing
-            target_fps = config.get('generation', {}).get('hybrid', {}).get('target_interpolation_fps', 5.0)
+            target_fps = controller.config.get('generation', {}).get('hybrid', {}).get('target_interpolation_fps', 5.0)
             import json
             fps_config = json.dumps({"target_fps": target_fps}).encode('utf-8')
             await vps_client.send_status(fps_config)
