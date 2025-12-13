@@ -368,8 +368,11 @@ async def run_dream_generation(
             target_fps = controller.config.get('generation', {}).get('hybrid', {}).get('target_interpolation_fps', 5.0)
             import json
             fps_config = json.dumps({"target_fps": target_fps}).encode('utf-8')
-            await vps_client.send_status(fps_config)
-            logger.info(f"[OK] Sent target FPS to VPS: {target_fps}")
+            fps_sent = await vps_client.send_status(fps_config)
+            if fps_sent:
+                logger.info(f"[OK] Sent target FPS to VPS: {target_fps}")
+            else:
+                logger.warning(f"Failed to send target FPS to VPS (will use default)")
         else:
             logger.error("VPS client not initialized")
             return {"status": "error", "error": "VPS client not initialized"}
