@@ -54,10 +54,28 @@ async def start_comfyui() -> bool:
     
     logger.info(f"Starting ComfyUI from {comfyui_path}...")
     
+    # ComfyUI optimized options for cloud 24GB GPU:
+    # --highvram: Keep models in VRAM (we have 24GB, no need to swap)
+    # --cuda-malloc: Use CUDA's native allocator (more stable)
+    # --preview-method none: No previews needed for headless generation
+    # --disable-metadata: Don't embed metadata (faster saves)
+    # --gpu-only: Force GPU mode, no CPU fallback
+    comfyui_args = [
+        "python", "main.py",
+        "--listen", "127.0.0.1",
+        "--port", str(comfyui_port),
+        "--highvram",
+        "--cuda-malloc",
+        "--preview-method", "none",
+        "--disable-metadata",
+    ]
+    
+    logger.info(f"ComfyUI args: {' '.join(comfyui_args)}")
+    
     # Start ComfyUI in background
     try:
         process = subprocess.Popen(
-            ["python", "main.py", "--listen", "127.0.0.1", "--port", str(comfyui_port)],
+            comfyui_args,
             cwd=comfyui_path,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
