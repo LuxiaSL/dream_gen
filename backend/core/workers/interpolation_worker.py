@@ -586,4 +586,49 @@ class InterpolationWorker:
             'is_processing': self.processing,
             'is_running': self.running
         }
+    
+    def is_keyframe_protected(self, frame_path: Path) -> bool:
+        """
+        Check if a keyframe should be protected from deletion.
+        
+        A keyframe is protected if:
+        1. It's in the pending interpolation queue (start or end of a pair)
+        2. It's currently being processed
+        3. It's cached as a latent (we might still need it)
+        
+        Args:
+            frame_path: Path to check
+            
+        Returns:
+            True if keyframe should NOT be deleted
+        """
+        frame_name = frame_path.name if isinstance(frame_path, Path) else Path(frame_path).name
+        
+        # Check if it's in the cached keyframe paths (recently used, might be needed)
+        for kf_num, cached_path in self.keyframe_paths.items():
+            if cached_path.name == frame_name:
+                logger.debug(f"Protecting {frame_name}: cached latent for KF{kf_num}")
+                return True
+        
+        # Check pending queue - peek at items without removing them
+        # Note: This is thread-safe read of queue internal state
+        try:
+            # Access queue's internal list (asyncio.Queue uses collections.deque)
+            pending_items = list(self.pair_queue._queue)
+            for pair in pending_items:
+                start_path = pair.get('start_kf_path')
+                end_path = pair.get('end_kf_path')
+                
+                if start_path and Path(start_path).name == frame_name:
+                    logger.debug(f"Protecting {frame_name}: pending interpolation start")
+                    return True
+                if end_path and Path(end_path).name == frame_name:
+                    logger.debug(f"Protecting {frame_name}: pending interpolation end")
+                    return True
+        except Exception as e:
+            # If we can't check, err on side of protection
+            logger.debug(f"Queue check failed, protecting {frame_name}: {e}")
+            return True
+        
+        return False
 

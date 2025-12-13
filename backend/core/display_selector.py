@@ -53,7 +53,8 @@ class DisplayFrameSelector:
         cleanup_displayed_frames: bool = False,
         on_frame_callback: Optional[Callable[[Image.Image, int, bool], Awaitable[None]]] = None,
         skip_disk_write: bool = False,
-        keyframe_worker=None  # Optional: KeyframeWorker for source image protection
+        keyframe_worker=None,  # Optional: KeyframeWorker for source image protection
+        interpolation_worker=None  # Optional: InterpolationWorker for pending interpolation protection
     ):
         """
         Initialize display frame selector
@@ -69,6 +70,8 @@ class DisplayFrameSelector:
             skip_disk_write: If True, skip writing current_frame.png (cloud mode optimization)
             keyframe_worker: Optional KeyframeWorker instance - if provided, will check
                             before deleting keyframes to protect source images during retry
+            interpolation_worker: Optional InterpolationWorker instance - if provided, will check
+                            before deleting keyframes to protect those needed for pending interpolations
         """
         self.buffer = frame_buffer
         self.output_dir = Path(output_dir)
@@ -84,6 +87,9 @@ class DisplayFrameSelector:
         
         # Keyframe worker reference for source image protection during retries
         self.keyframe_worker = keyframe_worker
+        
+        # Interpolation worker reference for pending interpolation protection
+        self.interpolation_worker = interpolation_worker
         
         # Timing
         self.frame_interval = 1.0 / target_fps if target_fps > 0 else 0.25
@@ -333,7 +339,17 @@ class DisplayFrameSelector:
                         return
                 except Exception as e:
                     # Don't fail on protection check - just log and continue
-                    logger.debug(f"Protection check failed: {e}")
+                    logger.debug(f"Keyframe protection check failed: {e}")
+            
+            # Check if interpolation_worker needs this keyframe for pending interpolations
+            if self.interpolation_worker is not None:
+                try:
+                    if self.interpolation_worker.is_keyframe_protected(frame_path):
+                        logger.info(f"Skipping delete of keyframe needed for interpolation: {frame_path.name}")
+                        return
+                except Exception as e:
+                    # Don't fail on protection check - just log and continue
+                    logger.debug(f"Interpolation protection check failed: {e}")
             
             # Delete the file
             frame_path.unlink()

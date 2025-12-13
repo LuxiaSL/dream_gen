@@ -243,6 +243,11 @@ class DreamController:
             if hasattr(self.generation_coordinator, 'keyframe_worker'):
                 keyframe_worker = self.generation_coordinator.keyframe_worker
             
+            # Get interpolation_worker reference for protecting keyframes during pending interpolations
+            interpolation_worker = None
+            if hasattr(self.generation_coordinator, 'interpolation_worker'):
+                interpolation_worker = self.generation_coordinator.interpolation_worker
+            
             # Create display selector
             self.display_selector = DisplayFrameSelector(
                 frame_buffer=self.frame_buffer,
@@ -251,7 +256,8 @@ class DreamController:
                 min_buffer_seconds=min_buffer_seconds,
                 cleanup_displayed_frames=cleanup_enabled,
                 skip_disk_write=cloud_mode,  # Skip disk I/O in cloud mode
-                keyframe_worker=keyframe_worker  # Protect source images during retry
+                keyframe_worker=keyframe_worker,  # Protect source images during retry
+                interpolation_worker=interpolation_worker  # Protect keyframes for pending interpolations
             )
             
             self.logger.info("[OK] Buffered frame system initialized")
