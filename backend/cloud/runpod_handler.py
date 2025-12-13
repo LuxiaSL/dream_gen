@@ -27,6 +27,9 @@ from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
+# Global handle for ComfyUI log file (prevents garbage collection)
+_comfyui_log_file = None
+
 
 def setup_logging(log_level: str = "INFO") -> None:
     """Configure logging for RunPod environment"""
@@ -72,14 +75,36 @@ async def start_comfyui() -> bool:
     
     logger.info(f"ComfyUI args: {' '.join(comfyui_args)}")
     
-    # Start ComfyUI in background
+    # Create log file for ComfyUI output (critical for debugging hangs!)
+    # Use unbuffered mode so logs appear immediately
+    comfyui_log_path = "/app/comfyui.log"
+    logger.info(f"ComfyUI logs will be written to: {comfyui_log_path}")
+    
+    # Start ComfyUI in background with output logged to file
     try:
+        comfyui_log_file = open(comfyui_log_path, 'w', buffering=1)  # Line-buffered
+        
+        # Write header with startup info
+        import datetime
+        comfyui_log_file.write(f"=" * 80 + "\n")
+        comfyui_log_file.write(f"ComfyUI Started: {datetime.datetime.now().isoformat()}\n")
+        comfyui_log_file.write(f"Args: {' '.join(comfyui_args)}\n")
+        comfyui_log_file.write(f"Working Dir: {comfyui_path}\n")
+        comfyui_log_file.write(f"=" * 80 + "\n")
+        comfyui_log_file.flush()
+        
+        # Store globally to prevent garbage collection closing the file
+        global _comfyui_log_file
+        _comfyui_log_file = comfyui_log_file
+        
         process = subprocess.Popen(
             comfyui_args,
             cwd=comfyui_path,
-            stdout=subprocess.PIPE,
+            stdout=comfyui_log_file,
             stderr=subprocess.STDOUT,
             text=True,
+            # Force Python to run unbuffered for immediate log output
+            env={**os.environ, 'PYTHONUNBUFFERED': '1'},
         )
         logger.info(f"ComfyUI process started (PID: {process.pid})")
     except Exception as e:
