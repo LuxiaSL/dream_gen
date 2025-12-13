@@ -350,7 +350,8 @@ class KeyframeWorker:
                         'success': False,
                         'error': last_error,
                         'retries': self.MAX_RETRIES,
-                        'source_image': str(current_image)  # Include for recovery info
+                        'source_image': str(current_image),  # Include for recovery info
+                        'prompt': prompt  # Include original prompt for recovery retry
                     }
                     await self.result_queue.put(failure_result)
                 

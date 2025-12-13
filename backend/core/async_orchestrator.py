@@ -391,13 +391,14 @@ class AsyncGenerationOrchestrator:
                     # Keyframe generation failed! Need to recover.
                     error = result.get('error', 'Unknown error')
                     retries = result.get('retries', 0)
+                    original_prompt = result.get('prompt')  # Get cached prompt for retry
                     logger.error(f"[FAIL] Keyframe {kf_num} failed after {retries} retries: {error}")
                     
                     # Mark task done
                     self.keyframe_worker.result_queue.task_done()
                     
                     # === RECOVERY: Skip this keyframe and its pending interpolations ===
-                    await self._handle_keyframe_failure(kf_num, sequence_num)
+                    await self._handle_keyframe_failure(kf_num, sequence_num, original_prompt)
                     continue
                 
                 kf_path = result['path']
@@ -953,7 +954,12 @@ class AsyncGenerationOrchestrator:
             logger.error(f"Injection failed: {e}", exc_info=True)
             return None
     
-    async def _handle_keyframe_failure(self, kf_num: int, sequence_num: Optional[int]) -> None:
+    async def _handle_keyframe_failure(
+        self, 
+        kf_num: int, 
+        sequence_num: Optional[int],
+        original_prompt: Optional[str] = None
+    ) -> None:
         """
         Handle a failed keyframe by cleaning up orphaned interpolations and continuing
         
@@ -962,12 +968,13 @@ class AsyncGenerationOrchestrator:
         2. Remove any pending interpolations that depend on this keyframe
         3. Use the PREVIOUS keyframe as the current image for next generation
         4. Re-register a new keyframe and its interpolations
-        5. Submit the new keyframe request to worker
+        5. Submit the new keyframe request to worker (using original prompt if available)
         6. Fix display position if stuck on deleted frames
         
         Args:
             kf_num: The failed keyframe number
             sequence_num: The sequence number in buffer (if known)
+            original_prompt: The prompt that was used for the failed keyframe (for retry consistency)
         """
         logger.warning(f"=== RECOVERING FROM KEYFRAME {kf_num} FAILURE ===")
         
@@ -1070,7 +1077,14 @@ class AsyncGenerationOrchestrator:
         logger.info(f"  Registered KF{next_kf} at seq {new_kf_seq}")
         
         # === 6. Submit the new keyframe request ===
-        prompt = self.prompt_manager.get_next_prompt()
+        # Use the original prompt if available (for retry consistency)
+        # Otherwise get the next prompt from the rotation
+        if original_prompt:
+            prompt = original_prompt
+            logger.info(f"  Using original prompt for retry (preserving consistency)")
+        else:
+            prompt = self.prompt_manager.get_next_prompt()
+            logger.info(f"  Using new prompt from rotation")
         
         await self.keyframe_worker.submit_request(
             current_image=self.current_image_path,
