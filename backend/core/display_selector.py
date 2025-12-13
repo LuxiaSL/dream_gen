@@ -52,7 +52,8 @@ class DisplayFrameSelector:
         min_buffer_seconds: float = 30.0,
         cleanup_displayed_frames: bool = False,
         on_frame_callback: Optional[Callable[[Image.Image, int, bool], Awaitable[None]]] = None,
-        skip_disk_write: bool = False
+        skip_disk_write: bool = False,
+        keyframe_worker=None  # Optional: KeyframeWorker for source image protection
     ):
         """
         Initialize display frame selector
@@ -66,6 +67,8 @@ class DisplayFrameSelector:
             on_frame_callback: Optional async callback(image, frame_num, is_keyframe) 
                                called for each displayed frame (e.g., for cloud push)
             skip_disk_write: If True, skip writing current_frame.png (cloud mode optimization)
+            keyframe_worker: Optional KeyframeWorker instance - if provided, will check
+                            before deleting keyframes to protect source images during retry
         """
         self.buffer = frame_buffer
         self.output_dir = Path(output_dir)
@@ -78,6 +81,9 @@ class DisplayFrameSelector:
         
         # Cloud mode optimization - skip disk write for current_frame.png
         self.skip_disk_write = skip_disk_write
+        
+        # Keyframe worker reference for source image protection during retries
+        self.keyframe_worker = keyframe_worker
         
         # Timing
         self.frame_interval = 1.0 / target_fps if target_fps > 0 else 0.25
@@ -318,6 +324,16 @@ class DisplayFrameSelector:
             if not str(frame_path).startswith(str(self.output_dir)):
                 logger.warning(f"Refusing to delete file outside output dir: {frame_path}")
                 return
+            
+            # Check if keyframe_worker is protecting this image (for retry)
+            if self.keyframe_worker is not None:
+                try:
+                    if self.keyframe_worker.is_source_image_protected(frame_path):
+                        logger.info(f"Skipping delete of protected source image: {frame_path.name}")
+                        return
+                except Exception as e:
+                    # Don't fail on protection check - just log and continue
+                    logger.debug(f"Protection check failed: {e}")
             
             # Delete the file
             frame_path.unlink()

@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
 import torch
 
+from utils.vram_profiler import dump_vram_on_oom, is_oom_error
+
 logger = logging.getLogger(__name__)
 
 
@@ -303,6 +305,16 @@ class InterpolationWorker:
                 decoded_images.append((image, frame_spec, sequence_num))
         except Exception as e:
             logger.error(f"Batch decode failed, falling back to sequential: {e}", exc_info=True)
+            
+            # Dump VRAM diagnostics if this is an OOM error
+            if is_oom_error(e):
+                dump_vram_on_oom(
+                    context=f"Batch decode {start_kf_num}->{end_kf_num} ({count} frames)",
+                    exception=e
+                )
+                # Try to free memory before sequential fallback
+                torch.cuda.empty_cache()
+            
             # Fallback to sequential decode with per-frame timing
             decoded_images = []
             decode_times = []

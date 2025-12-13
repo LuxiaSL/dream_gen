@@ -237,6 +237,12 @@ class DreamController:
             # (frames are pushed directly via WebSocket, disk write is unnecessary)
             cloud_mode = self.config.get('cloud', {}).get('enabled', False)
             
+            # Get keyframe_worker reference for source image protection during retries
+            # (only available when using async orchestrator)
+            keyframe_worker = None
+            if hasattr(self.generation_coordinator, 'keyframe_worker'):
+                keyframe_worker = self.generation_coordinator.keyframe_worker
+            
             # Create display selector
             self.display_selector = DisplayFrameSelector(
                 frame_buffer=self.frame_buffer,
@@ -244,7 +250,8 @@ class DreamController:
                 target_fps=target_fps,
                 min_buffer_seconds=min_buffer_seconds,
                 cleanup_displayed_frames=cleanup_enabled,
-                skip_disk_write=cloud_mode  # Skip disk I/O in cloud mode
+                skip_disk_write=cloud_mode,  # Skip disk I/O in cloud mode
+                keyframe_worker=keyframe_worker  # Protect source images during retry
             )
             
             self.logger.info("[OK] Buffered frame system initialized")

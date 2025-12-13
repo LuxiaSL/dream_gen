@@ -961,7 +961,9 @@ class AsyncGenerationOrchestrator:
         1. Mark the failed keyframe as skipped/failed in buffer
         2. Remove any pending interpolations that depend on this keyframe
         3. Use the PREVIOUS keyframe as the current image for next generation
-        4. Re-register a new keyframe to replace the failed one
+        4. Re-register a new keyframe and its interpolations
+        5. Submit the new keyframe request to worker
+        6. Fix display position if stuck on deleted frames
         
         Args:
             kf_num: The failed keyframe number
@@ -1004,13 +1006,15 @@ class AsyncGenerationOrchestrator:
         # Look for the most recent ready keyframe
         last_good_kf = kf_num - 1
         last_good_path = None
+        last_good_seq = None
         
         while last_good_kf > 0:
-            last_good_seq = self.keyframe_sequences.get(last_good_kf)
-            if last_good_seq is not None and last_good_seq in self.buffer.frames:
-                frame = self.buffer.frames[last_good_seq]
+            seq = self.keyframe_sequences.get(last_good_kf)
+            if seq is not None and seq in self.buffer.frames:
+                frame = self.buffer.frames[seq]
                 if frame.is_ready() and frame.file_path and frame.file_path.exists():
                     last_good_path = frame.file_path
+                    last_good_seq = seq
                     break
             last_good_kf -= 1
         
@@ -1019,17 +1023,64 @@ class AsyncGenerationOrchestrator:
             self.current_keyframe_num = last_good_kf
             logger.info(f"  Falling back to keyframe {last_good_kf}: {last_good_path.name}")
         else:
-            logger.warning(f"  No previous keyframe found, keeping current state")
+            # No previous keyframe - try to use a seed image
+            logger.warning(f"  No previous keyframe found!")
+            seed_dir = Path(self.config['system'].get('seed_dir', 'seeds'))
+            if seed_dir.exists():
+                seeds = list(seed_dir.glob("*.png")) + list(seed_dir.glob("*.jpg"))
+                if seeds:
+                    import random
+                    self.current_image_path = random.choice(seeds)
+                    self.current_keyframe_num = 0
+                    logger.info(f"  Using seed image: {self.current_image_path.name}")
+                else:
+                    logger.error(f"  No seed images available - cannot recover!")
+                    return
+            else:
+                logger.error(f"  No seed directory - cannot recover!")
+                return
         
-        # === 4. Register a NEW keyframe to replace the failed one ===
-        # This creates a "skip" - we'll generate a new keyframe in place of the failed one
+        # === 4. Fix display position if stuck on deleted frames ===
+        current_display = self.buffer.display_sequence_num
+        if current_display in orphaned_seqs or (sequence_num and current_display >= sequence_num):
+            # Display is pointing at deleted/orphaned frames
+            if last_good_seq is not None:
+                logger.warning(f"  Display was at seq {current_display} (deleted) - resetting to {last_good_seq}")
+                self.buffer.display_sequence_num = last_good_seq
+            else:
+                # Reset to beginning
+                logger.warning(f"  Display reset to beginning")
+                self.buffer.display_sequence_num = 0
+        
+        # === 5. Register NEW keyframe cycle ===
         next_kf = self.current_keyframe_num + 1
+        interp_frames = self.config['generation']['hybrid']['interpolation_frames']
         
-        # Calculate new sequence number (after the last good keyframe + its interps)
-        # For simplicity, we'll let the normal generation loop handle this
-        # Just log the recovery and continue
+        # Register interpolations first (they come before the keyframe in sequence)
+        interp_seqs = self.buffer.register_interpolations(
+            self.current_keyframe_num, 
+            next_kf, 
+            interp_frames
+        )
+        logger.info(f"  Registered {interp_frames} interpolations: seq {interp_seqs[0]}-{interp_seqs[-1]}")
         
-        logger.info(f"  Recovery complete. Next generation: KF{next_kf}")
+        # Register the new keyframe
+        new_kf_seq = self.buffer.register_keyframe(next_kf)
+        self.keyframe_sequences[next_kf] = new_kf_seq
+        logger.info(f"  Registered KF{next_kf} at seq {new_kf_seq}")
+        
+        # === 6. Submit the new keyframe request ===
+        prompt = self.prompt_manager.get_prompt()
+        
+        await self.keyframe_worker.submit_request(
+            current_image=self.current_image_path,
+            keyframe_num=next_kf,
+            sequence_num=new_kf_seq,
+            prompt=prompt
+        )
+        logger.info(f"  Submitted new KF{next_kf} request")
+        
+        logger.info(f"  Recovery complete. Generating: KF{next_kf}")
         logger.warning(f"=== RECOVERY COMPLETE ===")
     
     def get_stats(self) -> Dict[str, Any]:

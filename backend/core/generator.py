@@ -588,6 +588,67 @@ class DreamGenerator:
             "total_frames": self.frame_count,
         }
 
+    # === ComfyUI Recovery Methods ===
+    
+    def interrupt_and_clear_queue(self) -> bool:
+        """
+        Emergency recovery: Interrupt current execution and clear the queue.
+        
+        Call this when generation times out or ComfyUI appears stuck.
+        This is the nuclear option to reset ComfyUI to a clean state.
+        
+        Returns:
+            True if both operations succeeded
+        """
+        logger.warning("Interrupting ComfyUI and clearing queue...")
+        
+        # First interrupt any running execution
+        interrupt_ok = self.client.interrupt_execution()
+        if interrupt_ok:
+            logger.info("  Interrupted current execution")
+        else:
+            logger.warning("  Failed to interrupt (may not have been running)")
+        
+        # Then clear the pending queue
+        clear_ok = self.client.clear_queue()
+        if clear_ok:
+            logger.info("  Cleared pending queue")
+        else:
+            logger.warning("  Failed to clear queue")
+        
+        return interrupt_ok and clear_ok
+    
+    def is_comfyui_responsive(self) -> bool:
+        """
+        Health check: Verify ComfyUI is responding.
+        
+        Returns:
+            True if ComfyUI responds to API calls
+        """
+        try:
+            queue = self.client.get_queue()
+            return queue is not None
+        except Exception as e:
+            logger.error(f"ComfyUI health check failed: {e}")
+            return False
+    
+    def get_queue_status(self) -> dict:
+        """
+        Get current ComfyUI queue status.
+        
+        Returns:
+            Dictionary with 'running' and 'pending' counts
+        """
+        try:
+            queue = self.client.get_queue()
+            if queue:
+                running = len(queue.get("queue_running", []))
+                pending = len(queue.get("queue_pending", []))
+                return {"running": running, "pending": pending}
+            return {"running": 0, "pending": 0, "error": "No queue data"}
+        except Exception as e:
+            return {"running": 0, "pending": 0, "error": str(e)}
+    
     def close(self) -> None:
         """Clean up resources"""
         self.client.close()
