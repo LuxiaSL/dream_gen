@@ -52,8 +52,7 @@ class DisplayFrameSelector:
         min_buffer_seconds: float = 30.0,
         cleanup_displayed_frames: bool = False,
         on_frame_callback: Optional[Callable[[Image.Image, int, bool], Awaitable[None]]] = None,
-        skip_disk_write: bool = False,
-        on_hard_reset_callback: Optional[Callable[[], Awaitable[None]]] = None
+        skip_disk_write: bool = False
     ):
         """
         Initialize display frame selector
@@ -67,7 +66,6 @@ class DisplayFrameSelector:
             on_frame_callback: Optional async callback(image, frame_num, is_keyframe) 
                                called for each displayed frame (e.g., for cloud push)
             skip_disk_write: If True, skip writing current_frame.png (cloud mode optimization)
-            on_hard_reset_callback: Optional async callback triggered when recovery completely fails
         """
         self.buffer = frame_buffer
         self.output_dir = Path(output_dir)
@@ -91,15 +89,12 @@ class DisplayFrameSelector:
         self.skipped_frames = 0
         self.last_frame_time = 0
         self._depletion_count = 0
-        self._consecutive_recovery_failures = 0
-        self._max_recovery_failures = 3  # Trigger hard reset after 3 failed recoveries
         
         # Output path
         self.current_frame_path = self.output_dir / "current_frame.png"
         
-        # Optional callbacks
+        # Optional callback for cloud push or other processing
         self.on_frame_callback = on_frame_callback
-        self.on_hard_reset_callback = on_hard_reset_callback
         
         logger.info("DisplayFrameSelector initialized")
         logger.info(f"  Target FPS: {target_fps}")
@@ -184,24 +179,7 @@ class DisplayFrameSelector:
             return False
         
         if not frame_spec.file_path or not frame_spec.file_path.exists():
-            # Frame file is missing - this is a serious error
-            # Skip this frame and move to the next one to avoid tight error loop
-            logger.error(f"Frame file missing: {frame_spec.file_path} - SKIPPING to next frame")
-            
-            # Mark as displayed (even though we couldn't show it) to advance
-            self.buffer.mark_displayed(frame_spec.sequence_num)
-            self.buffer.advance_display()
-            self.skipped_frames += 1
-            
-            # Rate limit error logging to avoid log spam
-            if not hasattr(self, '_last_missing_frame_log'):
-                self._last_missing_frame_log = 0
-            import time
-            now = time.time()
-            if now - self._last_missing_frame_log > 1.0:  # Log at most once per second
-                logger.error(f"Missing frame files detected - skipped {self.skipped_frames} frames total")
-                self._last_missing_frame_log = now
-            
+            logger.error(f"Frame file missing: {frame_spec.file_path}")
             return False
         
         try:
@@ -233,9 +211,7 @@ class DisplayFrameSelector:
             self.frames_displayed += 1
             
             # Delete the source frame immediately after successful display (if cleanup enabled)
-            # This is safe because we've already pushed it / copied it to current_frame.png
-            # SIMPLE IS BETTER: Delete ALL frames (including keyframes) after display
-            # This prevents disk space buildup and avoids complex cleanup timing bugs
+            # This is safe because we've already copied it to current_frame.png
             if self.cleanup_enabled:
                 await self._delete_frame_async(frame_spec.file_path)
             
@@ -479,74 +455,24 @@ class DisplayFrameSelector:
         # No ready frames found - reset to latest ready keyframe
         logger.error("No ready frames found in lookahead - attempting keyframe reset")
         
-        # Find ANY ready frame in the buffer (not just ahead of current)
-        ready_frames = [
+        # Find the last ready keyframe
+        ready_keyframes = [
             (seq, spec) for seq, spec in self.buffer.frames.items()
-            if spec.state.value == "ready"
+            if spec.is_keyframe and spec.state.value == "ready"
         ]
         
-        if ready_frames:
+        if ready_keyframes:
             # Sort by sequence number and get the latest
-            ready_frames.sort(key=lambda x: x[0], reverse=True)
-            latest_seq, latest_spec = ready_frames[0]
+            ready_keyframes.sort(key=lambda x: x[0], reverse=True)
+            latest_seq, latest_spec = ready_keyframes[0]
             
-            # If we're behind the latest ready frame, jump forward
-            if latest_seq > current_seq:
-                skipped = latest_seq - current_seq
-                logger.warning(f"Recovery: Jumping FORWARD to latest ready frame at seq {latest_seq}")
-            else:
-                # We're ahead of all ready frames - wait, or jump back?
-                # Jump back to the latest ready frame to keep showing something
-                skipped = 0
-                logger.warning(f"Recovery: Jumping BACK to latest ready frame at seq {latest_seq}")
-            
+            skipped = latest_seq - current_seq if latest_seq > current_seq else 0
+            logger.warning(f"Recovery: Jumping to latest keyframe at seq {latest_seq}")
             self.buffer.display_sequence_num = latest_seq
             if skipped > 0:
                 self.skipped_frames += skipped
-            
-            logger.warning(f"Buffer recovery complete - now at seq {latest_seq}")
-            self._consecutive_recovery_failures = 0  # Reset on successful recovery
         else:
-            # No ready frames at all - check if buffer has any registered frames
-            if self.buffer.frames:
-                # Find any pending frame and wait for it
-                pending = [(seq, spec) for seq, spec in self.buffer.frames.items() 
-                          if spec.state.value in ("pending", "generating")]
-                if pending:
-                    earliest = min(pending, key=lambda x: x[0])
-                    logger.warning(f"Recovery: Found {len(pending)} pending frames, earliest at seq {earliest[0]}")
-                    # Jump to the earliest pending and wait
-                    self.buffer.display_sequence_num = earliest[0]
-                    logger.warning(f"Recovery: Jumping to seq {earliest[0]} to wait for generation")
-                    self._consecutive_recovery_failures = 0
-                else:
-                    self._consecutive_recovery_failures += 1
-                    logger.error(f"No ready or pending frames - recovery failed ({self._consecutive_recovery_failures}/{self._max_recovery_failures})")
-                    await self._check_hard_reset()
-            else:
-                self._consecutive_recovery_failures += 1
-                logger.error(f"No frames in buffer at all - recovery failed ({self._consecutive_recovery_failures}/{self._max_recovery_failures})")
-                await self._check_hard_reset()
-    
-    async def _check_hard_reset(self) -> None:
-        """
-        Check if we should trigger a hard reset after too many failed recoveries.
-        """
-        if self._consecutive_recovery_failures >= self._max_recovery_failures:
-            logger.error("=" * 60)
-            logger.error("HARD RESET TRIGGERED - Too many consecutive recovery failures!")
-            logger.error("=" * 60)
-            
-            if self.on_hard_reset_callback:
-                try:
-                    await self.on_hard_reset_callback()
-                    self._consecutive_recovery_failures = 0
-                    self._depletion_count = 0
-                    logger.warning("Hard reset callback completed - system should restart")
-                except Exception as e:
-                    logger.error(f"Hard reset callback failed: {e}", exc_info=True)
-            else:
-                logger.warning("No hard reset callback configured - waiting for manual intervention")
+            logger.error("No ready keyframes found - waiting for generation")
     
     def get_stats(self) -> Dict:
         """

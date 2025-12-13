@@ -31,25 +31,17 @@ generation:
   
   # Hybrid mode - optimized for streaming
   hybrid:
-    # PERFORMANCE TUNING (measured 2024-12-12):
-    # - Keyframe gen: ~1.0s average (ComfyUI img2img)
-    # - VAE decode: ~80ms/frame batched (10 frames = 0.8s)
-    # - JPEG encode: ~2-4ms/frame (switched from WebP)
-    # - Pipeline is parallel: KF gen overlaps with interp display
-    #
-    # With 15 interp frames:
-    # - Interp batch: ~1.2s for 15 frames
-    # - Cycle time: max(1.0s keyframe, 1.2s interp) = 1.2s
-    # - Frames per cycle: 16 (1 KF + 15 interp)
-    # - Production FPS: 16 / 1.2 = ~13 FPS theoretical
-    # - Target 7 FPS display leaves headroom for variance
+    # PERFORMANCE TUNING:
+    # - VAE decode: ~230ms/frame at 1024x512
+    # - WebP encode: ~100ms/frame
+    # - Target: ~5 FPS effective (more achievable with current hardware)
     
-    # 15 interp frames with VRAM fix (torch.cuda.empty_cache) should be stable
-    # VRAM starvation was caused by not releasing reserved memory, not frame count
-    interpolation_frames: 15
+    # Reduced from 20 to 10 for better performance
+    # 10 frames still provides smooth interpolation
+    interpolation_frames: 10
     
-    # Target 7 FPS display rate
-    target_interpolation_fps: 7.0
+    # Target 5 FPS display rate (realistic for 1024x512 + VAE decode)
+    target_interpolation_fps: 5.0
     
     # Denoise strength for keyframes
     keyframe_denoise: 0.20
@@ -126,19 +118,17 @@ generation:
 
 # Display settings - at root level, not under generation!
 display:
-  # Buffer sizing for cloud (updated 2024-12-12):
-  # With 15 interp frames and ~1s keyframe gen:
-  # - Each cycle: 16 frames (1 KF + 15 interp)
-  # - Cycle time: ~1.2s (interp is bottleneck)
-  # - Production: ~13 FPS theoretical
-  # - Display: 7 FPS target
-  # - Headroom: ~6 FPS buffer building rate
-  # Larger buffer for stability and recovery headroom
+  # Buffer sizing for cloud:
+  # At 10 FPS with 20 interp frames per keyframe (~2s generation):
+  # - Each keyframe cycle = 21 frames = 2.1s of content
+  # - Generation takes ~2s per keyframe + ~4s for 20 interps = ~6s per cycle
+  # - So we produce 2.1s of content every 6s (ratio ~0.35)
+  # - Buffer should be modest to avoid long initial waits
   buffer_target_seconds: 60.0       # 60 seconds of buffer (target)
-  min_buffer_seconds: 10.0          # 10 seconds minimum before playback starts
+  min_buffer_seconds: 10.0           # 10 seconds minimum before playback starts
   
   cleanup_displayed_frames: true
-  max_output_frames: 400            # Increased for higher FPS
+  max_output_frames: 400            # Increased for higher throughput
 
 # Prompts - same as default
 prompts:
