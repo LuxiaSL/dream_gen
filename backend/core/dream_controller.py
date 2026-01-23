@@ -31,6 +31,7 @@ from core.async_orchestrator import AsyncGenerationOrchestrator
 from core.shared_resources import SharedVAEAccess
 from core.display_selector import DisplayFrameSelector
 from utils.prompt_manager import PromptManager
+from prompts.combinatorial import CombinatorialPromptSystem
 from utils.status_writer import StatusWriter
 from utils.file_ops import atomic_write_image_with_retry
 from utils.game_detector import GameDetector
@@ -147,7 +148,10 @@ class DreamController:
         # Initialize subsystems
         self.logger.info("Initializing subsystems...")
         self.generator = DreamGenerator(self.config)
-        self.prompt_manager = PromptManager(self.config)
+        
+        # Use CombinatorialPromptSystem if templates are available, else legacy PromptManager
+        self.prompt_manager = self._init_prompt_system()
+        
         self.status_writer = StatusWriter(self.output_dir)
         self.game_detector = GameDetector(self.config)
         self.cache = CacheManager(self.config)
@@ -385,6 +389,42 @@ class DreamController:
             
         except Exception as e:
             self.logger.error(f"Error during frame cleanup: {e}")
+    
+    def _init_prompt_system(self):
+        """
+        Initialize the prompt system - uses CombinatorialPromptSystem if templates available
+        
+        Priority:
+        1. CombinatorialPromptSystem if prompts/templates.yaml exists (infinite gen mode)
+        2. Legacy PromptManager otherwise (uses theme_pairs from config)
+        
+        Returns:
+            Prompt system instance (CombinatorialPromptSystem or PromptManager)
+        """
+        from pathlib import Path
+        
+        # Check for templates file (indicates infinite gen mode)
+        project_root = Path(__file__).parent.parent.parent
+        templates_path = project_root / "prompts" / "templates.yaml"
+        components_path = project_root / "prompts" / "components.yaml"
+        
+        if templates_path.exists() and components_path.exists():
+            try:
+                prompt_system = CombinatorialPromptSystem(
+                    templates_path=str(templates_path),
+                    components_path=str(components_path),
+                    config=self.config
+                )
+                self.logger.info("[INFINITE GEN] CombinatorialPromptSystem loaded")
+                self.logger.info(f"  Templates: {len(prompt_system.templates)}")
+                self.logger.info(f"  Categories: {list(prompt_system.components.keys())}")
+                return prompt_system
+            except Exception as e:
+                self.logger.warning(f"Failed to load CombinatorialPromptSystem: {e}")
+                self.logger.warning("Falling back to legacy PromptManager")
+        
+        # Fall back to legacy PromptManager
+        return PromptManager(self.config)
     
     def _init_cloud_mode(self) -> None:
         """
