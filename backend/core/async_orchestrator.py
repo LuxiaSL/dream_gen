@@ -192,6 +192,11 @@ class AsyncGenerationOrchestrator:
                 )
                 logger.info("Injection strategy initialized (shared VAE with lock)")
         
+        # === Denoising State Machine (Phase 2) ===
+        # Detect if using CombinatorialPromptSystem (has should_mutate method)
+        # NOTE: Must be set early as fresh_buffer checks this
+        self.use_combinatorial = hasattr(self.prompt_manager, 'should_mutate')
+        
         # === Fresh Frame Buffer (for template-aware seed injection) ===
         # Only initialized when using CombinatorialPromptSystem
         self.fresh_buffer: Optional[FreshFrameBuffer] = None
@@ -220,10 +225,6 @@ class AsyncGenerationOrchestrator:
         
         # Injection frequency tracking (for seed forcing)
         self.recent_cache_injections = deque(maxlen=10)
-        
-        # === Denoising State Machine (Phase 2) ===
-        # Detect if using CombinatorialPromptSystem (has should_mutate method)
-        self.use_combinatorial = hasattr(self.prompt_manager, 'should_mutate')
         
         # Denoise values for DRIFT/BEND modes
         fresh_config = self.config.get('fresh_generation', {})
