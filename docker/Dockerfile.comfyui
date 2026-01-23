@@ -1,21 +1,38 @@
-# ComfyUI Server Image
-# ====================
-# Stable image containing ComfyUI, SD 1.5 model, and custom nodes.
-# This rarely changes and should be cached/Flashbooted.
+# ComfyUI Server Image (Two-Pod Architecture)
+# ============================================
+# Stable image containing ComfyUI, SD 1.5 model, nginx auth proxy, and VPS registration.
+# This rarely changes and should be cached/Flashbooted on RunPod.
+#
+# Features:
+# - ComfyUI with SD 1.5 model pre-loaded
+# - nginx reverse proxy with basic auth for secure access
+# - Startup script that registers with VPS for service discovery
+# - Health check endpoint
 #
 # Build:
 #   docker build -f docker/Dockerfile.comfyui -t luxiasl/dreamgen-comfyui:latest .
 #   docker push luxiasl/dreamgen-comfyui:latest
 #
-# Run standalone:
-#   docker run --gpus all -p 8188:8188 luxiasl/dreamgen-comfyui:latest
+# Run standalone (local testing):
+#   docker run --gpus all -p 8188:8188 \
+#     -e COMFYUI_AUTH_USER=dreamgen \
+#     -e COMFYUI_AUTH_PASS=your-password \
+#     luxiasl/dreamgen-comfyui:latest
+#
+# Run with VPS registration:
+#   docker run --gpus all -p 8188:8188 \
+#     -e COMFYUI_AUTH_USER=dreamgen \
+#     -e COMFYUI_AUTH_PASS=your-password \
+#     -e VPS_REGISTER_URL=https://aetherawi.red/api/dreams/comfyui/register \
+#     -e VPS_AUTH_TOKEN=your-vps-token \
+#     luxiasl/dreamgen-comfyui:latest
 
 FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# System dependencies
+# System dependencies (including nginx for auth proxy)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.11 \
     python3.11-venv \
@@ -25,6 +42,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     libgl1-mesa-glx \
     libglib2.0-0 \
+    nginx \
+    apache2-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Set Python 3.11 as default
@@ -54,13 +73,54 @@ RUN echo "Downloading SD 1.5 model..." \
         "https://huggingface.co/Comfy-Org/stable-diffusion-v1-5-archive/resolve/main/v1-5-pruned-emaonly.safetensors" \
     && ls -lh models/checkpoints/
 
-# Expose port
+# ==================== Nginx Auth Proxy Setup ====================
+# nginx proxies port 8188 (external) -> 8189 (internal ComfyUI)
+# This adds basic auth protection for the ComfyUI API
+
+# Create nginx config for auth proxy
+RUN echo 'server { \n\
+    listen 8188; \n\
+    \n\
+    # Health check endpoint (no auth required) \n\
+    location /health { \n\
+        return 200 "healthy\\n"; \n\
+        add_header Content-Type text/plain; \n\
+    } \n\
+    \n\
+    # All other requests require auth \n\
+    location / { \n\
+        auth_basic "ComfyUI"; \n\
+        auth_basic_user_file /etc/nginx/.htpasswd; \n\
+        proxy_pass http://127.0.0.1:8189; \n\
+        proxy_http_version 1.1; \n\
+        proxy_set_header Upgrade $http_upgrade; \n\
+        proxy_set_header Connection "upgrade"; \n\
+        proxy_set_header Host $host; \n\
+        proxy_set_header X-Real-IP $remote_addr; \n\
+        proxy_read_timeout 300s; \n\
+        proxy_send_timeout 300s; \n\
+        client_max_body_size 100M; \n\
+    } \n\
+}' > /etc/nginx/sites-available/comfyui
+
+RUN ln -sf /etc/nginx/sites-available/comfyui /etc/nginx/sites-enabled/comfyui \
+    && rm -f /etc/nginx/sites-enabled/default
+
+# Create placeholder htpasswd (will be replaced at runtime)
+RUN htpasswd -bc /etc/nginx/.htpasswd placeholder placeholder
+
+# ==================== Startup Script ====================
+COPY docker/comfyui-start.sh /start.sh
+RUN chmod +x /start.sh
+
+WORKDIR /app
+
+# Expose nginx proxy port (not internal ComfyUI port)
 EXPOSE 8188
 
-# Health check
+# Health check via nginx (no auth required for health endpoint)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
-    CMD curl -f http://localhost:8188/system_stats || exit 1
+    CMD curl -f http://localhost:8188/health || exit 1
 
-# Run ComfyUI with optimizations
-CMD ["python", "main.py", "--listen", "0.0.0.0", "--port", "8188", "--highvram", "--cuda-malloc", "--preview-method", "none"]
-
+# Run startup script (starts nginx + ComfyUI + VPS registration)
+CMD ["/start.sh"]

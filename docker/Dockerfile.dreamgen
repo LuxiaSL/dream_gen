@@ -1,18 +1,34 @@
-# DreamGen Backend Image
-# ======================
-# Lightweight image with just the generation backend.
-# Connects to ComfyUI server over HTTP.
+# DreamGen Backend Image (Two-Pod Architecture)
+# =============================================
+# Lightweight image with the generation orchestrator.
+# Connects to ComfyUI server over HTTP (in separate pod).
 # Changes frequently - keep layers small for fast iteration.
+#
+# MODES:
+# - serverless (default): Single container with local ComfyUI
+# - pod: Discovers ComfyUI from VPS registry, long-running process
 #
 # Build:
 #   docker build -f docker/Dockerfile.dreamgen -t luxiasl/dreamgen-backend:latest .
 #   docker push luxiasl/dreamgen-backend:latest
 #
-# Run (requires ComfyUI running separately):
+# Run in POD mode (two-pod architecture):
 #   docker run --gpus all \
-#     -e COMFYUI_URL=http://comfyui:8188 \
-#     -e VPS_URL=wss://your-vps/ws \
+#     -e DREAMGEN_MODE=pod \
+#     -e VPS_WEBSOCKET_URL=wss://aetherawi.red/ws/gpu \
+#     -e VPS_API_URL=https://aetherawi.red \
+#     -e DREAM_GEN_AUTH_TOKEN=your-shared-token \
 #     luxiasl/dreamgen-backend:latest
+#
+# Environment Variables (Pod Mode):
+#   DREAMGEN_MODE          - Set to "pod" for two-pod architecture
+#   VPS_WEBSOCKET_URL      - WebSocket URL for frame streaming
+#   VPS_API_URL            - HTTP URL for ComfyUI discovery
+#   DREAM_GEN_AUTH_TOKEN   - Shared auth token with VPS
+#
+# Environment Variables (Serverless Mode - legacy):
+#   VPS_WEBSOCKET_URL      - WebSocket URL for frame streaming
+#   DREAM_GEN_AUTH_TOKEN   - Shared auth token with VPS
 
 FROM python:3.11-slim
 
@@ -69,10 +85,19 @@ ENV PYTHONPATH=/app:/app/backend
 ENV LOG_LEVEL=INFO
 ENV CONFIG_PATH=/app/backend/config.cloud.yaml
 
+# Default mode - set to "pod" for two-pod architecture
+# Serverless mode is legacy (combined ComfyUI + DreamGen in one container)
+ENV DREAMGEN_MODE=serverless
+
+# VPS connection (set at runtime)
+# ENV VPS_WEBSOCKET_URL=wss://aetherawi.red/ws/gpu
+# ENV VPS_API_URL=https://aetherawi.red
+# ENV DREAM_GEN_AUTH_TOKEN=<set-at-runtime>
+
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD python -c "print('healthy')" || exit 1
 
-# Default: RunPod serverless handler
+# Entry point handles both serverless and pod modes based on DREAMGEN_MODE
 CMD ["python", "-m", "backend.cloud.runpod_handler"]
 
