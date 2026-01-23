@@ -27,7 +27,7 @@
 #     -e VPS_AUTH_TOKEN=your-vps-token \
 #     luxiasl/dreamgen-comfyui:latest
 
-FROM nvidia/cuda:12.8.1-runtime-ubuntu22.04
+FROM nvidia/cuda:13.0.0-runtime-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -58,8 +58,9 @@ RUN git clone https://github.com/comfyanonymous/ComfyUI.git /app/ComfyUI
 
 WORKDIR /app/ComfyUI
 
-# Install PyTorch 2.8+ with CUDA 12.8 support + ComfyUI dependencies
-RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 \
+# Install PyTorch 2.10+ with CUDA 13.0 support + ComfyUI dependencies
+# cu130 enables ComfyUI's optimized CUDA operations (triton backend, etc.)
+RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130 \
     && pip install --no-cache-dir -r requirements.txt
 
 # Create directories
