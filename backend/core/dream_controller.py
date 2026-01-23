@@ -40,15 +40,27 @@ from utils.perf_stats import get_perf_stats
 
 # Setup logging
 def setup_logging(log_dir: Path, log_level: str = "INFO"):
-    """Configure logging system with rotation"""
+    """
+    Configure logging system with rotation
+    
+    Console: Shows INFO+ by default (important events, warnings, errors)
+    File: Captures everything (DEBUG+) for post-mortem analysis
+    
+    Noisy loggers (urllib3, websockets, etc.) are quieted to WARNING
+    """
     log_dir.mkdir(parents=True, exist_ok=True)
     
     log_file = log_dir / "dream_controller.log"
     
-    # Create formatter
-    formatter = logging.Formatter(
+    # Create formatters
+    file_formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    # Shorter format for console (no timestamp, shorter name)
+    console_formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%H:%M:%S'
     )
     
     # Rotating file handler (max 5MB per file, keep 3 backups)
@@ -59,18 +71,38 @@ def setup_logging(log_dir: Path, log_level: str = "INFO"):
         backupCount=3  # Keep 3 backup files (dream_controller.log.1, .2, .3)
     )
     file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(formatter)
+    file_handler.setFormatter(file_formatter)
     
-    # Console handler
+    # Console handler - always INFO+ regardless of config (file gets DEBUG)
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(getattr(logging, log_level))
-    console_handler.setFormatter(formatter)
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(console_formatter)
     
     # Root logger
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.DEBUG)
     root_logger.addHandler(file_handler)
     root_logger.addHandler(console_handler)
+    
+    # Quiet noisy third-party loggers (only show WARNING+)
+    noisy_loggers = [
+        'urllib3',
+        'websockets', 
+        'websockets.client',
+        'filelock',
+        'PIL',
+        'httpcore',
+        'httpx',
+    ]
+    for logger_name in noisy_loggers:
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
+    
+    # Quiet internal spammy loggers (INFO only, not DEBUG)
+    spammy_loggers = [
+        'utils.status_writer',  # Very chatty with status updates
+    ]
+    for logger_name in spammy_loggers:
+        logging.getLogger(logger_name).setLevel(logging.INFO)
     
     return logging.getLogger(__name__)
 

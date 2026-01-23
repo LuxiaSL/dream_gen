@@ -10,7 +10,7 @@ system:
   seed_dir: "/workspace/dream_gen/seeds"
   log_dir: "/workspace/logs"
   gpu_id: 0
-  log_level: "DEBUG"  # Verbose for testing
+  log_level: "INFO"  # Console shows INFO+, file gets everything
 
 generation:
   use_async_orchestrator: true
