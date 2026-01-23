@@ -17,33 +17,30 @@ generation:
   model: "sd15"
   
   # Lower resolution for faster iteration during testing
-  resolution: [512, 256]
+  resolution: [1024, 512]
   
   mode: "hybrid"
   
   # SD 1.5 parameters
   sd:
-    steps: 10                  # Faster for testing
-    cfg_scale: 7.0
+    steps: 15                  # Faster for testing
+    cfg_scale: 8.0
     sampler: "euler"
     scheduler: "karras"
   
   # Hybrid mode settings
   hybrid:
-    interpolation_frames: 8    # Fewer frames for faster cycles
-    target_interpolation_fps: 4.0
-    keyframe_denoise: 0.25     # Lower for testing DRIFT mode
+    interpolation_frames: 15    # Fewer frames for faster cycles
+    target_interpolation_fps: 5.0
+    keyframe_denoise: 0.2     # Lower for testing DRIFT mode
     interpolation_resolution_divisor: 1
     interpolation_upscale_method: "bilinear"
     interpolation_downsample_method: "bicubic"
     gpu_slerp: true
   
-  img2img:
-    denoise: 0.3
-  
   # Cache system
   cache:
-    max_size: 50
+    max_size: 100
     similarity_method: "dual_metric"
     population_mode: "selective"
     cache_interpolations: true
@@ -67,14 +64,14 @@ generation:
     injection_mode: "dissimilar"
     injection_probability: 0.15
     blend_weight: 0.75
-    injection_cooldown: 3
-    seed_injection_cooldown: 3
+    injection_cooldown: 5
+    seed_injection_cooldown: 10
     embedding_history_reset: "partial"
-    embedding_history_keep_recent: 10
+    embedding_history_keep_recent: 20
     
     # Collapse detection - template-aware settings
     collapse_detection: true
-    warmup_keyframes: 20       # Shorter warmup for testing
+    warmup_keyframes: 100       # Shorter warmup for testing
     collapse_history_size: 50
     collapse_detection_window: 25
     collapse_baseline_comparison: true
@@ -99,8 +96,8 @@ fresh_generation:
   
   denoising:
     drift: 0.20                # Normal operation (same prompt)
-    bend: 0.50                 # Prompt transition (higher denoise)
-    bend_frames: 4             # Frames at high denoise after mutation
+    bend: 0.70                 # Prompt transition (higher denoise)
+    bend_frames: 5             # Frames at high denoise after mutation
   
   mutation:
     base_probability: 0.15     # Slightly higher for testing (more mutations)
