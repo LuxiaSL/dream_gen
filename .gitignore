@@ -98,3 +98,8 @@ Desktop.ini
 
 # Diffusion Server
 diffusion/
+# Local-only files (not for repo)
+INFINITE_GEN_HANDOFF.md
+convo.md
+docs/INFINITE_GENERATION_DESIGN.md
+fsampler/
