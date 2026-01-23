@@ -27,12 +27,13 @@
 #     -e VPS_AUTH_TOKEN=your-vps-token \
 #     luxiasl/dreamgen-comfyui:latest
 
-FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
+FROM nvidia/cuda:12.8.1-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
 # System dependencies (including nginx for auth proxy)
+# Note: libgl1-mesa-glx renamed to libgl1 in newer Debian/Ubuntu
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.11 \
     python3.11-venv \
@@ -40,7 +41,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
     wget \
-    libgl1-mesa-glx \
+    libgl1 \
     libglib2.0-0 \
     nginx \
     apache2-utils \
@@ -57,8 +58,8 @@ RUN git clone https://github.com/comfyanonymous/ComfyUI.git /app/ComfyUI
 
 WORKDIR /app/ComfyUI
 
-# Install PyTorch + ComfyUI dependencies
-RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 \
+# Install PyTorch 2.8+ with CUDA 12.8 support + ComfyUI dependencies
+RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 \
     && pip install --no-cache-dir -r requirements.txt
 
 # Create directories

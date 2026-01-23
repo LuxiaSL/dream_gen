@@ -45,6 +45,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Install Python dependencies (cached layer)
+# PyTorch 2.8+ with CUDA 12.8 support (matches RunPod default)
 COPY pyproject.toml /app/
 RUN pip install --no-cache-dir \
     websockets \
@@ -59,7 +60,7 @@ RUN pip install --no-cache-dir \
     diffusers \
     huggingface-hub \
     accelerate \
-    torch --index-url https://download.pytorch.org/whl/cu121
+    torch --index-url https://download.pytorch.org/whl/cu128
 
 # Copy backend code
 COPY backend/ /app/backend/
