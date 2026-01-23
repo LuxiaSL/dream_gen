@@ -112,10 +112,10 @@ fresh_generation:
     similarity_range: 0.25
 
 display:
-  buffer_target_seconds: 20.0   # Shorter buffer for testing
-  min_buffer_seconds: 5.0
+  buffer_target_seconds: 45.0   # Shorter buffer for testing
+  min_buffer_seconds: 10.0
   cleanup_displayed_frames: true
-  max_output_frames: 200
+  max_output_frames: 400
 
 prompts:
   # Legacy prompts (not used when CombinatorialPromptSystem is active)
@@ -132,7 +132,7 @@ game_detection:
   enabled: false
 
 performance:
-  max_queue_size: 50
+  max_queue_size: 100
   generation_timeout: 120
   enable_torch_compile: false
   async_file_operations: true

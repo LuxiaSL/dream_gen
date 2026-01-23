@@ -1,0 +1,78 @@
+# DreamGen Backend Image
+# ======================
+# Lightweight image with just the generation backend.
+# Connects to ComfyUI server over HTTP.
+# Changes frequently - keep layers small for fast iteration.
+#
+# Build:
+#   docker build -f docker/Dockerfile.dreamgen -t luxiasl/dreamgen-backend:latest .
+#   docker push luxiasl/dreamgen-backend:latest
+#
+# Run (requires ComfyUI running separately):
+#   docker run --gpus all \
+#     -e COMFYUI_URL=http://comfyui:8188 \
+#     -e VPS_URL=wss://your-vps/ws \
+#     luxiasl/dreamgen-backend:latest
+
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# System dependencies (minimal)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Python dependencies (cached layer)
+COPY pyproject.toml /app/
+RUN pip install --no-cache-dir \
+    websockets \
+    msgpack \
+    pillow \
+    numpy \
+    pyyaml \
+    aiohttp \
+    runpod \
+    imagehash \
+    scikit-image \
+    diffusers \
+    huggingface-hub \
+    accelerate \
+    torch --index-url https://download.pytorch.org/whl/cu121
+
+# Copy backend code
+COPY backend/ /app/backend/
+
+# Copy prompts (CRITICAL for infinite gen!)
+COPY prompts/ /app/prompts/
+
+# Optional: Copy seeds for backwards compatibility
+# (Fresh frame generation is preferred for startup)
+COPY seeds/ /app/seeds/
+
+# Create output directories
+RUN mkdir -p /app/output/keyframes /app/output/interpolations /app/output/frames/fresh \
+    /app/cache /app/logs /app/state
+
+# Build info
+ARG BUILD_DATE=unknown
+ARG GIT_COMMIT=unknown
+RUN echo "BUILD_DATE=${BUILD_DATE}" > /app/BUILD_INFO && \
+    echo "GIT_COMMIT=${GIT_COMMIT}" >> /app/BUILD_INFO
+
+# Environment
+ENV PYTHONPATH=/app:/app/backend
+ENV LOG_LEVEL=INFO
+ENV CONFIG_PATH=/app/backend/config.cloud.yaml
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD python -c "print('healthy')" || exit 1
+
+# Default: RunPod serverless handler
+CMD ["python", "-m", "backend.cloud.runpod_handler"]
+

@@ -1,0 +1,66 @@
+# ComfyUI Server Image
+# ====================
+# Stable image containing ComfyUI, SD 1.5 model, and custom nodes.
+# This rarely changes and should be cached/Flashbooted.
+#
+# Build:
+#   docker build -f docker/Dockerfile.comfyui -t luxiasl/dreamgen-comfyui:latest .
+#   docker push luxiasl/dreamgen-comfyui:latest
+#
+# Run standalone:
+#   docker run --gpus all -p 8188:8188 luxiasl/dreamgen-comfyui:latest
+
+FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+
+# System dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-venv \
+    python3-pip \
+    git \
+    curl \
+    wget \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set Python 3.11 as default
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+
+WORKDIR /app
+
+# Install ComfyUI
+RUN git clone https://github.com/comfyanonymous/ComfyUI.git /app/ComfyUI
+
+WORKDIR /app/ComfyUI
+
+# Install PyTorch + ComfyUI dependencies
+RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 \
+    && pip install --no-cache-dir -r requirements.txt
+
+# Create directories
+RUN mkdir -p models/checkpoints models/vae models/loras models/embeddings custom_nodes
+
+# Install FSampler custom node
+RUN git clone https://github.com/obisin/comfyui-FSampler.git custom_nodes/comfyui-FSampler
+
+# Download SD 1.5 model (~4GB)
+RUN echo "Downloading SD 1.5 model..." \
+    && wget -q --show-progress -O models/checkpoints/v1-5-pruned-emaonly.safetensors \
+        "https://huggingface.co/Comfy-Org/stable-diffusion-v1-5-archive/resolve/main/v1-5-pruned-emaonly.safetensors" \
+    && ls -lh models/checkpoints/
+
+# Expose port
+EXPOSE 8188
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+    CMD curl -f http://localhost:8188/system_stats || exit 1
+
+# Run ComfyUI with optimizations
+CMD ["python", "main.py", "--listen", "0.0.0.0", "--port", "8188", "--highvram", "--cuda-malloc", "--preview-method", "none"]
+

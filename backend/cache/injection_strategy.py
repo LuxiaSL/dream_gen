@@ -475,7 +475,11 @@ class CacheInjectionStrategy:
         seed_images = list(seed_dir.glob("*.png")) + list(seed_dir.glob("*.jpg"))
         
         if not seed_images:
-            logger.error("No seed images found")
+            logger.warning(
+                "[SEED] No seed images found in fallback path. "
+                "This is expected if using FreshFrameBuffer (preferred). "
+                "Add images to seeds/ directory for fallback support."
+            )
             return None
         
         seed_path = random.choice(seed_images)

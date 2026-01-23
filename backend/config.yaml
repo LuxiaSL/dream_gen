@@ -160,7 +160,30 @@ display:
   max_output_frames: 100           # Legacy cleanup (ignored if cleanup_displayed_frames=true)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PROMPTS - Generation guidance
+# FRESH GENERATION - Infinite generation system (Phase 1-5)
+# ═══════════════════════════════════════════════════════════════════════════════
+fresh_generation:
+  enabled: true                     # Use CombinatorialPromptSystem when templates exist
+  
+  denoising:
+    drift: 0.20                     # Normal operation (same prompt, gradual evolution)
+    bend: 0.50                      # Prompt transition (higher denoise for visual "bend")
+    bend_frames: 4                  # Frames at high denoise after mutation
+  
+  mutation:
+    base_probability: 0.12          # Chance to mutate on each keyframe
+    staleness_threshold: 25         # Force mutation after N frames without change
+    category_weights:               # Probability weights for category selection
+      color_logic: 0.35
+      atmosphere_field: 0.25
+      light_behavior: 0.20
+      temporal_state: 0.15
+      texture_density: 0.05
+    similarity_target: 0.55         # Target similarity for component selection
+    similarity_range: 0.25          # Acceptable range around target
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PROMPTS - Legacy generation guidance (used when fresh_generation disabled)
 # ═══════════════════════════════════════════════════════════════════════════════
 prompts:
   theme_pairs:

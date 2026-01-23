@@ -116,6 +116,27 @@ generation:
       acceptance_logic: "average"
       diversity_matrix_refresh: 50
 
+# Fresh generation (infinite gen system)
+fresh_generation:
+  enabled: true
+  
+  denoising:
+    drift: 0.20
+    bend: 0.50
+    bend_frames: 4
+  
+  mutation:
+    base_probability: 0.12
+    staleness_threshold: 25
+    category_weights:
+      color_logic: 0.35
+      atmosphere_field: 0.25
+      light_behavior: 0.20
+      temporal_state: 0.15
+      texture_density: 0.05
+    similarity_target: 0.55
+    similarity_range: 0.25
+
 # Display settings - at root level, not under generation!
 display:
   # Buffer sizing for cloud:

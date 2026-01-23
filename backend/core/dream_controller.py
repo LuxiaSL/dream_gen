@@ -729,20 +729,44 @@ class DreamController:
 
     def get_random_seed_image(self) -> Path:
         """
-        Get random seed image from seed directory
+        Get seed image for bootstrap - from seeds/ or generate fresh
+        
+        Priority:
+        1. Random image from seed directory (if available)
+        2. Generate fresh frame via txt2img (seedless operation)
         
         Returns:
-            Path to seed image
+            Path to seed/generated image
         
         Raises:
-            ValueError: If no seed images found
+            ValueError: If cannot obtain seed image
         """
         seed_images = list(self.seed_dir.glob("*.png")) + list(self.seed_dir.glob("*.jpg"))
         
-        if not seed_images:
-            raise ValueError(f"No seed images found in {self.seed_dir}")
+        if seed_images:
+            return random.choice(seed_images)
         
-        return random.choice(seed_images)
+        # No seeds - generate fresh frame via txt2img
+        self.logger.info("[SEEDLESS] No seed images found, generating initial frame via txt2img...")
+        
+        # Get prompt from prompt manager
+        prompt = self.prompt_manager.get_next_prompt()
+        negative = self.prompt_manager.get_negative_prompt() if hasattr(self.prompt_manager, 'get_negative_prompt') else None
+        
+        # Generate via txt2img
+        result = self.generator.generate_from_prompt(
+            prompt=prompt,
+            negative_prompt=negative
+        )
+        
+        if result:
+            self.logger.info(f"[SEEDLESS] Generated initial frame: {result}")
+            return result
+        
+        raise ValueError(
+            f"No seed images in {self.seed_dir} and txt2img generation failed. "
+            "Ensure ComfyUI is running or provide seed images."
+        )
     
     def check_game_state(self) -> bool:
         """
