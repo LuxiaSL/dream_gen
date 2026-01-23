@@ -142,7 +142,7 @@ daemon:
 
 # Cloud mode - can connect to VPS for visual feedback
 cloud:
-  enabled: false  # Set to true to stream to aetherawi.red/dreams
+  enabled: true  # Stream to aetherawi.red/dreams
   vps_websocket_url: "wss://aetherawi.red/ws/gpu"
   auth_token: null  # Set via DREAM_GEN_AUTH_TOKEN env var
   
