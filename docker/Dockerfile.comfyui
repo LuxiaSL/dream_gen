@@ -59,8 +59,9 @@ WORKDIR /app/ComfyUI
 
 # Install PyTorch 2.10+ with CUDA 13.0 support + ComfyUI dependencies
 # cu130 enables ComfyUI's optimized CUDA operations (triton backend, etc.)
-RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130 \
-    && pip install --no-cache-dir -r requirements.txt
+# --break-system-packages needed for Ubuntu 24.04 (PEP 668)
+RUN pip install --no-cache-dir --break-system-packages torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130 \
+    && pip install --no-cache-dir --break-system-packages -r requirements.txt
 
 # Create directories
 RUN mkdir -p models/checkpoints models/vae models/loras models/embeddings custom_nodes
