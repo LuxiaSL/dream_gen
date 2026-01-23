@@ -4,6 +4,131 @@ This directory contains various testing, profiling, and analysis scripts used du
 
 ---
 
+## 🧬 Embedding & Prompt Tools
+
+### `compute_embeddings.py`
+
+**Purpose**: Compute CLIP text embeddings for prompt components
+
+Generates semantic embeddings for all components using CLIP's text encoder. CLIP embeddings understand visual concepts - they capture how words relate in image-generation space, not just linguistic similarity.
+
+This enables similarity-guided component mutation: when transitioning from "ethereal" to a new adjective, the system prefers components that are visually related but distinct, creating smooth aesthetic evolution.
+
+**Architecture**:
+- `prompts/components.yaml`: Human-editable file with `word` + `opposite` (no embeddings)
+- `prompts/components_embeddings.npz`: Auto-generated binary file with embeddings
+
+The `CombinatorialPromptSystem` loads both and merges them at runtime. If the npz file doesn't exist, similarity-guided selection gracefully falls back to random.
+
+**Usage**:
+```bash
+# Compute embeddings (writes to components_embeddings.npz)
+uv run python backend/tools/compute_embeddings.py
+
+# Preview without writing (dry run)
+uv run python backend/tools/compute_embeddings.py --dry-run
+
+# Also update opposites in components.yaml
+uv run python backend/tools/compute_embeddings.py --update-opposites
+
+# Use a different CLIP model
+uv run python backend/tools/compute_embeddings.py --model openai/clip-vit-large-patch14
+
+# Verbose output
+uv run python backend/tools/compute_embeddings.py -v
+```
+
+**Features**:
+- CLIP text encoder for visual-semantic embeddings (512-dim)
+- Compact binary storage (~50KB vs 5000 lines of YAML)
+- Automatic semantic opposite computation for negatable categories
+- Similarity analysis output showing most/least similar pairs
+- Keeps YAML human-readable and easy to edit
+
+**Output**:
+- `prompts/components_embeddings.npz`: Binary file with embeddings keyed by `category/word`
+- Optionally updates `prompts/components.yaml` with computed opposites
+
+**Dependencies**: Requires `transformers` (included in dev dependencies)
+
+---
+
+### `find_diverse_components.py`
+
+**Purpose**: Find maximally diverse components for prompt categories
+
+Uses CLIP embeddings and max-min diversity selection to find the most visually-distinct components from a candidate pool. This helps address the problem of semantically-similar categories (like adjectives/moods) having tight embedding ranges.
+
+**Algorithm**:
+1. Embed all candidates with CLIP
+2. Start with the two most distant candidates  
+3. Iteratively add the candidate that maximizes minimum distance to already-selected items
+4. This produces a set with maximum spread in embedding space
+
+**Usage**:
+```bash
+# Analyze diversity of current components
+uv run python backend/tools/find_diverse_components.py --analyze
+
+# Find 12 diverse adjectives from expanded candidate pool
+uv run python backend/tools/find_diverse_components.py adjective --count 12
+
+# Optimize all categories
+uv run python backend/tools/find_diverse_components.py --all
+
+# Use custom candidates file
+uv run python backend/tools/find_diverse_components.py adjective --candidates my_words.txt
+```
+
+**Why it matters**:
+- CLIP embedding similarity ≈ visual similarity in Stable Diffusion outputs
+- Categories with tight similarity ranges produce less visual variety
+- Example: `adjective` range=0.091 vs `color` range=0.264
+- More diverse components → more distinct generated images
+
+**Output**: Prints recommended diverse component set and diversity statistics
+
+---
+
+### `word_sources.py`
+
+**Purpose**: Extended word pools and combinatorics helpers
+
+Contains 892 curated candidate words across all categories, plus:
+- Online word fetching via Datamuse API
+- Combinatorics calculators for pool sizing
+
+**Usage**:
+```bash
+# Show pool statistics and combination estimates
+uv run python backend/tools/word_sources.py
+
+# Calculate pool size needed for N years of uniqueness
+uv run python backend/tools/word_sources.py --recommend 100
+
+# Estimate combinations with N components per category
+uv run python backend/tools/word_sources.py --estimate 25
+
+# Fetch more words online (adjective, noun, mood only)
+uv run python backend/tools/word_sources.py --fetch adjective
+```
+
+**Combinatorics Reference**:
+```
+Components/category → Total combinations → Years at 1/min
+         12         →     3 million      →      6 years
+         25         →   117 million      →    223 years
+         50         →   3.8 billion      →  7,135 years
+        100         →   120 billion      → 228,311 years
+```
+
+**Recommendation**: 20-40 curated components per category is the sweet spot:
+- Quality: Small enough to manually verify SD output quality
+- Diversity: Large enough for meaningful visual variety  
+- Longevity: 117M+ combinations = 200+ years of uniqueness
+
+---
+
 ## 📊 Analysis Scripts
 
 ### `analyze_performance_correlations.py`

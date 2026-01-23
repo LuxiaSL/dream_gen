@@ -114,9 +114,15 @@ generation:
     
     # --- Collapse Detection ---
     collapse_detection: true
-    warmup_keyframes: 10              # No injections until aesthetic establishes
+    warmup_keyframes: 50              # Frames to establish baseline before detecting
     convergence_mode: "absolute"      # "absolute" (delta) | "percentage"
     log_convergence_stats: true       # Log for threshold calibration
+    
+    # --- Collapse Detection Horizons ---
+    # Longer horizons reduce false positives during template transitions
+    collapse_history_size: 100        # Embedding history buffer size
+    collapse_detection_window: 50     # Window for convergence comparison
+    collapse_baseline_comparison: true  # Compare against baseline (not just early frames)
     
     # --- Adaptive Seed Injection ---
     seed_injection_floor: 0.02        # Min seed probability (2%)

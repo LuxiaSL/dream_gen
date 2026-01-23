@@ -1,0 +1,549 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# COMPONENT POOLS v2 - Building blocks for combinatorial prompts
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Each component has:
+#   - word: The text inserted into templates
+#   - opposite: Semantic opposite for negative prompt generation (nullable)
+#
+# Embeddings are stored separately in components_embeddings.npz
+# Run `uv run python backend/tools/compute_embeddings.py` to regenerate
+#
+# 12 Visual Axis Categories:
+#   subject_form       - Primary visual entity (archetypal forms)
+#   material_substance - What it's made of (concrete materials)
+#   texture_density    - Surface quality (tactile descriptors)
+#   light_behavior     - How light interacts (specific phenomena)
+#   color_logic        - Palette relationships (not single colors)
+#   atmosphere_field   - Environmental media (fog, particles, fields)
+#   phenomenon_pattern - Visual processes (organic, digital, mathematical)
+#   spatial_logic      - Compositional arrangement (geometry, flow)
+#   scale_perspective  - Viewing position and magnification
+#   temporal_state     - Moment in process (decay, growth, transformation)
+#   setting_location   - Environmental context (specific places)
+#   medium_render      - Artistic technique / imaging method
+#
+# Categories with semantic opposites for negative prompts:
+#   color_logic, light_behavior, atmosphere_field, temporal_state, 
+#   texture_density, medium_render
+# ═══════════════════════════════════════════════════════════════════════════════
+
+components:
+  atmosphere_field:
+  - word: dense fog
+    opposite: particle suspension
+  - word: underwater caustics
+    opposite: firefly swarm
+  - word: dust motes
+    opposite: soap film interference
+  - word: heat distortion
+    opposite: void darkness
+  - word: void darkness
+    opposite: heat distortion
+  - word: smoke haze
+    opposite: static interference
+  - word: particle suspension
+    opposite: dense fog
+  - word: static interference
+    opposite: smoke haze
+  - word: spore clouds
+    opposite: firefly glow
+  - word: soap film interference
+    opposite: kelp fronds
+  - word: kelp fronds
+    opposite: soap film interference
+  - word: firefly swarm
+    opposite: underwater caustics
+  - word: cedar incense
+    opposite: frost flowers
+  - word: campfire embers
+    opposite: dust storm haze
+  - word: calcium carbite fog
+    opposite: ember sparks
+  - word: kelp strand float
+    opposite: borealis curtains
+  - word: dandelion seeds
+    opposite: crystal frost suspension
+  - word: firefly glow
+    opposite: spore clouds
+  - word: glowing plankton
+    opposite: lichen spore veil
+  - word: lichen spore veil
+    opposite: glowing plankton
+  - word: crystal frost suspension
+    opposite: dandelion seeds
+  - word: crystalline frost
+    opposite: cedar pollen
+  - word: frost flowers
+    opposite: cedar incense
+  - word: dust storm haze
+    opposite: campfire embers
+  - word: ferrofluid suspension
+    opposite: copper sulfate bloom
+  - word: copper sulfate bloom
+    opposite: ferrofluid suspension
+  - word: borealis curtains
+    opposite: kelp strand float
+  - word: cedar pollen
+    opposite: crystalline frost
+  - word: ember sparks
+    opposite: calcium carbite fog
+  color_logic:
+  - word: monochromatic teal
+    opposite: chocolate dipped strawberry duotone
+  - word: complementary orange and blue
+    opposite: tobacco stained parchment
+  - word: desaturated with crimson accent
+    opposite: sun-warmed sandstone analogous
+  - word: iridescent
+    opposite: dusty rose monochromatic
+  - word: split complementary
+    opposite: analogous earth tones
+  - word: analogous earth tones
+    opposite: split complementary
+  - word: high contrast black and gold
+    opposite: muted pastels
+  - word: muted pastels
+    opposite: high contrast black and gold
+  - word: oxidized verdigris palette
+    opposite: desert heat mirage spectrum
+  - word: bichromatic cyan and magenta
+    opposite: dusty apricot gradient
+  - word: bioluminescent teal puncturing midnight
+    opposite: duotone crimson on parchment
+  - word: duotone crimson on parchment
+    opposite: bioluminescent teal puncturing midnight
+  - word: sepia and ivory duotone
+    opposite: terracotta and turquoise southwest
+  - word: sepia toned nostalgia
+    opposite: sunfaded traffic vest
+  - word: vintage sepia warming
+    opposite: aquamarine rust oxidation
+  - word: chocolate dipped strawberry duotone
+    opposite: monochromatic teal
+  - word: dusty rose monochromatic
+    opposite: iridescent
+  - word: bone white and oxblood
+    opposite: sunbleached construction markers
+  - word: antique sepia wash
+    opposite: faded carnival chromatics
+  - word: dusty apricot gradient
+    opposite: bichromatic cyan and magenta
+  - word: sun-warmed sandstone analogous
+    opposite: desaturated with crimson accent
+  - word: electric violet punctuating grey
+    opposite: tobacco and turquoise pairing
+  - word: tobacco and turquoise pairing
+    opposite: electric violet punctuating grey
+  - word: terracotta and turquoise southwest
+    opposite: sepia and ivory duotone
+  - word: sunfaded traffic vest
+    opposite: sepia toned nostalgia
+  - word: desert heat mirage spectrum
+    opposite: oxidized verdigris palette
+  - word: tobacco stained parchment
+    opposite: complementary orange and blue
+  - word: faded carnival chromatics
+    opposite: antique sepia wash
+  - word: aquamarine rust oxidation
+    opposite: vintage sepia warming
+  - word: sunbleached construction markers
+    opposite: bone white and oxblood
+  light_behavior:
+  - word: bioluminescent
+    opposite: dappled light
+  - word: caustics
+    opposite: specular highlights
+  - word: rim-lit
+    opposite: diffusion gradient feather
+  - word: volumetric god rays
+    opposite: candle flame waver
+  - word: subsurface scattering
+    opposite: reflected highlight trails
+  - word: specular highlights
+    opposite: caustics
+  - word: backlit silhouette
+    opposite: bounce card reflection
+  - word: dappled light
+    opposite: bioluminescent
+  - word: harsh directional
+    opposite: soft diffused
+  - word: soft diffused
+    opposite: harsh directional
+  - word: umbrella bounce
+    opposite: light pillars
+  - word: light pillars
+    opposite: umbrella bounce
+  - word: led strip underglow
+    opposite: rembrandt triangle
+  - word: rembrandt triangle
+    opposite: led strip underglow
+  - word: bokeh balls
+    opposite: barn door cutoff
+  - word: barn door cutoff
+    opposite: bokeh balls
+  - word: reflected highlight trails
+    opposite: subsurface scattering
+  - word: diffusion gradient feather
+    opposite: rim-lit
+  - word: rayleigh scattering
+    opposite: penumbral softness
+  - word: bounce card reflection
+    opposite: backlit silhouette
+  - word: candle flame waver
+    opposite: volumetric god rays
+  - word: light painting trails
+    opposite: artificial skylight dome
+  - word: grazing light texture
+    opposite: soft pool diffusion
+  - word: penumbral softness
+    opposite: rayleigh scattering
+  - word: motivated window throw
+    opposite: crepuscular rays
+  - word: soft pool diffusion
+    opposite: grazing light texture
+  - word: artificial skylight dome
+    opposite: light painting trails
+  - word: crepuscular rays
+    opposite: motivated window throw
+  material_substance:
+  - word: glass
+  - word: mercury
+  - word: chitin
+  - word: volcanic rock
+  - word: mycelium
+  - word: oxidized copper
+  - word: wax
+  - word: vapor
+  - word: bone
+  - word: silk
+  - word: cuttlebone
+  - word: bismuth crystal
+  - word: verdigris patina
+  - word: termite mounds
+  - word: rendered tallow
+  - word: ferrofluid
+  - word: aerogel
+  - word: moss agate
+  - word: papyrus
+  - word: whale ivory
+  - word: hempcrete
+  - word: travertine
+  - word: cured latex
+  - word: dried lotus pod
+  - word: suede
+  - word: birch bark
+  - word: jade
+  medium_render:
+  - word: oil impasto
+    opposite: electron micrograph
+  - word: cyanotype
+    opposite: vector illustration
+  - word: risograph print
+    opposite: photogrammetry render
+  - word: electron micrograph
+    opposite: oil impasto
+  - word: matte painting
+    opposite: gyotaku fish print
+  - word: charcoal sketch
+    opposite: anamorphic render
+  - word: wet plate collodion
+    opposite: fresco secco
+  - word: vector illustration
+    opposite: cyanotype
+  - word: photogrammetry render
+    opposite: risograph print
+  - word: botanical illustration
+    opposite: lithophane carving
+  - word: anaglyph red cyan
+    opposite: gyotaku fish print
+  - word: gyotaku fish print
+    opposite: anaglyph red cyan
+  - word: anaglyph stereoscope
+    opposite: sumi-e ink wash
+  - word: autochrome lumière
+    opposite: scrimshaw etching
+  - word: infrared false color
+    opposite: batik fabric dye
+  - word: platinum palladium print
+    opposite: kinetic sand sculpture
+  - word: scrimshaw etching
+    opposite: autochrome lumière
+  - word: kinetic sand sculpture
+    opposite: platinum palladium print
+  - word: sumi-e ink wash
+    opposite: anaglyph stereoscope
+  - word: kallitype sepia
+    opposite: thermal imager capture
+  - word: daguerreotype stereoview
+    opposite: papercut silhouette
+  - word: thermal fax paper
+    opposite: scratchboard illustration
+  - word: thermal imager capture
+    opposite: kallitype sepia
+  - word: batik fabric dye
+    opposite: infrared false color
+  - word: fresco secco
+    opposite: wet plate collodion
+  - word: scratchboard illustration
+    opposite: thermal fax paper
+  - word: papercut silhouette
+    opposite: daguerreotype stereoview
+  - word: lithophane carving
+    opposite: botanical illustration
+  - word: anamorphic render
+    opposite: charcoal sketch
+  phenomenon_pattern:
+  - word: vein spread
+  - word: glitch displacement
+  - word: voronoi cells
+  - word: chromatic aberration
+  - word: root growth pattern
+  - word: pixel sort
+  - word: fractal branching
+  - word: motion blur trails
+  - word: cellular division
+  - word: moiré interference
+  - word: hilbert curve recursion
+  - word: soap film iridescence
+  - word: barnsley fern unfurl
+  - word: sierpinski carpet recursion
+  - word: peacock eye trains
+  - word: dendritic frost
+  - word: astigmatic smear
+  - word: lightning dendrite forks
+  - word: frost flower crystals
+  - word: lichen radial growth
+  - word: mycorrhizal network spread
+  - word: stutter trails
+  - word: prismatic light leak
+  - word: crepuscular ray shafts
+  - word: halftone gradient
+  - word: lightning lichtenberg figures
+  - word: mandelbrot zoom seahorse
+  - word: tissue scarification
+  - word: wood grain striations
+  scale_perspective:
+  - word: macro
+  - word: aerial
+  - word: electron microscope
+  - word: intimate portrait
+  - word: vast landscape scale
+  - word: architectural interior
+  - word: satellite view
+  - word: cross-section
+  - word: impossible scale
+  - word: keyhole view
+  - word: forest canopy walkway
+  - word: tilt-shift miniature
+  - word: lighthouse spiral stairwell
+  - word: galaxy cluster scale
+  - word: dollhouse cutaway
+  - word: spelunker headlamp
+  - word: hyperlapse corridor
+  - word: submarine porthole
+  - word: greenhouse ceiling
+  - word: arthroscope interior
+  - word: astronaut helmet reflection
+  - word: stalactite ceiling view
+  - word: shadow puppet scale
+  - word: jewelry loupe detail
+  - word: coral polyp magnification
+  - word: chimney sweep upward
+  - word: courtroom sketch distance
+  - word: cathedral ceiling upward
+  setting_location:
+  - word: cathedral interior
+  - word: petrified forest
+  - word: infinite hallway
+  - word: server farm
+  - word: volcanic crater
+  - word: flooded basement
+  - word: orbital station
+  - word: overgrown ruins
+  - word: salt flat
+  - word: abyssal trench
+  - word: tidal glass sculpture beach
+  - word: art nouveau metro entrance
+  - word: meteor impact crater lake
+  - word: bioluminescent mangrove swamp
+  - word: polar stratospheric cloud observatory
+  - word: ancient redwood canopy walkway
+  - word: overgrown parking structure
+  - word: bamboo scaffolding maze
+  - word: mangrove swamp boardwalk
+  - word: bioluminescent mushroom forest
+  - word: mangrove root labyrinth
+  - word: overgrown tennis court
+  - word: neon-lit alley
+  - word: marble sculpting studio
+  - word: birch bark canoe loft
+  - word: phosphorescent tide pool
+  - word: fog shrouded moorland
+  - word: abandoned drive-in theater
+  - word: terracotta army tomb
+  spatial_logic:
+  - word: central emergence
+  - word: infinite regression
+  - word: negative space dominant
+  - word: radial symmetry
+  - word: spiral arrangement
+  - word: scattered fragments
+  - word: bilateral symmetry
+  - word: diagonal tension
+  - word: floating isolated
+  - word: tessellated repeat
+  - word: dispersed constellation
+  - word: chevron cascade
+  - word: layered strata
+  - word: stepped terracing
+  - word: pyramidal cascade
+  - word: checkerboard pattern
+  - word: interlocking gears
+  - word: pinwheel rotation
+  - word: helical stacking
+  - word: spiral staircase composition
+  - word: layered transparency
+  - word: staggered columns
+  - word: vanishing point focus
+  - word: serpentine flow
+  - word: oblique shearing
+  subject_form:
+  - word: figure
+  - word: vessel
+  - word: spire
+  - word: threshold
+  - word: growth
+  - word: void
+  - word: membrane
+  - word: monolith
+  - word: lattice
+  - word: plume
+  - word: cupola
+  - word: wattle
+  - word: prong
+  - word: shard
+  - word: dodecahedron
+  - word: caltrop
+  - word: fossa
+  - word: scallop
+  - word: shroud
+  - word: pyramid
+  - word: septum
+  - word: veil
+  - word: cairn
+  - word: pleat
+  - word: pommel
+  - word: spindle
+  - word: bulge
+  - word: ziggurat
+  temporal_state:
+  - word: nascent
+    opposite: dormant
+  - word: decaying
+    opposite: frost-bitten
+  - word: fossilized
+    opposite: half-consumed
+  - word: blooming
+    opposite: erosion-carved
+  - word: frozen mid-transformation
+    opposite: parchment-brittle
+  - word: ancient weathered
+    opposite: sugar-candied
+  - word: freshly formed
+    opposite: lichen-mottled
+  - word: half-consumed
+    opposite: fossilized
+  - word: crystallizing
+    opposite: sediment-layered
+  - word: dormant
+    opposite: nascent
+  - word: resin-entombed
+    opposite: verdigris-covered
+  - word: verdigris-covered
+    opposite: resin-entombed
+  - word: final petal drop
+    opposite: ember-glowing remnants
+  - word: ember-glowing remnants
+    opposite: final petal drop
+  - word: spore-release ready
+    opposite: mid-shatter
+  - word: parchment-brittle
+    opposite: frozen mid-transformation
+  - word: post-harvest drying
+    opposite: moss-reclaimed
+  - word: lichen-mottled
+    opposite: chrysalis-stage
+  - word: mid-shatter
+    opposite: spore-release ready
+  - word: sediment-layered
+    opposite: crystallizing
+  - word: moss-reclaimed
+    opposite: post-harvest drying
+  - word: sugar-candied
+    opposite: ancient weathered
+  - word: frost-bitten
+    opposite: decaying
+  - word: erosion-carved
+    opposite: blooming
+  - word: chrysalis-stage
+    opposite: lichen-mottled
+  texture_density:
+  - word: intricate filigree
+    opposite: striated layers
+  - word: smooth gradient
+    opposite: gossamer threads
+  - word: chaotic noise
+    opposite: hammered copper dimples
+  - word: crystalline facets
+    opposite: rough hewn
+  - word: woven mesh
+    opposite: granular scatter
+  - word: porous foam
+    opposite: thatched straw
+  - word: striated layers
+    opposite: intricate filigree
+  - word: granular scatter
+    opposite: woven mesh
+  - word: gossamer threads
+    opposite: smooth gradient
+  - word: rough hewn
+    opposite: crystalline facets
+  - word: hammered copper dimples
+    opposite: spongy loofah
+  - word: spongy loofah
+    opposite: hammered copper dimples
+  - word: mason jar frost
+    opposite: quilted padding
+  - word: fuzzy felt
+    opposite: waffled grid
+  - word: pleated accordion
+    opposite: dendrite frost patterns
+  - word: thatched straw
+    opposite: porous foam
+  - word: wrinkled elephant
+    opposite: thatched reed bundles
+  - word: spiky burrs
+    opposite: flocked wallpaper
+  - word: nautilus spiral ridges
+    opposite: russet lichen
+  - word: russet lichen
+    opposite: nautilus spiral ridges
+  - word: thatched reed bundles
+    opposite: wrinkled elephant
+  - word: dendrite frost patterns
+    opposite: pleated accordion
+  - word: tufted cushion
+    opposite: tight braids
+  - word: flocked wallpaper
+    opposite: spiky burrs
+  - word: tight braids
+    opposite: tufted cushion
+  - word: etched glass frost
+    opposite: wicker weave
+  - word: wicker weave
+    opposite: etched glass frost
+  - word: quilted padding
+    opposite: mason jar frost
+  - word: waffled grid
+    opposite: fuzzy felt

@@ -31,6 +31,7 @@ Usage:
 import asyncio
 import logging
 import random
+import shutil
 import time
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple
@@ -41,6 +42,7 @@ import torch
 from backend.core.workers import KeyframeWorker, InterpolationWorker, CacheAnalysisWorker
 from backend.cache.injection_strategy import CacheInjectionStrategy
 from backend.cache.collapse_detector import ModeCollapseDetector
+from backend.fresh import FreshFrameBuffer
 
 logger = logging.getLogger(__name__)
 
@@ -146,16 +148,24 @@ class AsyncGenerationOrchestrator:
             color_config = cache_config.get('color_histogram', {})
             phash_config = cache_config.get('phash', {})
             
+            # Template-aware collapse detection settings
+            history_size = cache_config.get('collapse_history_size', 100)
+            detection_window = cache_config.get('collapse_detection_window', 50)
+            warmup_frames = cache_config.get('warmup_keyframes', 50)
+            use_baseline = cache_config.get('collapse_baseline_comparison', True)
+            
             self.collapse_detector = ModeCollapseDetector(
                 similarity_manager=similarity_manager,
-                history_size=50,
-                detection_window=20,
+                history_size=history_size,
+                detection_window=detection_window,
                 color_convergence_threshold=color_config.get('convergence_threshold', 0.15),
                 color_force_cache_threshold=color_config.get('force_cache_threshold', 0.30),
                 struct_convergence_threshold=phash_config.get('convergence_threshold', 0.08),
                 struct_force_cache_threshold=phash_config.get('force_cache_threshold', 0.15),
                 convergence_mode=cache_config.get('convergence_mode', 'absolute'),
-                log_stats=cache_config.get('log_convergence_stats', True)
+                log_stats=cache_config.get('log_convergence_stats', True),
+                warmup_frames=warmup_frames,
+                use_baseline_comparison=use_baseline
             )
             logger.info("Collapse detector initialized (inline in orchestrator)")
         
@@ -182,6 +192,17 @@ class AsyncGenerationOrchestrator:
                 )
                 logger.info("Injection strategy initialized (shared VAE with lock)")
         
+        # === Fresh Frame Buffer (for template-aware seed injection) ===
+        # Only initialized when using CombinatorialPromptSystem
+        self.fresh_buffer: Optional[FreshFrameBuffer] = None
+        if self.use_combinatorial:
+            self.fresh_buffer = FreshFrameBuffer(
+                generator=generator,
+                prompt_system=prompt_manager,
+                config=config
+            )
+            logger.info("Fresh frame buffer initialized (pre-generation enabled)")
+        
         # === State Tracking ===
         self.running = False
         self.current_keyframe_num = 0
@@ -199,6 +220,31 @@ class AsyncGenerationOrchestrator:
         
         # Injection frequency tracking (for seed forcing)
         self.recent_cache_injections = deque(maxlen=10)
+        
+        # === Denoising State Machine (Phase 2) ===
+        # Detect if using CombinatorialPromptSystem (has should_mutate method)
+        self.use_combinatorial = hasattr(self.prompt_manager, 'should_mutate')
+        
+        # Denoise values for DRIFT/BEND modes
+        fresh_config = self.config.get('fresh_generation', {})
+        denoising_config = fresh_config.get('denoising', {})
+        
+        # Support both nested dict and flat config formats
+        if isinstance(denoising_config, dict):
+            self.denoise_drift = denoising_config.get('drift', 0.20)
+            self.denoise_bend = denoising_config.get('bend', 0.50)
+            self.bend_duration = denoising_config.get('bend_frames', 4)
+        else:
+            # Fall back to hybrid keyframe_denoise for drift
+            self.denoise_drift = self.config['generation']['hybrid'].get('keyframe_denoise', 0.20)
+            self.denoise_bend = 0.50  # Default bend denoise
+            self.bend_duration = 4
+        
+        if self.use_combinatorial:
+            logger.info("Denoising state machine ENABLED (CombinatorialPromptSystem detected)")
+            logger.info(f"  - DRIFT denoise: {self.denoise_drift}")
+            logger.info(f"  - BEND denoise: {self.denoise_bend}")
+            logger.info(f"  - BEND duration: {self.bend_duration} frames")
         
         # Worker tasks (for graceful shutdown)
         self.keyframe_task: Optional[asyncio.Task] = None
@@ -284,14 +330,25 @@ class AsyncGenerationOrchestrator:
                 self.keyframe_sequences[2] = kf2_seq
                 logger.info(f"  Registered keyframe 2: seq {kf2_seq}")
                 
-                # Submit keyframe 2 generation (pass sequence number!)
+                # Get prompt and negative prompt based on system type
+                if self.use_combinatorial:
+                    bootstrap_prompt = self.prompt_manager.get_next_prompt()
+                    bootstrap_negative = self.prompt_manager.get_negative_prompt()
+                else:
+                    bootstrap_prompt = self.prompt_manager.get_next_prompt()
+                    bootstrap_negative = self.prompt_manager.get_negative_prompt() if hasattr(self.prompt_manager, 'get_negative_prompt') else None
+                
+                # Submit keyframe 2 generation (DRIFT mode for bootstrap)
                 await self.keyframe_worker.submit_request(
                     current_image=self.current_image_path,
                     keyframe_num=2,
                     sequence_num=kf2_seq,
-                    prompt=self.prompt_manager.get_next_prompt()
+                    prompt=bootstrap_prompt,
+                    negative_prompt=bootstrap_negative,
+                    denoise=self.denoise_drift,
+                    generation_mode="drift"
                 )
-                logger.info("  Submitted keyframe 2 generation request")
+                logger.info(f"  Submitted keyframe 2 generation request (DRIFT, denoise={self.denoise_drift:.2f})")
             else:
                 logger.error("No seed image provided, cannot start generation")
                 self.running = False
@@ -384,8 +441,12 @@ class AsyncGenerationOrchestrator:
                 
                 if is_throttled:
                     # Buffer is full - don't wait for completions (there may be none!)
-                    # Instead, sleep briefly and check buffer status again
-                    logger.debug(f"  System throttled ({seconds_buffered:.1f}s / {target_seconds}s), waiting for buffer to drain...")
+                    # Use this idle time to pre-generate next fresh frame
+                    if self.fresh_buffer and not self.fresh_buffer.is_ready():
+                        logger.debug(f"  System throttled - pre-generating fresh frame...")
+                        await self.fresh_buffer.ensure_ready()
+                    else:
+                        logger.debug(f"  System throttled ({seconds_buffered:.1f}s / {target_seconds}s), waiting for buffer to drain...")
                     await asyncio.sleep(0.5)
                     continue  # Loop back to check buffer status again
                 
@@ -606,7 +667,35 @@ class AsyncGenerationOrchestrator:
                     self.recent_cache_injections.append(False)
                 
                 # === 8. Normal Generation - Pre-register Next Cycle ===
-                next_prompt = self.prompt_manager.get_next_prompt()
+                
+                # === DENOISING STATE MACHINE (Phase 2) ===
+                # Check for mutations and determine denoise based on DRIFT/BEND mode
+                generation_mode = "drift"
+                denoise = self.denoise_drift
+                negative_prompt = None
+                
+                if self.use_combinatorial:
+                    # Check if should mutate components
+                    if self.prompt_manager.should_mutate():
+                        self.prompt_manager.mutate()
+                        logger.info(f"  [MUTATION] Component mutated, entering BEND mode")
+                    
+                    # Get mode and denoise
+                    if self.prompt_manager.is_in_bend_mode():
+                        generation_mode = "bend"
+                        denoise = self.denoise_bend
+                        logger.info(f"  [BEND] Using high denoise ({denoise:.2f}) for prompt transition")
+                    else:
+                        generation_mode = "drift"
+                        denoise = self.denoise_drift
+                    
+                    # Get prompts from combinatorial system
+                    next_prompt = self.prompt_manager.get_next_prompt()
+                    negative_prompt = self.prompt_manager.get_negative_prompt()
+                else:
+                    # Legacy path: use old PromptManager
+                    next_prompt = self.prompt_manager.get_next_prompt()
+                    negative_prompt = self.prompt_manager.get_negative_prompt() if hasattr(self.prompt_manager, 'get_negative_prompt') else None
                 
                 # Pre-register ONLY ONE cycle ahead:
                 # 1. Interpolations current -> next (if not already done)
@@ -640,13 +729,16 @@ class AsyncGenerationOrchestrator:
                 # Mark as generating
                 self.buffer.mark_generating(next_seq)
                 
-                # Submit keyframe generation with sequence number
-                logger.info(f"  Submitting keyframe {next_kf} generation request")
+                # Submit keyframe generation with denoising state
+                logger.info(f"  Submitting keyframe {next_kf} ({generation_mode.upper()}, denoise={denoise:.2f})")
                 await self.keyframe_worker.submit_request(
                     current_image=kf_path,
                     keyframe_num=next_kf,
                     sequence_num=next_seq,
-                    prompt=next_prompt
+                    prompt=next_prompt,
+                    negative_prompt=negative_prompt,
+                    denoise=denoise,
+                    generation_mode=generation_mode
                 )
                 
                 # === 9. Memory Management ===
@@ -849,12 +941,59 @@ class AsyncGenerationOrchestrator:
             if injection_type == 'seed':
                 logger.info(f"  -> Injecting SEED frame (keyframe {keyframe_num})")
                 
-                result = await self.injection_strategy.inject_seed_frame(
-                    target_keyframe_num=keyframe_num,
-                    current_image_path=current_path
-                )
+                # Try to use fresh frame buffer first (pre-generated with new template)
+                fresh_frame = None
+                if self.fresh_buffer:
+                    fresh_frame = self.fresh_buffer.consume()
                 
-                if result:
+                if fresh_frame:
+                    # Use pre-generated fresh frame with template switch
+                    target_path = fresh_frame.path
+                    new_template_id = fresh_frame.template_id
+                    new_components = fresh_frame.components
+                    
+                    logger.info(f"  [FRESH] Using pre-generated frame (template: '{new_template_id}')")
+                    
+                    # Copy fresh frame to keyframe location
+                    keyframe_path = self.buffer.keyframe_dir / f"keyframe_{keyframe_num:03d}.png"
+                    shutil.copy2(target_path, keyframe_path)
+                    target_path = keyframe_path
+                    
+                    # Perform coordinated template switch
+                    old_template_id = self.prompt_manager.get_current_template_id() if self.use_combinatorial else None
+                    
+                    # 1. Switch prompt system to new template
+                    if self.use_combinatorial:
+                        self.prompt_manager.switch_template(new_template_id, new_components)
+                    
+                    # 2. Switch cache manager (archive old, potentially restore if returning)
+                    if self.cache:
+                        self.cache.switch_template(new_template_id)
+                    
+                    # 3. Reset collapse detector for new template baseline
+                    if self.collapse_detector:
+                        self.collapse_detector.reset_for_template(new_template_id)
+                        logger.info(f"  Collapse detector reset for template '{new_template_id}' (entering warmup)")
+                    
+                    # Start pre-generating next fresh frame in background
+                    asyncio.create_task(self.fresh_buffer.ensure_ready())
+                    
+                    metadata = {
+                        'type': 'fresh_frame_injection',
+                        'template_id': new_template_id,
+                        'old_template_id': old_template_id,
+                        'prompt': fresh_frame.prompt
+                    }
+                else:
+                    # Fall back to legacy seed injection
+                    result = await self.injection_strategy.inject_seed_frame(
+                        target_keyframe_num=keyframe_num,
+                        current_image_path=current_path
+                    )
+                    
+                    if not result:
+                        return None
+                    
                     target_path, metadata = result
                     
                     # Reset embedding history to break convergence signal
@@ -866,7 +1005,8 @@ class AsyncGenerationOrchestrator:
                             keep_recent = self.config['generation']['cache'].get('embedding_history_keep_recent', 5)
                             self.collapse_detector.partial_reset(keep_recent)
                         logger.info(f"  Embedding history reset ({reset_mode}) after seed injection")
-                    
+                
+                if target_path:
                     # Mark as ready in buffer
                     self.buffer.mark_ready(sequence_num, target_path)
                     
@@ -889,8 +1029,8 @@ class AsyncGenerationOrchestrator:
                     # Submit to cache analysis (seeds are always diverse)
                     await self.cache_worker.submit_frame(
                         frame_path=target_path,
-                        prompt='seed_injection',
-                        metadata={'denoise': 0.0, 'type': 'seed', 'injection': True}
+                        prompt=metadata.get('prompt', 'seed_injection'),
+                        metadata={'denoise': 0.0, 'type': metadata['type'], 'injection': True}
                     )
                     
                     injection_time = time.time() - start_time
@@ -1102,13 +1242,23 @@ class AsyncGenerationOrchestrator:
             prompt = self.prompt_manager.get_next_prompt()
             logger.info(f"  Using new prompt from rotation")
         
+        # Get negative prompt and denoise for recovery
+        negative_prompt = None
+        if self.use_combinatorial:
+            negative_prompt = self.prompt_manager.get_negative_prompt()
+        elif hasattr(self.prompt_manager, 'get_negative_prompt'):
+            negative_prompt = self.prompt_manager.get_negative_prompt()
+        
         await self.keyframe_worker.submit_request(
             current_image=self.current_image_path,
             keyframe_num=next_kf,
             sequence_num=new_kf_seq,
-            prompt=prompt
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            denoise=self.denoise_drift,  # Use DRIFT for recovery
+            generation_mode="drift"
         )
-        logger.info(f"  Submitted new KF{next_kf} request")
+        logger.info(f"  Submitted new KF{next_kf} request (recovery, DRIFT mode)")
         
         logger.info(f"  Recovery complete. Generating: KF{next_kf}")
         logger.warning(f"=== RECOVERY COMPLETE ===")
@@ -1143,6 +1293,19 @@ class AsyncGenerationOrchestrator:
             "avg_generation_time": avg_gen_time,  # CRITICAL: Required by status updater
             "is_running": self.running
         }
+        
+        # Add denoising state machine stats (Phase 2)
+        if self.use_combinatorial:
+            try:
+                prompt_stats = self.prompt_manager.get_stats()
+                stats.update({
+                    "prompt_template": prompt_stats.get("current_template"),
+                    "prompt_mutations": prompt_stats.get("total_mutations", 0),
+                    "prompt_in_bend_mode": prompt_stats.get("in_bend_mode", False),
+                    "prompt_frames_since_mutation": prompt_stats.get("frames_since_mutation", 0)
+                })
+            except Exception as e:
+                logger.debug(f"Failed to get prompt stats: {e}")
         
         # Add mode collapse detection stats
         if self.collapse_detector:
@@ -1197,6 +1360,16 @@ class AsyncGenerationOrchestrator:
             stats["interpolation_queue_depth"] = self.interpolation_worker.pair_queue.qsize()
         if self.cache_worker:
             stats["cache_queue_depth"] = self.cache_worker.analysis_queue.qsize()
+        
+        # Add fresh frame buffer stats
+        if self.fresh_buffer:
+            fresh_stats = self.fresh_buffer.get_stats()
+            stats.update({
+                "fresh_buffer_ready": fresh_stats.get("is_ready", False),
+                "fresh_buffer_template": fresh_stats.get("buffered_template"),
+                "fresh_frames_generated": fresh_stats.get("total_generated", 0),
+                "fresh_frames_consumed": fresh_stats.get("total_consumed", 0)
+            })
         
         return stats
 
