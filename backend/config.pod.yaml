@@ -127,6 +127,8 @@ prompts:
       negative: "low quality, blurry, text, watermark"
   modifiers:
     enabled: false
+    time_based: false
+    system_based: false
   rotation_interval: 20
 
 game_detection:

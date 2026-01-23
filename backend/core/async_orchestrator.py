@@ -741,6 +741,27 @@ class AsyncGenerationOrchestrator:
                     generation_mode=generation_mode
                 )
                 
+                # === PERIODIC STATS (every 10 keyframes) ===
+                if next_kf % 10 == 0 and self.use_combinatorial:
+                    prompt_stats = self.prompt_manager.get_stats() if hasattr(self.prompt_manager, 'get_stats') else {}
+                    fresh_stats = self.fresh_buffer.get_stats() if self.fresh_buffer else {}
+                    
+                    logger.info("=" * 60)
+                    logger.info(f"[STATS] Keyframe {next_kf}")
+                    logger.info(f"  Prompt System:")
+                    logger.info(f"    Template: {prompt_stats.get('current_template', 'N/A')}")
+                    logger.info(f"    Total mutations: {prompt_stats.get('total_mutations', 0)}")
+                    logger.info(f"    Frames since mutation: {prompt_stats.get('frames_since_mutation', 0)}")
+                    logger.info(f"    In BEND mode: {prompt_stats.get('in_bend_mode', False)}")
+                    if fresh_stats:
+                        logger.info(f"  Fresh Buffer:")
+                        logger.info(f"    Ready: {fresh_stats.get('is_ready', False)}")
+                        logger.info(f"    Generated: {fresh_stats.get('total_generated', 0)}")
+                        logger.info(f"    Consumed: {fresh_stats.get('total_consumed', 0)}")
+                        logger.info(f"    Avg gen time: {fresh_stats.get('avg_generation_time', 0):.2f}s")
+                    logger.info(f"  Cache injections: {self.cache_injections}")
+                    logger.info("=" * 60)
+                
                 # === 9. Memory Management ===
                 # Clean up old keyframe sequence tracking (keep last 10)
                 if len(self.keyframe_sequences) > 10:
@@ -951,8 +972,13 @@ class AsyncGenerationOrchestrator:
                     target_path = fresh_frame.path
                     new_template_id = fresh_frame.template_id
                     new_components = fresh_frame.components
+                    buffer_age = time.time() - fresh_frame.generated_at
                     
-                    logger.info(f"  [FRESH] Using pre-generated frame (template: '{new_template_id}')")
+                    logger.info(f"  [FRESH] Using pre-generated frame:")
+                    logger.info(f"    Template: '{new_template_id}'")
+                    logger.info(f"    Components: {new_components}")
+                    logger.info(f"    Buffer age: {buffer_age:.1f}s")
+                    logger.info(f"    Prompt: {fresh_frame.prompt[:80]}...")
                     
                     # Copy fresh frame to keyframe location
                     keyframe_path = self.buffer.keyframe_dir / f"keyframe_{keyframe_num:03d}.png"
@@ -962,21 +988,27 @@ class AsyncGenerationOrchestrator:
                     # Perform coordinated template switch
                     old_template_id = self.prompt_manager.get_current_template_id() if self.use_combinatorial else None
                     
+                    logger.info(f"  [TEMPLATE_SWITCH] '{old_template_id}' → '{new_template_id}'")
+                    
                     # 1. Switch prompt system to new template
                     if self.use_combinatorial:
                         self.prompt_manager.switch_template(new_template_id, new_components)
+                        logger.info(f"    ✓ Prompt system switched")
                     
                     # 2. Switch cache manager (archive old, potentially restore if returning)
                     if self.cache:
                         self.cache.switch_template(new_template_id)
+                        logger.info(f"    ✓ Cache manager switched (old cache archived)")
                     
                     # 3. Reset collapse detector for new template baseline
                     if self.collapse_detector:
                         self.collapse_detector.reset_for_template(new_template_id)
-                        logger.info(f"  Collapse detector reset for template '{new_template_id}' (entering warmup)")
+                        warmup = self.config['generation']['cache'].get('warmup_keyframes', 50)
+                        logger.info(f"    ✓ Collapse detector reset (warmup: {warmup} frames)")
                     
                     # Start pre-generating next fresh frame in background
                     asyncio.create_task(self.fresh_buffer.ensure_ready())
+                    logger.info(f"    ✓ Started pre-generating next fresh frame")
                     
                     metadata = {
                         'type': 'fresh_frame_injection',

@@ -431,7 +431,14 @@ class CombinatorialPromptSystem:
             self.bend_frames_remaining -= 1
             if self.bend_frames_remaining <= 0:
                 self.in_bend_mode = False
-                logger.debug("Exited BEND mode, returning to DRIFT")
+                logger.info(
+                    f"[STATE] BEND → DRIFT (frame={self.total_frames}, "
+                    f"mutations={self.total_mutations})"
+                )
+            else:
+                logger.debug(
+                    f"[STATE] BEND mode active, {self.bend_frames_remaining} frames remaining"
+                )
         
         return self.current_prompt or ""
     
@@ -580,8 +587,12 @@ class CombinatorialPromptSystem:
         
         if not candidates:
             # No candidates in acceptable range - use random selection
-            logger.debug("No candidates in similarity range, using random selection")
-            return random.choice(pool)
+            selected = random.choice(pool)
+            logger.info(
+                f"[SIMILARITY] No candidates in range [{self.similarity_target - self.similarity_range:.2f}, "
+                f"{self.similarity_target + self.similarity_range:.2f}] - random fallback: '{selected.word}'"
+            )
+            return selected
         
         # Weight candidates: prefer those closer to target similarity
         # Weight = 1.0 - |similarity - target|, so target gets weight 1.0
@@ -600,9 +611,15 @@ class CombinatorialPromptSystem:
         # Weighted random selection
         selected = random.choices(candidates, weights=weights, k=1)[0]
         
+        # Log candidates considered
+        top_candidates = sorted(candidates, key=lambda x: x[1], reverse=True)[:5]
+        logger.info(
+            f"[SIMILARITY] '{current.word}' → '{selected[0].word}' "
+            f"(sim={selected[1]:.3f}, target={self.similarity_target:.2f}, "
+            f"candidates={len(candidates)}/{len(pool)})"
+        )
         logger.debug(
-            f"Similarity-guided selection: chose '{selected[0].word}' "
-            f"(sim={selected[1]:.3f}, target={self.similarity_target:.2f})"
+            f"[SIMILARITY] Top candidates: {[(c.word, f'{s:.3f}') for c, s in top_candidates]}"
         )
         
         return selected[0]
@@ -620,11 +637,23 @@ class CombinatorialPromptSystem:
         """
         # Force mutation if stale
         if self.frames_since_mutation >= self.staleness_threshold:
-            logger.info(f"Staleness threshold reached ({self.staleness_threshold} frames)")
+            logger.info(
+                f"[MUTATION_CHECK] STALE - forcing mutation "
+                f"(frames_since={self.frames_since_mutation}, threshold={self.staleness_threshold})"
+            )
             return True
         
         # Random probability
-        return random.random() < self.mutation_probability
+        roll = random.random()
+        should = roll < self.mutation_probability
+        
+        logger.debug(
+            f"[MUTATION_CHECK] roll={roll:.3f} vs prob={self.mutation_probability:.3f} "
+            f"→ {'MUTATE' if should else 'SKIP'} "
+            f"(frames_since={self.frames_since_mutation})"
+        )
+        
+        return should
     
     def mutate(self) -> str:
         """
@@ -698,7 +727,10 @@ class CombinatorialPromptSystem:
         
         logger.info(
             f"[MUTATE] {selected_category}: '{old_component.word}' → '{new_component.word}' "
-            f"(entering BEND mode for {self.bend_duration} frames)"
+            f"| mutation #{self.total_mutations} | DRIFT → BEND ({self.bend_duration}f)"
+        )
+        logger.info(
+            f"[MUTATE] New prompt: {(self.current_prompt or '')[:100]}..."
         )
         
         return self.current_prompt or ""
