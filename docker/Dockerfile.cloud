@@ -26,9 +26,13 @@ USER root
 
 WORKDIR /app
 
-# Copy ONLY the backend code and configs
+# Copy backend code, prompts, and configs
 COPY backend/ /app/backend/
+COPY prompts/ /app/prompts/
 COPY pyproject.toml /app/
+
+# Seeds are optional - fresh frame generation preferred for startup
+# Keep for backwards compatibility
 COPY seeds/ /app/seeds/
 
 # Embed build info for debugging

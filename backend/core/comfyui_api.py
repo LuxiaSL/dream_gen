@@ -43,6 +43,7 @@ All endpoints are synchronized with the official ComfyUI server implementation.
 import asyncio
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -63,6 +64,8 @@ class ComfyUIClient:
     - WebSocket connection for progress monitoring
     - Queue management
     - Error handling and retries
+    
+    Supports optional basic authentication for nginx-proxied ComfyUI servers.
     """
 
     def __init__(self, base_url: str = "http://127.0.0.1:8188"):
@@ -71,10 +74,23 @@ class ComfyUIClient:
         
         Args:
             base_url: ComfyUI server URL (default: localhost:8188)
+        
+        Basic auth credentials are read from environment variables:
+        - COMFYUI_AUTH_USER: Username for basic auth
+        - COMFYUI_AUTH_PASS: Password for basic auth
         """
         self.base_url = base_url.rstrip("/")
         self.client_id = str(time.time())  # Unique client ID for WebSocket
         self.session: Optional[requests.Session] = None
+        
+        # Read auth from environment (set by runpod_handler in pod mode)
+        self.auth_user = os.environ.get("COMFYUI_AUTH_USER", "")
+        self.auth_pass = os.environ.get("COMFYUI_AUTH_PASS", "")
+        self._has_auth = bool(self.auth_user and self.auth_pass)
+        
+        if self._has_auth:
+            logger.info(f"ComfyUI client using basic auth: {self.auth_user}:****")
+        
         self._init_session()
 
     def _init_session(self) -> None:
@@ -84,6 +100,10 @@ class ComfyUIClient:
             "User-Agent": "DreamWindow/0.1.0",
             "Accept": "application/json",
         })
+        
+        # Set up basic auth if credentials provided
+        if self._has_auth:
+            self.session.auth = (self.auth_user, self.auth_pass)
 
     def get_system_stats(self) -> Dict[str, Any]:
         """
@@ -186,13 +206,21 @@ class ComfyUIClient:
         ws_base = self.base_url.replace("http://", "").replace("https://", "")
         ws_url = f"ws://{ws_base}/ws?clientId={self.client_id}"
         
+        # Build extra headers for basic auth if needed
+        extra_headers = {}
+        if self._has_auth:
+            import base64
+            credentials = f"{self.auth_user}:{self.auth_pass}"
+            auth_b64 = base64.b64encode(credentials.encode()).decode()
+            extra_headers["Authorization"] = f"Basic {auth_b64}"
+        
         start_time = time.time()
         execution_started = False
         last_progress_time = start_time
         messages_received = 0
         
         try:
-            async with websockets.connect(ws_url) as websocket:
+            async with websockets.connect(ws_url, extra_headers=extra_headers) as websocket:
                 logger.debug(f"WebSocket connected, waiting for prompt {prompt_id}")
                 
                 while True:

@@ -67,6 +67,7 @@ services:
               capabilities: [gpu]
     volumes:
       - ../backend:/app/backend:ro
+      - ../prompts:/app/prompts:ro
       - output-data:/app/output
       - state-data:/app/state
     environment:

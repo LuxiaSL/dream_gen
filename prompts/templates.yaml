@@ -1,0 +1,142 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# PROMPT TEMPLATES v2 - Orthogonal visual-axis composition
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Syntax:
+#   {category}     - Pick 1 random component from category
+#   {category:N}   - Pick N different components (no replacement), space-joined
+#   {category:N:,} - Pick N different components, comma-joined
+#
+# Design Philosophy:
+#   - Templates vary category combinations (not all use all categories)
+#   - Same category in different syntactic positions yields different results
+#   - Controlled complexity: 5-7 slots per template
+#   - Each template has primary axes it emphasizes
+#
+# Categories (12 visual axes):
+#   subject_form       - Primary visual entity (archetypal forms)
+#   material_substance - What it's made of (concrete materials)
+#   texture_density    - Surface quality (tactile descriptors)
+#   light_behavior     - How light interacts (specific phenomena)
+#   color_logic        - Palette relationships (not single colors)
+#   atmosphere_field   - Environmental media (fog, particles, fields)
+#   phenomenon_pattern - Visual processes (organic, digital, mathematical)
+#   spatial_logic      - Compositional arrangement (geometry, flow)
+#   scale_perspective  - Viewing position and magnification
+#   temporal_state     - Moment in process (decay, growth, transformation)
+#   setting_location   - Environmental context (specific places)
+#   medium_render      - Artistic technique / imaging method
+# ═══════════════════════════════════════════════════════════════════════════════
+
+templates:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # MATERIAL STUDY - Form defined by what it's made of
+  # Emphasis: material_substance, texture_density, light_behavior
+  # Omits: setting, atmosphere, phenomenon
+  # ═══════════════════════════════════════════════════════════════════════════
+  - id: "material_study"
+    structure: "{subject_form} made of {material_substance}, {texture_density} surface, {light_behavior}, {color_logic}, {medium_render}"
+    required_components: [subject_form, material_substance, texture_density, light_behavior, color_logic, medium_render]
+    notes: "Clean material showcase - no environment, no effects, just substance and light"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # ENVIRONMENTAL EMERGENCE - Subject secondary to place
+  # Emphasis: setting_location, atmosphere_field, scale_perspective
+  # ═══════════════════════════════════════════════════════════════════════════
+  - id: "environmental"
+    structure: "{scale_perspective} view of {setting_location}, {atmosphere_field}, {subject_form} barely visible, {light_behavior}, {medium_render}"
+    required_components: [scale_perspective, setting_location, atmosphere_field, subject_form, light_behavior, medium_render]
+    notes: "Environment dominates - subject is incidental presence in vast space"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PROCESS STATE - Frozen moment in transformation
+  # Emphasis: temporal_state, phenomenon_pattern
+  # ═══════════════════════════════════════════════════════════════════════════
+  - id: "process_state"
+    structure: "{temporal_state} {subject_form}, {phenomenon_pattern} spreading across {material_substance}, {color_logic}, {medium_render}"
+    required_components: [temporal_state, subject_form, phenomenon_pattern, material_substance, color_logic, medium_render]
+    notes: "Captures transformation - decay, growth, crystallization in progress"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # SCIENTIFIC SPECIMEN - Clinical imaging aesthetic
+  # Emphasis: scale_perspective, medium_render (imaging techniques)
+  # ═══════════════════════════════════════════════════════════════════════════
+  - id: "specimen"
+    structure: "{scale_perspective} of {material_substance} {subject_form}, {medium_render}, {color_logic}, clinical lighting"
+    required_components: [scale_perspective, material_substance, subject_form, medium_render, color_logic]
+    notes: "Scientific imaging - electron microscope, cross-section, thermal capture"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # ABSTRACT FIELD - No subject, pure visual phenomena
+  # Emphasis: phenomenon_pattern, spatial_logic, color_logic
+  # Omits: subject_form, setting_location
+  # ═══════════════════════════════════════════════════════════════════════════
+  - id: "abstract_field"
+    structure: "{phenomenon_pattern} in {spatial_logic} arrangement, {color_logic}, {atmosphere_field}, {medium_render}"
+    required_components: [phenomenon_pattern, spatial_logic, color_logic, atmosphere_field, medium_render]
+    notes: "Non-representational - pattern and color relationships only"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # LIMINAL THRESHOLD - Transitional spaces
+  # Emphasis: setting_location (passages), light_behavior, atmosphere_field
+  # ═══════════════════════════════════════════════════════════════════════════
+  - id: "liminal"
+    structure: "{setting_location}, {light_behavior} from beyond, {atmosphere_field}, {spatial_logic}, {color_logic}, {medium_render}"
+    required_components: [setting_location, light_behavior, atmosphere_field, spatial_logic, color_logic, medium_render]
+    notes: "Doorways, corridors, thresholds - light coming from somewhere else"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # TEXTURAL MACRO - Extreme close surface study
+  # Emphasis: texture_density, scale_perspective (macro/micro)
+  # ═══════════════════════════════════════════════════════════════════════════
+  - id: "textural_macro"
+    structure: "{scale_perspective} of {texture_density} {material_substance}, {light_behavior}, {color_logic}, {medium_render}"
+    required_components: [scale_perspective, texture_density, material_substance, light_behavior, color_logic, medium_render]
+    notes: "Surface fills frame - scale creates abstraction from material"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # RUIN STATE - Decay and reclamation
+  # Emphasis: temporal_state, setting_location, atmosphere_field
+  # ═══════════════════════════════════════════════════════════════════════════
+  - id: "ruin_state"
+    structure: "{temporal_state} {setting_location}, {atmosphere_field}, {phenomenon_pattern} reclaiming surfaces, {color_logic}, {medium_render}"
+    required_components: [temporal_state, setting_location, atmosphere_field, phenomenon_pattern, color_logic, medium_render]
+    notes: "Abandoned places being consumed by natural processes"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # MINIMAL OBJECT - Sparse, single subject focus
+  # Emphasis: subject_form, negative space
+  # Omits: setting, atmosphere, phenomenon
+  # ═══════════════════════════════════════════════════════════════════════════
+  - id: "minimal_object"
+    structure: "solitary {material_substance} {subject_form}, {spatial_logic}, {light_behavior}, {color_logic}, {medium_render}"
+    required_components: [material_substance, subject_form, spatial_logic, light_behavior, color_logic, medium_render]
+    notes: "Single object, breathing room, contemplative"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # HYBRID COLLISION - Two materials merging
+  # Emphasis: material_substance (×2), phenomenon_pattern
+  # ═══════════════════════════════════════════════════════════════════════════
+  - id: "material_collision"
+    structure: "{material_substance} and {material_substance} merging, {phenomenon_pattern} at boundary, {texture_density}, {light_behavior}, {color_logic}, {medium_render}"
+    required_components: [material_substance, phenomenon_pattern, texture_density, light_behavior, color_logic, medium_render]
+    notes: "Two substances meeting - glass and rust, wax and mercury, etc."
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # ATMOSPHERIC DEPTH - Layers of atmosphere
+  # Emphasis: atmosphere_field (×2), light_behavior
+  # ═══════════════════════════════════════════════════════════════════════════
+  - id: "atmospheric_depth"
+    structure: "{subject_form} through {atmosphere_field} and {atmosphere_field}, {light_behavior}, {scale_perspective}, {color_logic}, {medium_render}"
+    required_components: [subject_form, atmosphere_field, light_behavior, scale_perspective, color_logic, medium_render]
+    notes: "Layered environmental effects between viewer and subject"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # TEMPORAL CONTRAST - Before/after in single frame
+  # Emphasis: temporal_state (×2), spatial_logic
+  # ═══════════════════════════════════════════════════════════════════════════
+  - id: "temporal_diptych"
+    structure: "{temporal_state} becoming {temporal_state}, {subject_form} in {spatial_logic}, {material_substance}, {color_logic}, {medium_render}"
+    required_components: [temporal_state, subject_form, spatial_logic, material_substance, color_logic, medium_render]
+    notes: "Transition captured - nascent to decaying, blooming to withered"
+

@@ -77,6 +77,12 @@ dev = [
     "types-pyyaml>=6.0.12",
     "types-requests>=2.31.0",
     "types-pillow>=10.1.0",
+    
+    # Embedding computation (for compute_embeddings.py tool)
+    "transformers>=4.35.0",
+    
+    # Word pool expansion (for find_diverse_components.py)
+    "nltk>=3.8.0",
 ]
 
 windows = [

@@ -31,6 +31,7 @@ from core.async_orchestrator import AsyncGenerationOrchestrator
 from core.shared_resources import SharedVAEAccess
 from core.display_selector import DisplayFrameSelector
 from utils.prompt_manager import PromptManager
+from prompts.combinatorial import CombinatorialPromptSystem
 from utils.status_writer import StatusWriter
 from utils.file_ops import atomic_write_image_with_retry
 from utils.game_detector import GameDetector
@@ -40,15 +41,27 @@ from utils.perf_stats import get_perf_stats
 
 # Setup logging
 def setup_logging(log_dir: Path, log_level: str = "INFO"):
-    """Configure logging system with rotation"""
+    """
+    Configure logging system with rotation
+    
+    Console: Shows INFO+ by default (important events, warnings, errors)
+    File: Captures everything (DEBUG+) for post-mortem analysis
+    
+    Noisy loggers (urllib3, websockets, etc.) are quieted to WARNING
+    """
     log_dir.mkdir(parents=True, exist_ok=True)
     
     log_file = log_dir / "dream_controller.log"
     
-    # Create formatter
-    formatter = logging.Formatter(
+    # Create formatters
+    file_formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    # Shorter format for console (no timestamp, shorter name)
+    console_formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%H:%M:%S'
     )
     
     # Rotating file handler (max 5MB per file, keep 3 backups)
@@ -59,18 +72,38 @@ def setup_logging(log_dir: Path, log_level: str = "INFO"):
         backupCount=3  # Keep 3 backup files (dream_controller.log.1, .2, .3)
     )
     file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(formatter)
+    file_handler.setFormatter(file_formatter)
     
-    # Console handler
+    # Console handler - always INFO+ regardless of config (file gets DEBUG)
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(getattr(logging, log_level))
-    console_handler.setFormatter(formatter)
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(console_formatter)
     
     # Root logger
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.DEBUG)
     root_logger.addHandler(file_handler)
     root_logger.addHandler(console_handler)
+    
+    # Quiet noisy third-party loggers (only show WARNING+)
+    noisy_loggers = [
+        'urllib3',
+        'websockets', 
+        'websockets.client',
+        'filelock',
+        'PIL',
+        'httpcore',
+        'httpx',
+    ]
+    for logger_name in noisy_loggers:
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
+    
+    # Quiet internal spammy loggers (INFO only, not DEBUG)
+    spammy_loggers = [
+        'utils.status_writer',  # Very chatty with status updates
+    ]
+    for logger_name in spammy_loggers:
+        logging.getLogger(logger_name).setLevel(logging.INFO)
     
     return logging.getLogger(__name__)
 
@@ -115,7 +148,10 @@ class DreamController:
         # Initialize subsystems
         self.logger.info("Initializing subsystems...")
         self.generator = DreamGenerator(self.config)
-        self.prompt_manager = PromptManager(self.config)
+        
+        # Use CombinatorialPromptSystem if templates are available, else legacy PromptManager
+        self.prompt_manager = self._init_prompt_system()
+        
         self.status_writer = StatusWriter(self.output_dir)
         self.game_detector = GameDetector(self.config)
         self.cache = CacheManager(self.config)
@@ -353,6 +389,42 @@ class DreamController:
             
         except Exception as e:
             self.logger.error(f"Error during frame cleanup: {e}")
+    
+    def _init_prompt_system(self):
+        """
+        Initialize the prompt system - uses CombinatorialPromptSystem if templates available
+        
+        Priority:
+        1. CombinatorialPromptSystem if prompts/templates.yaml exists (infinite gen mode)
+        2. Legacy PromptManager otherwise (uses theme_pairs from config)
+        
+        Returns:
+            Prompt system instance (CombinatorialPromptSystem or PromptManager)
+        """
+        from pathlib import Path
+        
+        # Check for templates file (indicates infinite gen mode)
+        project_root = Path(__file__).parent.parent.parent
+        templates_path = project_root / "prompts" / "templates.yaml"
+        components_path = project_root / "prompts" / "components.yaml"
+        
+        if templates_path.exists() and components_path.exists():
+            try:
+                prompt_system = CombinatorialPromptSystem(
+                    templates_path=str(templates_path),
+                    components_path=str(components_path),
+                    config=self.config
+                )
+                self.logger.info("[INFINITE GEN] CombinatorialPromptSystem loaded")
+                self.logger.info(f"  Templates: {len(prompt_system.templates)}")
+                self.logger.info(f"  Categories: {list(prompt_system.components.keys())}")
+                return prompt_system
+            except Exception as e:
+                self.logger.warning(f"Failed to load CombinatorialPromptSystem: {e}")
+                self.logger.warning("Falling back to legacy PromptManager")
+        
+        # Fall back to legacy PromptManager
+        return PromptManager(self.config)
     
     def _init_cloud_mode(self) -> None:
         """
@@ -657,20 +729,44 @@ class DreamController:
 
     def get_random_seed_image(self) -> Path:
         """
-        Get random seed image from seed directory
+        Get seed image for bootstrap - from seeds/ or generate fresh
+        
+        Priority:
+        1. Random image from seed directory (if available)
+        2. Generate fresh frame via txt2img (seedless operation)
         
         Returns:
-            Path to seed image
+            Path to seed/generated image
         
         Raises:
-            ValueError: If no seed images found
+            ValueError: If cannot obtain seed image
         """
         seed_images = list(self.seed_dir.glob("*.png")) + list(self.seed_dir.glob("*.jpg"))
         
-        if not seed_images:
-            raise ValueError(f"No seed images found in {self.seed_dir}")
+        if seed_images:
+            return random.choice(seed_images)
         
-        return random.choice(seed_images)
+        # No seeds - generate fresh frame via txt2img
+        self.logger.info("[SEEDLESS] No seed images found, generating initial frame via txt2img...")
+        
+        # Get prompt from prompt manager
+        prompt = self.prompt_manager.get_next_prompt()
+        negative = self.prompt_manager.get_negative_prompt() if hasattr(self.prompt_manager, 'get_negative_prompt') else None
+        
+        # Generate via txt2img
+        result = self.generator.generate_from_prompt(
+            prompt=prompt,
+            negative_prompt=negative
+        )
+        
+        if result:
+            self.logger.info(f"[SEEDLESS] Generated initial frame: {result}")
+            return result
+        
+        raise ValueError(
+            f"No seed images in {self.seed_dir} and txt2img generation failed. "
+            "Ensure ComfyUI is running or provide seed images."
+        )
     
     def check_game_state(self) -> bool:
         """

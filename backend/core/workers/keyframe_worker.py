@@ -130,7 +130,10 @@ class KeyframeWorker:
         current_image: Path,
         keyframe_num: int,
         sequence_num: int,
-        prompt: str
+        prompt: str,
+        negative_prompt: Optional[str] = None,
+        denoise: Optional[float] = None,
+        generation_mode: str = "drift"
     ) -> None:
         """
         Submit a keyframe generation request
@@ -143,12 +146,18 @@ class KeyframeWorker:
             keyframe_num: Keyframe number to generate
             sequence_num: Sequence number in buffer (pre-registered by orchestrator)
             prompt: Generation prompt
+            negative_prompt: Negative prompt (uses config default if None)
+            denoise: Denoise strength (uses config default if None)
+            generation_mode: "drift" (low denoise) or "bend" (high denoise after mutation)
         """
         request = {
             'keyframe_num': keyframe_num,
             'sequence_num': sequence_num,
             'current_image': current_image,
-            'prompt': prompt
+            'prompt': prompt,
+            'negative_prompt': negative_prompt,
+            'denoise': denoise,
+            'generation_mode': generation_mode
         }
         
         # This will block if queue is full (backpressure)
@@ -156,7 +165,7 @@ class KeyframeWorker:
         
         logger.debug(
             f"Submitted keyframe request: KF{keyframe_num} "
-            f"(queue depth: {self.request_queue.qsize()})"
+            f"(queue depth: {self.request_queue.qsize()}, mode: {generation_mode})"
         )
     
     async def run(self) -> None:
@@ -189,17 +198,21 @@ class KeyframeWorker:
                 sequence_num = request['sequence_num']
                 current_image = request['current_image']
                 prompt = request['prompt']
+                negative_prompt = request.get('negative_prompt')
+                generation_mode = request.get('generation_mode', 'drift')
                 
                 # === Cache request for potential resubmit ===
                 self.current_request = request.copy()
                 
-                logger.info(f"Processing keyframe request: KF{keyframe_num} (seq {sequence_num})")
+                logger.info(f"Processing keyframe request: KF{keyframe_num} (seq {sequence_num}, mode: {generation_mode})")
                 
                 # Mark as generating in buffer
                 self.frame_buffer.mark_generating(sequence_num)
                 
-                # Get denoise from config
-                denoise = self.config['generation']['hybrid']['keyframe_denoise']
+                # Get denoise - use provided value or fall back to config
+                denoise = request.get('denoise')
+                if denoise is None:
+                    denoise = self.config['generation']['hybrid']['keyframe_denoise']
                 
                 # Generate keyframe with retry logic
                 import time
@@ -229,6 +242,7 @@ class KeyframeWorker:
                                 self.generator.generate_from_image_async(
                                     image_path=current_image,
                                     prompt=prompt,
+                                    negative_prompt=negative_prompt,
                                     denoise=denoise
                                 ),
                                 timeout=generation_timeout
@@ -270,6 +284,8 @@ class KeyframeWorker:
                                 'sequence_num': sequence_num,
                                 'path': target_path,
                                 'prompt': prompt,
+                                'denoise': denoise,
+                                'generation_mode': generation_mode,
                                 'generation_time': total_elapsed,
                                 'success': True,
                                 'retries': attempt
