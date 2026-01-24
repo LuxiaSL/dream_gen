@@ -27,16 +27,19 @@
 #     -e VPS_AUTH_TOKEN=your-vps-token \
 #     luxiasl/dreamgen-comfyui:latest
 
-FROM nvidia/cuda:13.0.0-runtime-ubuntu24.04
+FROM nvidia/cuda:12.8.1-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
 # System dependencies (including nginx for auth proxy)
-# Ubuntu 24.04 ships with Python 3.12 by default
+# Note: Using Python 3.11 for best ComfyUI/PyTorch compatibility
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 \
-    python3-venv \
+    software-properties-common \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-venv \
     python3-pip \
     git \
     curl \
@@ -47,8 +50,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     apache2-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Ensure python/pip commands work (Ubuntu 24.04 = Python 3.12)
-RUN ln -sf /usr/bin/python3 /usr/bin/python
+# Ensure python/pip commands use Python 3.11
+RUN ln -sf /usr/bin/python3.11 /usr/bin/python && \
+    ln -sf /usr/bin/python3.11 /usr/bin/python3
 
 WORKDIR /app
 
@@ -57,11 +61,10 @@ RUN git clone https://github.com/comfyanonymous/ComfyUI.git /app/ComfyUI
 
 WORKDIR /app/ComfyUI
 
-# Install PyTorch 2.10+ with CUDA 13.0 support + ComfyUI dependencies
-# cu130 enables ComfyUI's optimized CUDA operations (triton backend, etc.)
-# --break-system-packages needed for Ubuntu 24.04 (PEP 668)
-RUN pip install --no-cache-dir --break-system-packages torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130 \
-    && pip install --no-cache-dir --break-system-packages -r requirements.txt
+# Install PyTorch 2.8+ with CUDA 12.8 support + ComfyUI dependencies
+# cu128 is the latest widely-supported CUDA version on RunPod
+RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 \
+    && pip install --no-cache-dir -r requirements.txt
 
 # Create directories
 RUN mkdir -p models/checkpoints models/vae models/loras models/embeddings custom_nodes

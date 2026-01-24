@@ -474,23 +474,23 @@ async def run_dream_generation(
     else:
         # SERVERLESS MODE: Start ComfyUI locally
         logger.info("Step 1: Starting ComfyUI locally (serverless mode)...")
-        if not await start_comfyui():
-            return {"status": "error", "error": "Failed to start ComfyUI"}
+    if not await start_comfyui():
+        return {"status": "error", "error": "Failed to start ComfyUI"}
         comfyui_url = "http://127.0.0.1:8188"
     
     logger.info(f"ComfyUI ready at: {comfyui_url}")
     
     # Log VRAM (for serverless mode where ComfyUI just started)
     if DREAMGEN_MODE != "pod":
-        try:
-            import torch
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
-                allocated = torch.cuda.memory_allocated(0) / 1024**3
-                reserved = torch.cuda.memory_reserved(0) / 1024**3
-                logger.info(f"VRAM after ComfyUI: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved")
-        except Exception as e:
-            logger.warning(f"Failed to get VRAM: {e}")
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+            allocated = torch.cuda.memory_allocated(0) / 1024**3
+            reserved = torch.cuda.memory_reserved(0) / 1024**3
+            logger.info(f"VRAM after ComfyUI: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved")
+    except Exception as e:
+        logger.warning(f"Failed to get VRAM: {e}")
     
     # Override config for cloud mode + ComfyUI URL
     config_overrides = {
@@ -521,7 +521,7 @@ async def run_dream_generation(
         if DREAMGEN_MODE == "pod":
             config_path = os.environ.get("CONFIG_PATH", "backend/config.cloud.yaml")
         else:
-            config_path = os.environ.get("CONFIG_PATH", "backend/config.cloud.yaml")
+        config_path = os.environ.get("CONFIG_PATH", "backend/config.cloud.yaml")
         
         if not Path(config_path).exists():
             config_path = "backend/config.yaml"
