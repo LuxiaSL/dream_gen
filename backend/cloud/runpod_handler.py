@@ -581,7 +581,7 @@ async def run_dream_generation(
         if DREAMGEN_MODE == "pod":
             config_path = os.environ.get("CONFIG_PATH", "backend/config.cloud.yaml")
         else:
-        config_path = os.environ.get("CONFIG_PATH", "backend/config.cloud.yaml")
+            config_path = os.environ.get("CONFIG_PATH", "backend/config.cloud.yaml")
         
         if not Path(config_path).exists():
             config_path = "backend/config.yaml"
