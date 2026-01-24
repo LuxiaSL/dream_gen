@@ -136,18 +136,35 @@ fi
 if [ -n "$VPS_REGISTER_URL" ]; then
     echo "Registering with VPS..."
     
-    # Get public IP
-    PUBLIC_IP=$(curl -sf ifconfig.me || curl -sf icanhazip.com || curl -sf ipinfo.io/ip || echo "")
+    # Determine the ComfyUI endpoint URL
+    # On RunPod, we MUST use the proxy URL format: https://{pod_id}-{port}.proxy.runpod.net
+    # Direct IP:port does NOT work on RunPod due to their networking
     
-    if [ -z "$PUBLIC_IP" ]; then
-        echo "WARNING: Could not determine public IP, skipping VPS registration"
+    if [ -n "$RUNPOD_POD_ID" ]; then
+        # Running on RunPod - use proxy URL
+        COMFYUI_URL="https://${RUNPOD_POD_ID}-8188.proxy.runpod.net"
+        echo "RunPod detected (pod: $RUNPOD_POD_ID)"
+        echo "Using proxy URL: $COMFYUI_URL"
     else
-        echo "Public IP: $PUBLIC_IP"
-        
-        # Build registration payload
+        # Not on RunPod - use direct IP:port
+        PUBLIC_IP=$(curl -sf ifconfig.me || curl -sf icanhazip.com || curl -sf ipinfo.io/ip || echo "")
+        if [ -z "$PUBLIC_IP" ]; then
+            echo "WARNING: Could not determine public IP, skipping VPS registration"
+            COMFYUI_URL=""
+        else
+            COMFYUI_URL="http://${PUBLIC_IP}:8188"
+            echo "Public IP: $PUBLIC_IP"
+            echo "Using direct URL: $COMFYUI_URL"
+        fi
+    fi
+    
+    if [ -n "$COMFYUI_URL" ]; then
+        # Build registration payload with full URL
+        # Note: We include both the URL and the legacy ip/port fields for compatibility
         PAYLOAD=$(cat <<EOF
 {
-    "ip": "$PUBLIC_IP",
+    "url": "$COMFYUI_URL",
+    "ip": "${RUNPOD_POD_ID:-$PUBLIC_IP}",
     "port": 8188,
     "auth_user": "${COMFYUI_AUTH_USER:-}",
     "auth_pass": "${COMFYUI_AUTH_PASS:-}",
@@ -155,6 +172,8 @@ if [ -n "$VPS_REGISTER_URL" ]; then
 }
 EOF
 )
+        
+        echo "Sending registration to $VPS_REGISTER_URL..."
         
         # Register with VPS
         REGISTER_RESPONSE=$(curl -sf -X POST "$VPS_REGISTER_URL" \
