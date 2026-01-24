@@ -27,7 +27,7 @@
 #     -e VPS_AUTH_TOKEN=your-vps-token \
 #     luxiasl/dreamgen-comfyui:latest
 
-FROM nvidia/cuda:12.8.1-runtime-ubuntu22.04
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -61,9 +61,9 @@ RUN git clone https://github.com/comfyanonymous/ComfyUI.git /app/ComfyUI
 
 WORKDIR /app/ComfyUI
 
-# Install PyTorch 2.8+ with CUDA 12.8 support + ComfyUI dependencies
-# cu128 is the latest widely-supported CUDA version on RunPod
-RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 \
+# Install PyTorch with CUDA 12.4 support + ComfyUI dependencies
+# cu124 has the widest driver compatibility on RunPod machines
+RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 \
     && pip install --no-cache-dir -r requirements.txt
 
 # Create directories

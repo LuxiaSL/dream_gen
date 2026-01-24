@@ -45,7 +45,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Install Python dependencies (cached layer)
-# PyTorch 2.8+ with CUDA 12.8 support (matches RunPod default)
+# PyTorch with CUDA 12.4 support (widest driver compatibility on RunPod)
 # Use --extra-index-url so PyPI is still used for non-torch packages
 COPY pyproject.toml /app/
 RUN pip install --no-cache-dir \
@@ -61,7 +61,7 @@ RUN pip install --no-cache-dir \
     diffusers \
     huggingface-hub \
     accelerate \
-    torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu128
+    torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu124
 
 # Copy backend code
 COPY backend/ /app/backend/
