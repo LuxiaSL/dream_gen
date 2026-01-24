@@ -202,9 +202,11 @@ class ComfyUIClient:
         Returns:
             True if completed successfully, False otherwise
         """
-        # Build WebSocket URL
-        ws_base = self.base_url.replace("http://", "").replace("https://", "")
-        ws_url = f"ws://{ws_base}/ws?clientId={self.client_id}"
+        # Build WebSocket URL with correct scheme (wss:// for https://, ws:// for http://)
+        if self.base_url.startswith("https://"):
+            ws_url = f"wss://{self.base_url[8:]}/ws?clientId={self.client_id}"
+        else:
+            ws_url = f"ws://{self.base_url[7:]}/ws?clientId={self.client_id}"
         
         # Build headers for basic auth if needed
         headers = {}
@@ -1090,8 +1092,11 @@ async def test_api() -> bool:
     # Test 14: WebSocket URL construction (don't actually connect)
     print("\n[14/14] WebSocket Support")
     try:
-        ws_base = client.base_url.replace("http://", "").replace("https://", "")
-        ws_url = f"ws://{ws_base}/ws?clientId={client.client_id}"
+        # Use correct scheme: wss:// for https://, ws:// for http://
+        if client.base_url.startswith("https://"):
+            ws_url = f"wss://{client.base_url[8:]}/ws?clientId={client.client_id}"
+        else:
+            ws_url = f"ws://{client.base_url[7:]}/ws?clientId={client.client_id}"
         print(f"  ✓ WebSocket URL: {ws_url}")
         test_results.append(("WebSocket", True))
     except Exception as e:
