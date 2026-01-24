@@ -4,8 +4,13 @@
 # 1. Optionally fetches secrets from admin panel (bootstrap mode)
 # 2. Creates auth file from environment variables
 # 3. Starts nginx reverse proxy
-# 4. Registers with VPS for service discovery
-# 5. Starts ComfyUI on internal port
+# 4. Starts ComfyUI on internal port
+# 5. Sends backup registration to VPS (optional - admin registers proactively)
+#
+# NOTE: The admin panel now registers ComfyUI using the deterministic proxy URL
+# format (https://{pod_id}-8188.proxy.runpod.net) immediately after starting
+# the pod. The registration in this script is a backup that updates auth
+# credentials if needed.
 #
 # Environment Variables (Direct Mode - provide all secrets):
 #   COMFYUI_AUTH_USER  - Basic auth username (required)
@@ -132,9 +137,15 @@ if [ $ELAPSED -ge $STARTUP_TIMEOUT ]; then
     exit 1
 fi
 
-# ==================== Register with VPS ====================
+# ==================== Register with VPS (backup) ====================
+# NOTE: Admin panel now registers ComfyUI proactively using the pod ID.
+# This registration is a backup that:
+# - Updates auth credentials if they weren't set during admin registration
+# - Works as fallback if admin registration failed
+# - Is non-critical - ComfyUI is fully operational without it
 if [ -n "$VPS_REGISTER_URL" ]; then
-    echo "Registering with VPS..."
+    echo "Sending backup registration to VPS..."
+    echo "(Admin panel registers proactively; this updates auth credentials)"
     
     # Determine the ComfyUI endpoint URL
     # On RunPod, we MUST use the proxy URL format: https://{pod_id}-{port}.proxy.runpod.net
@@ -144,17 +155,17 @@ if [ -n "$VPS_REGISTER_URL" ]; then
         # Running on RunPod - use proxy URL
         COMFYUI_URL="https://${RUNPOD_POD_ID}-8188.proxy.runpod.net"
         echo "RunPod detected (pod: $RUNPOD_POD_ID)"
-        echo "Using proxy URL: $COMFYUI_URL"
+        echo "Proxy URL: $COMFYUI_URL"
     else
         # Not on RunPod - use direct IP:port
         PUBLIC_IP=$(curl -sf ifconfig.me || curl -sf icanhazip.com || curl -sf ipinfo.io/ip || echo "")
         if [ -z "$PUBLIC_IP" ]; then
-            echo "WARNING: Could not determine public IP, skipping VPS registration"
+            echo "NOTE: Could not determine public IP, skipping backup registration"
             COMFYUI_URL=""
         else
             COMFYUI_URL="http://${PUBLIC_IP}:8188"
             echo "Public IP: $PUBLIC_IP"
-            echo "Using direct URL: $COMFYUI_URL"
+            echo "Direct URL: $COMFYUI_URL"
         fi
     fi
     
@@ -173,22 +184,20 @@ if [ -n "$VPS_REGISTER_URL" ]; then
 EOF
 )
         
-        echo "Sending registration to $VPS_REGISTER_URL..."
-        
-        # Register with VPS
+        # Register with VPS (non-blocking - don't fail if it doesn't work)
         REGISTER_RESPONSE=$(curl -sf -X POST "$VPS_REGISTER_URL" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${VPS_AUTH_TOKEN:-}" \
             -d "$PAYLOAD" 2>&1) || true
         
         if [ -n "$REGISTER_RESPONSE" ]; then
-            echo "VPS registration response: $REGISTER_RESPONSE"
+            echo "Backup registration: $REGISTER_RESPONSE"
         else
-            echo "WARNING: VPS registration failed (VPS may be unreachable)"
+            echo "NOTE: Backup registration failed (admin registration should be sufficient)"
         fi
     fi
 else
-    echo "VPS_REGISTER_URL not set, skipping VPS registration"
+    echo "VPS_REGISTER_URL not set, skipping backup registration"
 fi
 
 # ==================== Keep Running ====================
