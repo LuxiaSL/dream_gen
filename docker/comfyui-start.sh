@@ -1,23 +1,71 @@
 #!/bin/bash
 # ComfyUI Startup Script (Two-Pod Architecture)
 # =============================================
-# 1. Creates auth file from environment variables
-# 2. Starts nginx reverse proxy
-# 3. Registers with VPS for service discovery
-# 4. Starts ComfyUI on internal port
+# 1. Optionally fetches secrets from admin panel (bootstrap mode)
+# 2. Creates auth file from environment variables
+# 3. Starts nginx reverse proxy
+# 4. Registers with VPS for service discovery
+# 5. Starts ComfyUI on internal port
 #
-# Environment Variables:
+# Environment Variables (Direct Mode - provide all secrets):
 #   COMFYUI_AUTH_USER  - Basic auth username (required)
 #   COMFYUI_AUTH_PASS  - Basic auth password (required)
 #   VPS_REGISTER_URL   - VPS registration endpoint (optional)
 #   VPS_AUTH_TOKEN     - VPS auth token for registration (optional)
 #   RUNPOD_POD_ID      - RunPod pod ID (auto-set by RunPod)
+#
+# Environment Variables (Bootstrap Mode - fetch secrets from admin):
+#   ADMIN_PANEL_URL    - Admin panel base URL (e.g., https://admin.aetherawi.red)
+#   POD_BOOTSTRAP_TOKEN - Bootstrap token to authenticate with admin panel
+#
+# Bootstrap mode is used when creating pods automatically via lifecycle management.
+# The pod only needs the admin URL and a bootstrap token; it fetches other secrets.
 
 set -e
 
 echo "=========================================="
 echo "ComfyUI Startup Script"
 echo "=========================================="
+
+# ==================== Bootstrap Mode ====================
+# If ADMIN_PANEL_URL and POD_BOOTSTRAP_TOKEN are set, fetch secrets from admin
+if [ -n "$ADMIN_PANEL_URL" ] && [ -n "$POD_BOOTSTRAP_TOKEN" ]; then
+    echo "Bootstrap mode: Fetching secrets from admin panel..."
+    echo "Admin URL: $ADMIN_PANEL_URL"
+    
+    # Fetch secrets from admin panel
+    SECRETS_URL="${ADMIN_PANEL_URL}/api/dreams/secrets/comfyui?token=${POD_BOOTSTRAP_TOKEN}"
+    
+    SECRETS_RESPONSE=$(curl -sf "$SECRETS_URL" 2>&1) || {
+        echo "ERROR: Failed to fetch secrets from admin panel"
+        echo "Response: $SECRETS_RESPONSE"
+        echo "Falling back to environment variables..."
+    }
+    
+    if [ -n "$SECRETS_RESPONSE" ] && echo "$SECRETS_RESPONSE" | grep -q "comfyui_auth_user"; then
+        echo "Successfully retrieved secrets from admin panel"
+        
+        # Parse JSON response (simple extraction)
+        # Note: This uses basic tools available in most containers
+        # For more robust parsing, you could add jq to the image
+        
+        # Extract values using grep and sed
+        FETCHED_AUTH_USER=$(echo "$SECRETS_RESPONSE" | grep -o '"comfyui_auth_user":"[^"]*"' | sed 's/.*:"\([^"]*\)"/\1/')
+        FETCHED_AUTH_PASS=$(echo "$SECRETS_RESPONSE" | grep -o '"comfyui_auth_pass":"[^"]*"' | sed 's/.*:"\([^"]*\)"/\1/')
+        FETCHED_VPS_TOKEN=$(echo "$SECRETS_RESPONSE" | grep -o '"vps_auth_token":"[^"]*"' | sed 's/.*:"\([^"]*\)"/\1/')
+        FETCHED_VPS_REGISTER=$(echo "$SECRETS_RESPONSE" | grep -o '"vps_register_url":"[^"]*"' | sed 's/.*:"\([^"]*\)"/\1/')
+        
+        # Override env vars with fetched values (if not empty)
+        [ -n "$FETCHED_AUTH_USER" ] && export COMFYUI_AUTH_USER="$FETCHED_AUTH_USER"
+        [ -n "$FETCHED_AUTH_PASS" ] && export COMFYUI_AUTH_PASS="$FETCHED_AUTH_PASS"
+        [ -n "$FETCHED_VPS_TOKEN" ] && export VPS_AUTH_TOKEN="$FETCHED_VPS_TOKEN"
+        [ -n "$FETCHED_VPS_REGISTER" ] && export VPS_REGISTER_URL="$FETCHED_VPS_REGISTER"
+        
+        echo "Secrets loaded: AUTH_USER=${COMFYUI_AUTH_USER}, VPS_REGISTER=${VPS_REGISTER_URL}"
+    fi
+else
+    echo "Direct mode: Using environment variables for configuration"
+fi
 
 # ==================== Auth Setup ====================
 if [ -n "$COMFYUI_AUTH_USER" ] && [ -n "$COMFYUI_AUTH_PASS" ]; then
@@ -29,7 +77,7 @@ else
     # Create a permissive config (allow all)
     echo "" > /etc/nginx/.htpasswd
     # Modify nginx config to not require auth
-    sed -i 's/auth_basic "ComfyUI";/#auth_basic "ComfyUI";/' /etc/nginx/sites-available/comfyui
+    sed -i 's/auth_basic "ComfyUI";/#auth_basic "Comfyui";/' /etc/nginx/sites-available/comfyui
     sed -i 's/auth_basic_user_file/#auth_basic_user_file/' /etc/nginx/sites-available/comfyui
 fi
 

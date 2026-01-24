@@ -43,6 +43,66 @@ logger = logging.getLogger(__name__)
 # Architecture mode: 'serverless' or 'pod'
 DREAMGEN_MODE = os.environ.get("DREAMGEN_MODE", "serverless").lower()
 
+
+async def fetch_secrets_from_admin() -> bool:
+    """
+    Fetch secrets from admin panel if bootstrap mode is enabled.
+    
+    Bootstrap mode is enabled when ADMIN_PANEL_URL and POD_BOOTSTRAP_TOKEN
+    are set. This allows pods to be created with minimal env vars and fetch
+    their full secrets from the admin server.
+    
+    Returns:
+        True if secrets were successfully fetched and applied
+    """
+    admin_url = os.environ.get("ADMIN_PANEL_URL", "").rstrip("/")
+    bootstrap_token = os.environ.get("POD_BOOTSTRAP_TOKEN", "")
+    
+    if not admin_url or not bootstrap_token:
+        logger.debug("Bootstrap mode not configured (ADMIN_PANEL_URL or POD_BOOTSTRAP_TOKEN not set)")
+        return False
+    
+    logger.info(f"Bootstrap mode: Fetching secrets from admin panel ({admin_url})...")
+    
+    try:
+        import aiohttp
+        
+        secrets_url = f"{admin_url}/api/dreams/secrets/dreamgen?token={bootstrap_token}"
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(secrets_url, timeout=30) as resp:
+                if resp.status == 200:
+                    secrets = await resp.json()
+                    logger.info("Successfully fetched secrets from admin panel")
+                    
+                    # Apply secrets to environment
+                    if secrets.get("dream_gen_auth_token"):
+                        os.environ["DREAM_GEN_AUTH_TOKEN"] = secrets["dream_gen_auth_token"]
+                        logger.info("Applied DREAM_GEN_AUTH_TOKEN from admin")
+                    
+                    if secrets.get("vps_websocket_url"):
+                        os.environ["VPS_WEBSOCKET_URL"] = secrets["vps_websocket_url"]
+                        logger.info(f"Applied VPS_WEBSOCKET_URL: {secrets['vps_websocket_url']}")
+                    
+                    if secrets.get("vps_base_url"):
+                        os.environ["VPS_API_URL"] = secrets["vps_base_url"]
+                        logger.info(f"Applied VPS_API_URL: {secrets['vps_base_url']}")
+                    
+                    return True
+                    
+                elif resp.status == 401:
+                    logger.error("Bootstrap auth failed - invalid POD_BOOTSTRAP_TOKEN")
+                    return False
+                    
+                else:
+                    text = await resp.text()
+                    logger.error(f"Failed to fetch secrets: HTTP {resp.status} - {text}")
+                    return False
+                    
+    except Exception as e:
+        logger.error(f"Failed to fetch secrets from admin: {e}")
+        return False
+
 # Global handle for ComfyUI log file (prevents garbage collection)
 _comfyui_log_file = None
 
@@ -879,12 +939,16 @@ async def pod_mode():
     - ComfyUI is in a separate pod, discovered via VPS registry
     - Generation runs until shutdown signal received
     - No job-based execution (runs continuously)
+    - Supports bootstrap mode (fetch secrets from admin panel)
     """
     logger.info("=" * 60)
     logger.info("DREAMGEN POD MODE - Long Running Process")
     logger.info("=" * 60)
     
-    # Get config from environment
+    # Try bootstrap mode first (fetch secrets from admin panel)
+    await fetch_secrets_from_admin()
+    
+    # Get config from environment (may have been updated by bootstrap)
     vps_url = os.environ.get("VPS_WEBSOCKET_URL", "wss://aetherawi.red/ws/gpu")
     vps_api_url = os.environ.get("VPS_API_URL", "https://aetherawi.red")
     auth_token = os.environ.get("DREAM_GEN_AUTH_TOKEN")
@@ -895,6 +959,7 @@ async def pod_mode():
     
     if not auth_token:
         logger.error("DREAM_GEN_AUTH_TOKEN is required for pod mode")
+        logger.error("Either set it directly or use bootstrap mode (ADMIN_PANEL_URL + POD_BOOTSTRAP_TOKEN)")
         return {"status": "error", "error": "DREAM_GEN_AUTH_TOKEN required"}
     
     # Setup signal handlers for graceful shutdown

@@ -97,6 +97,10 @@ ENV DREAMGEN_MODE=serverless
 # ENV VPS_API_URL=https://aetherawi.red
 # ENV DREAM_GEN_AUTH_TOKEN=<set-at-runtime>
 
+# Bootstrap mode (optional - fetch secrets from admin panel instead of env vars)
+# ENV ADMIN_PANEL_URL=https://admin.aetherawi.red
+# ENV POD_BOOTSTRAP_TOKEN=<set-at-runtime>
+
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD python -c "print('healthy')" || exit 1
