@@ -206,13 +206,13 @@ class ComfyUIClient:
         ws_base = self.base_url.replace("http://", "").replace("https://", "")
         ws_url = f"ws://{ws_base}/ws?clientId={self.client_id}"
         
-        # Build extra headers for basic auth if needed
-        extra_headers = {}
+        # Build headers for basic auth if needed
+        headers = {}
         if self._has_auth:
             import base64
             credentials = f"{self.auth_user}:{self.auth_pass}"
             auth_b64 = base64.b64encode(credentials.encode()).decode()
-            extra_headers["Authorization"] = f"Basic {auth_b64}"
+            headers["Authorization"] = f"Basic {auth_b64}"
         
         start_time = time.time()
         execution_started = False
@@ -220,7 +220,15 @@ class ComfyUIClient:
         messages_received = 0
         
         try:
-            async with websockets.connect(ws_url, extra_headers=extra_headers) as websocket:
+            # websockets v13+ uses 'additional_headers', older versions use 'extra_headers'
+            # Try the newer API first, fall back to older if needed
+            try:
+                websocket = await websockets.connect(ws_url, additional_headers=headers)
+            except TypeError:
+                # Older websockets version
+                websocket = await websockets.connect(ws_url, extra_headers=headers)
+            
+            async with websocket:
                 logger.debug(f"WebSocket connected, waiting for prompt {prompt_id}")
                 
                 while True:
