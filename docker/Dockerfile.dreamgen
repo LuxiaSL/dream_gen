@@ -70,9 +70,7 @@ COPY backend/ /app/backend/
 # Copy prompts (CRITICAL for infinite gen!)
 COPY prompts/ /app/prompts/
 
-# Optional: Copy seeds for backwards compatibility
-# (Fresh frame generation is preferred for startup)
-COPY seeds/ /app/seeds/
+# Note: Seeds removed - FreshFrameBuffer generates all bootstrap frames via txt2img
 
 # Create output directories
 RUN mkdir -p /app/output/keyframes /app/output/interpolations /app/output/frames/fresh \

@@ -142,7 +142,6 @@ class DreamController:
         
         # Initialize paths
         self.output_dir = Path(self.config['system']['output_dir'])
-        self.seed_dir = Path(self.config['system']['seed_dir'])
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         # Initialize subsystems
@@ -248,10 +247,11 @@ class DreamController:
                 )
                 self.logger.info("[OK] Secondary VAE loaded for injection (dual-VAE architecture)")
                 
-                # Get seed image for bootstrap
-                seed_image = self.get_random_seed_image()
+                # Note: Bootstrap frame is handled by FreshFrameBuffer in orchestrator
+                # No seed image needed - fresh buffer populates at startup
                 
                 # Create async orchestrator
+                # Note: seed_image=None because FreshFrameBuffer handles bootstrap
                 self.generation_coordinator = AsyncGenerationOrchestrator(
                     frame_buffer=self.frame_buffer,
                     generator=self.generator,
@@ -260,7 +260,7 @@ class DreamController:
                     cache_manager=self.cache,
                     similarity_manager=self.similarity_manager,
                     config=self.config,
-                    seed_image=seed_image,
+                    seed_image=None,  # Fresh buffer handles bootstrap
                     injection_vae=self.injection_vae  # Dedicated VAE for injection blending
                 )
                 
@@ -727,27 +727,18 @@ class DreamController:
             frame_number=frame_number,
         )
 
-    def get_random_seed_image(self) -> Path:
+    def get_bootstrap_frame(self) -> Optional[Path]:
         """
-        Get seed image for bootstrap - from seeds/ or generate fresh
+        Generate initial bootstrap frame via txt2img
         
-        Priority:
-        1. Random image from seed directory (if available)
-        2. Generate fresh frame via txt2img (seedless operation)
+        DEPRECATED: When using AsyncGenerationOrchestrator with CombinatorialPromptSystem,
+        the FreshFrameBuffer handles bootstrap automatically. This method is only
+        used for legacy GenerationCoordinator mode.
         
         Returns:
-            Path to seed/generated image
-        
-        Raises:
-            ValueError: If cannot obtain seed image
+            Path to generated image, or None on failure
         """
-        seed_images = list(self.seed_dir.glob("*.png")) + list(self.seed_dir.glob("*.jpg"))
-        
-        if seed_images:
-            return random.choice(seed_images)
-        
-        # No seeds - generate fresh frame via txt2img
-        self.logger.info("[SEEDLESS] No seed images found, generating initial frame via txt2img...")
+        self.logger.info("[BOOTSTRAP] Generating initial frame via txt2img...")
         
         # Get prompt from prompt manager
         prompt = self.prompt_manager.get_next_prompt()
@@ -760,12 +751,23 @@ class DreamController:
         )
         
         if result:
-            self.logger.info(f"[SEEDLESS] Generated initial frame: {result}")
+            self.logger.info(f"[BOOTSTRAP] Generated initial frame: {result}")
             return result
         
-        raise ValueError(
-            f"No seed images in {self.seed_dir} and txt2img generation failed. "
-            "Ensure ComfyUI is running or provide seed images."
+        self.logger.error("[BOOTSTRAP] txt2img generation failed!")
+        return None
+    
+    def get_random_seed_image(self) -> Path:
+        """
+        DEPRECATED: Use get_bootstrap_frame() or FreshFrameBuffer instead.
+        
+        Raises:
+            NotImplementedError: Always - seed images are no longer supported
+        """
+        raise NotImplementedError(
+            "Seed images are REMOVED. Bootstrap frames are now generated via txt2img. "
+            "Use get_bootstrap_frame() for legacy mode, or FreshFrameBuffer for "
+            "AsyncGenerationOrchestrator with CombinatorialPromptSystem."
         )
     
     def check_game_state(self) -> bool:
@@ -970,9 +972,14 @@ class DreamController:
             # Legacy GenerationCoordinator (original flow)
             self.logger.info("Using GenerationCoordinator (legacy sequential)")
             
-            # Get seed image
-            seed_image = self.get_random_seed_image()
-            self.logger.info(f"Starting from seed: {seed_image.name}")
+            # Generate bootstrap frame via txt2img
+            seed_image = self.get_bootstrap_frame()
+            if seed_image is None:
+                raise RuntimeError(
+                    "Failed to generate bootstrap frame via txt2img. "
+                    "Check ComfyUI connection and model availability."
+                )
+            self.logger.info(f"Starting from bootstrap frame: {seed_image.name}")
             
             # Register and prepare seed as keyframe 1
             self.logger.info("Preparing seed frame as keyframe 1...")

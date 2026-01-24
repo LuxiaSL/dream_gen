@@ -415,23 +415,9 @@ class CacheInjectionStrategy:
                 )
                 return True
         
-        # Check for early seed injection boost (bootstrap phase)
-        cache_size = self.cache.size()
-        boost_threshold = self.cache_config.get('seed_injection_boost_threshold', 10)
-        
-        if cache_size < boost_threshold:
-            # Higher seed probability during cache bootstrap
-            boost_probability = self.cache_config.get('seed_injection_boost_probability', 0.20)
-            should_inject = random.random() < boost_probability
-            
-            if should_inject:
-                logger.info(
-                    f"[SEED] Bootstrap seed injection "
-                    f"(cache size: {cache_size}/{boost_threshold}, "
-                    f"probability: {boost_probability:.1%})"
-                )
-            
-            return should_inject
+        # NOTE: Seed injection boost removed - mutations via BEND mode now handle
+        # early-stage variety. Cache populates naturally through mutation-driven frames.
+        # See CACHE_SYSTEM_REFACTOR.md for details.
         
         # Adaptive probability based on cache injection count
         floor_probability = self.cache_config.get('seed_injection_floor', 0.02)
@@ -462,118 +448,28 @@ class CacheInjectionStrategy:
         current_image_path: Optional[Path] = None
     ) -> Optional[Tuple[Path, Dict[str, Any]]]:
         """
-        Inject seed image with optional VAE blending
+        DEPRECATED: Seed injection removed in favor of FreshFrameBuffer.
+        
+        This method exists only for API compatibility. All seed injection
+        should now go through FreshFrameBuffer.select_and_consume() in the
+        orchestrator.
         
         Args:
             target_keyframe_num: Target keyframe number for saving
-            current_image_path: Current image path for blending (optional)
+            current_image_path: Current image path (unused)
         
         Returns:
-            Tuple of (seed_frame_path, metadata) or None if injection fails
+            None always - seed injection disabled
+            
+        Raises:
+            NotImplementedError: Always, to surface any remaining callers
         """
-        seed_dir = Path(self.config['system']['seed_dir'])
-        seed_images = list(seed_dir.glob("*.png")) + list(seed_dir.glob("*.jpg"))
-        
-        if not seed_images:
-            logger.warning(
-                "[SEED] No seed images found in fallback path. "
-                "This is expected if using FreshFrameBuffer (preferred). "
-                "Add images to seeds/ directory for fallback support."
-            )
-            return None
-        
-        seed_path = random.choice(seed_images)
-        logger.info(f"[SEED] Selected seed: {seed_path.name}")
-        
-        # Check if should blend with current
-        blend_seeds = self.cache_config.get('blend_seed_injection', True)
-        
-        if blend_seeds and current_image_path and (self.vae_access or self.latent_encoder):
-            try:
-                # VAE blend: 50/50 with current for smoother transition
-                if self.vae_access:
-                    # Async mode (thread-safe)
-                    current_latent = await self.vae_access.encode_async(
-                        current_image_path,
-                        for_interpolation=True
-                    )
-                    seed_latent = await self.vae_access.encode_async(
-                        seed_path,
-                        for_interpolation=True
-                    )
-                else:
-                    # Dedicated VAE mode (runs in executor to avoid blocking)
-                    import asyncio
-                    loop = asyncio.get_event_loop()
-                    current_latent = await loop.run_in_executor(
-                        None,
-                        lambda: self.latent_encoder.encode(current_image_path, for_interpolation=True)
-                    )
-                    seed_latent = await loop.run_in_executor(
-                        None,
-                        lambda: self.latent_encoder.encode(seed_path, for_interpolation=True)
-                    )
-                
-                blend_weight = self.cache_config.get('seed_blend_weight', 0.5)
-                
-                blended_latent = (
-                    seed_latent * blend_weight +
-                    current_latent * (1.0 - blend_weight)
-                )
-                
-                if self.vae_access:
-                    blended_image = await self.vae_access.decode_async(
-                        blended_latent,
-                        upscale_to_target=True
-                    )
-                else:
-                    # Dedicated VAE mode
-                    blended_image = await loop.run_in_executor(
-                        None,
-                        lambda: self.latent_encoder.decode(blended_latent, upscale_to_target=True)
-                    )
-                
-                # Save blended seed
-                target_path = self.output_dir / f"keyframe_{target_keyframe_num:03d}.png"
-                blended_image.save(target_path, "PNG", optimize=False, compress_level=1)
-                
-                self.total_seed_injections += 1
-                
-                logger.info(f"[SEED] Blended seed with current frame ({blend_weight*100:.0f}% seed)")
-                
-                metadata = {
-                    "type": "blended_seed_injection",
-                    "seed_name": seed_path.name,
-                    "blend_weight": blend_weight
-                }
-                
-                return target_path, metadata
-                
-            except Exception as e:
-                logger.error(f"Seed blending failed, using direct seed: {e}")
-                # Fall through to direct seed injection
-        
-        # Direct seed injection (no blend)
-        import shutil
-        
-        try:
-            target_path = self.output_dir / f"keyframe_{target_keyframe_num:03d}.png"
-            shutil.copy(seed_path, target_path)
-            
-            self.total_seed_injections += 1
-            
-            logger.info(f"[SEED] Direct seed injection: {seed_path.name}")
-            
-            metadata = {
-                "type": "direct_seed_injection",
-                "seed_name": seed_path.name
-            }
-            
-            return target_path, metadata
-            
-        except Exception as e:
-            logger.error(f"Direct seed injection failed: {e}")
-            return None
+        raise NotImplementedError(
+            "Seed injection via injection_strategy is REMOVED. "
+            "Use FreshFrameBuffer.select_and_consume() in the orchestrator instead. "
+            "If you're seeing this error, the orchestrator needs to be updated "
+            "to use the new fresh frame system."
+        )
     
     def record_collapse_detection(self, is_collapsed: bool) -> None:
         """

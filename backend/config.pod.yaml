@@ -7,10 +7,10 @@ system:
   comfyui_url: "http://127.0.0.1:8188"
   output_dir: "/workspace/output"
   cache_dir: "/workspace/cache"
-  seed_dir: "/workspace/dream_gen/seeds"
   log_dir: "/workspace/logs"
   gpu_id: 0
   log_level: "INFO"  # Console shows INFO+, file gets everything
+  # Note: seed_dir removed - FreshFrameBuffer generates all bootstrap frames via txt2img
 
 generation:
   use_async_orchestrator: true
@@ -46,19 +46,21 @@ generation:
     cache_interpolations: true
     cache_diversity_logic: "all"
     
+    # Thresholds raised to let BEND mode (mutations) work first before cache injection
+    # See CACHE_SYSTEM_REFACTOR.md for rationale
     color_histogram:
       bins_per_channel: 32
       diversity_threshold: 1.92
       dissimilarity_range: [1.18, 2.05]
-      convergence_threshold: 0.15
-      force_cache_threshold: 0.30
+      convergence_threshold: 0.18     # Raised from 0.15 - let mutations handle early convergence
+      force_cache_threshold: 0.35     # Raised from 0.30 - cache injection is backup, not primary
     
     phash:
       hash_size: 8
       diversity_threshold: 0.80
       dissimilarity_range: [0.68, 0.92]
-      convergence_threshold: 0.08
-      force_cache_threshold: 0.15
+      convergence_threshold: 0.10     # Raised from 0.08 - more room for BEND mode
+      force_cache_threshold: 0.18     # Raised from 0.15 - cache as backup
     
     injection_logic: "any"
     injection_mode: "dissimilar"
@@ -70,20 +72,25 @@ generation:
     embedding_history_keep_recent: 20
     
     # Collapse detection - template-aware settings
+    # Window sizes expanded to smooth out natural mutation variations
+    # See CACHE_SYSTEM_REFACTOR.md for rationale
     collapse_detection: true
     warmup_keyframes: 100       # Shorter warmup for testing
-    collapse_history_size: 50
-    collapse_detection_window: 25
+    collapse_history_size: 200  # Expanded from 50 - larger buffer for stable comparison
+    collapse_detection_window: 100  # Expanded from 25 - wider window for healthy drift vs collapse
     collapse_baseline_comparison: true
     convergence_mode: "absolute"
     log_convergence_stats: true
     
-    seed_injection_floor: 0.02
-    seed_injection_max: 0.15
+    # Seed/template injection - now EMERGENCY ONLY
+    # Mutations via BEND mode handle variety, template switch only on persistent collapse
+    # See CACHE_SYSTEM_REFACTOR.md for rationale
+    seed_injection_floor: 0.0           # Disabled - was 0.02
+    seed_injection_max: 0.0             # Disabled - was 0.15
     seed_injection_ramp: 30
-    seed_injection_boost_threshold: 5
-    seed_injection_boost_probability: 0.20
-    force_seed_injection_frequency: 0.30
+    seed_injection_boost_threshold: 0   # Disabled - was 5
+    seed_injection_boost_probability: 0 # Disabled - was 0.20
+    force_seed_injection_frequency: 0.50  # Raised from 0.30 - emergency only
     blend_seed_injection: true
     seed_blend_weight: 0.85
     
@@ -103,11 +110,13 @@ fresh_generation:
     base_probability: 0.15     # Slightly higher for testing (more mutations)
     staleness_threshold: 20    # Force mutation after N frames
     category_weights:
-      color_logic: 0.30
-      atmosphere_field: 0.25
-      light_behavior: 0.20
-      temporal_state: 0.15
-      texture_density: 0.10
+      # All 6 categories with semantic opposites (best for mutation)
+      color_logic: 0.22        # ALL templates - palette shifts
+      medium_render: 0.18      # ALL templates - rendering style
+      light_behavior: 0.20     # 10 templates - lighting changes
+      atmosphere_field: 0.16   # 6 templates - environmental effects
+      temporal_state: 0.14     # 4 templates - decay/growth state
+      texture_density: 0.10    # 4 templates - surface quality
     similarity_target: 0.55
     similarity_range: 0.25
 

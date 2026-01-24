@@ -10,8 +10,8 @@ system:
   # Paths (relative to project root or absolute)
   output_dir: "./output"    # Frames, status files → use fast SSD
   cache_dir: "./cache"      # LRU image cache → persists across runs
-  seed_dir: "./seeds"       # Bootstrap/emergency images → more diversity = better
   log_dir: "./logs"         # Logs accumulate; consider rotation for long runs
+  # Note: seed_dir removed - FreshFrameBuffer generates all bootstrap frames via txt2img
   
   gpu_id: 0                 # CUDA device for VAE (0-indexed). Multi-GPU: dedicate one here
   log_level: "INFO"         # DEBUG=verbose timing | INFO=normal | WARNING=quiet

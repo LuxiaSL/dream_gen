@@ -192,7 +192,8 @@ class ModeCollapseDetector:
                 "color_delta": 0.0,
                 "struct_delta": 0.0,
                 "scaled_injection_probability": 0.0,
-                "trigger_reason": "insufficient history"
+                "trigger_reason": "insufficient history",
+                "should_force_mutation": False
             }
         
         # Calculate current similarities and record to history
@@ -281,6 +282,7 @@ class ModeCollapseDetector:
         action: Literal["none", "scale_injection", "force_cache"] = "none"
         scaled_injection_probability = 0.0
         trigger_reason = "none"
+        should_force_mutation = False  # Initialize outside the history check block
         
         # Determine required history length based on detection window
         # Need at least detection_window * 2 samples, or 40 minimum for backwards compat
@@ -315,27 +317,36 @@ class ModeCollapseDetector:
                 )
             
             # OR LOGIC: Check if EITHER metric exceeds its threshold
+            # Thresholds hierarchy (from plan):
+            #   convergence_threshold → force_mutation (soft intervention)
+            #   scaled midpoint → scale_injection + force_mutation (medium)
+            #   force_cache_threshold → force_cache + force_mutation (hard)
             color_force = color_delta > self.color_force_cache_threshold
             color_scale = color_delta > self.color_convergence_threshold
             struct_force = struct_delta > self.struct_force_cache_threshold
             struct_scale = struct_delta > self.struct_convergence_threshold
+            
+            # Track whether mutation should be forced (at ANY convergence level)
+            should_force_mutation = False
             
             # Determine action based on OR logic (most severe action wins)
             if color_force or struct_force:
                 status = "collapsed"
                 action = "force_cache"
                 scaled_injection_probability = 1.0
+                should_force_mutation = True  # Mutation accompanies hard intervention
                 reasons = []
                 if color_force:
                     reasons.append(f"COLOR={color_delta:.4f}>{self.color_force_cache_threshold:.4f}")
                 if struct_force:
                     reasons.append(f"STRUCT={struct_delta:.4f}>{self.struct_force_cache_threshold:.4f}")
                 trigger_reason = " AND ".join(reasons)
-                logger.warning(f"[COLLAPSE] Severe convergence! {trigger_reason} -> forcing cache (100%)")
+                logger.warning(f"[COLLAPSE] Severe convergence! {trigger_reason} -> forcing cache (100%) + mutation")
             
             elif color_scale or struct_scale:
                 status = "converging"
                 action = "scale_injection"
+                should_force_mutation = True  # Mutation accompanies medium intervention
                 
                 # Calculate scaling factor for each metric
                 color_progress = 0.0
@@ -359,12 +370,13 @@ class ModeCollapseDetector:
                 trigger_reason = " OR ".join(reasons)
                 
                 logger.info(
-                    f"[CONVERGING] {trigger_reason} -> scaling to {scaled_injection_probability:.0%}"
+                    f"[CONVERGING] {trigger_reason} -> scaling to {scaled_injection_probability:.0%} + mutation"
                 )
             else:
                 status = "ok"
                 action = "none"
                 scaled_injection_probability = 0.0
+                should_force_mutation = False
                 trigger_reason = "no convergence"
         
         return {
@@ -378,7 +390,8 @@ class ModeCollapseDetector:
             "struct_delta": struct_delta,
             "action": action,
             "scaled_injection_probability": scaled_injection_probability,
-            "trigger_reason": trigger_reason
+            "trigger_reason": trigger_reason,
+            "should_force_mutation": should_force_mutation  # NEW: trigger mutation at any convergence level
         }
     
     def get_stats(self) -> Dict[str, Any]:

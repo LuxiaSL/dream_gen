@@ -223,6 +223,12 @@ class AsyncGenerationOrchestrator:
         self.cache_injections = 0
         self.current_injection_rate = self.config['generation']['cache'].get('injection_probability', 0.15)
         
+        # === INTERVENTION STATS (Phase 4 - for tuning) ===
+        # Track different intervention types to understand system behavior
+        self.forced_mutation_count = 0      # Collapse-triggered mutations
+        self.collapse_detection_count = 0   # Times collapse was detected (non-ok status)
+        self.template_switch_count = 0      # Full template switches (seed injection)
+        
         # Injection frequency tracking (for seed forcing)
         self.recent_cache_injections = deque(maxlen=10)
         
@@ -295,65 +301,96 @@ class AsyncGenerationOrchestrator:
             
             logger.info("[OK] All workers started")
             
-            # Bootstrap: Initialize with seed image as first keyframe
-            if self.current_image_path:
-                logger.info(f"Bootstrap: Registering seed image as keyframe 1")
-                self.current_keyframe_num = 1
-                sequence_num = self.buffer.register_keyframe(1)
-                self.buffer.mark_ready(sequence_num, self.current_image_path)
+            # === FRESH FRAME BUFFER POPULATION ===
+            # Populate the entire fresh frame buffer before starting generation
+            # This generates one txt2img frame per template
+            if self.fresh_buffer:
+                logger.info("=" * 60)
+                logger.info("Populating fresh frame buffer (required before generation)...")
+                logger.info("=" * 60)
+                await self.fresh_buffer.populate_all()
+                logger.info("Fresh frame buffer ready!")
+            
+            # Bootstrap: Get first frame from fresh buffer (txt2img)
+            if self.fresh_buffer:
+                logger.info("Bootstrap: Getting initial frame from fresh buffer...")
+                bootstrap_frame = await self.fresh_buffer.select_and_consume()
+                self.current_image_path = bootstrap_frame.path
                 
-                # Track sequence number for this keyframe
-                self.keyframe_sequences[1] = sequence_num
-                
-                # Encode seed for interpolation
-                try:
-                    latent = await self.vae_access.encode_async(
-                        self.current_image_path,
-                        for_interpolation=True
-                    )
-                    # Store in interpolation worker cache
-                    self.interpolation_worker.keyframe_latents[1] = latent
-                    self.interpolation_worker.keyframe_paths[1] = self.current_image_path
-                    logger.info("  Seed encoded to latent for interpolation")
-                except Exception as e:
-                    logger.error(f"Failed to encode seed: {e}")
-                
-                # Pre-register FIRST CYCLE (keyframe 2 + interpolations 1->2)
-                logger.info("Pre-registering first generation cycle...")
-                
-                # Register interpolations 1->2 FIRST (they come before keyframe 2 in sequence)
-                interp_seqs = self.buffer.register_interpolations(1, 2, 
-                    self.config['generation']['hybrid']['interpolation_frames'])
-                logger.info(f"  Registered interpolations 1->2: seq {interp_seqs[0]}-{interp_seqs[-1]}")
-                
-                # Then register keyframe 2
-                kf2_seq = self.buffer.register_keyframe(2)
-                self.keyframe_sequences[2] = kf2_seq
-                logger.info(f"  Registered keyframe 2: seq {kf2_seq}")
-                
-                # Get prompt and negative prompt based on system type
-                if self.use_combinatorial:
-                    bootstrap_prompt = self.prompt_manager.get_next_prompt()
-                    bootstrap_negative = self.prompt_manager.get_negative_prompt()
-                else:
-                    bootstrap_prompt = self.prompt_manager.get_next_prompt()
-                    bootstrap_negative = self.prompt_manager.get_negative_prompt() if hasattr(self.prompt_manager, 'get_negative_prompt') else None
-                
-                # Submit keyframe 2 generation (DRIFT mode for bootstrap)
-                await self.keyframe_worker.submit_request(
-                    current_image=self.current_image_path,
-                    keyframe_num=2,
-                    sequence_num=kf2_seq,
-                    prompt=bootstrap_prompt,
-                    negative_prompt=bootstrap_negative,
-                    denoise=self.denoise_drift,
-                    generation_mode="drift"
+                # Switch prompt system to this template/components
+                self.prompt_manager.switch_template(
+                    bootstrap_frame.template_id,
+                    bootstrap_frame.components
                 )
-                logger.info(f"  Submitted keyframe 2 generation request (DRIFT, denoise={self.denoise_drift:.2f})")
+                logger.info(f"  Template: '{bootstrap_frame.template_id}'")
+                logger.info(f"  Components: {bootstrap_frame.components}")
             else:
-                logger.error("No seed image provided, cannot start generation")
+                # No fresh buffer - this shouldn't happen in normal operation
+                # Fresh buffer is required when using CombinatorialPromptSystem
+                logger.error(
+                    "No fresh buffer configured! "
+                    "FreshFrameBuffer is required for CombinatorialPromptSystem. "
+                    "Ensure use_combinatorial mode is enabled."
+                )
                 self.running = False
                 return
+            
+            # Register as keyframe 1
+            logger.info(f"Bootstrap: Registering as keyframe 1")
+            self.current_keyframe_num = 1
+            sequence_num = self.buffer.register_keyframe(1)
+            self.buffer.mark_ready(sequence_num, self.current_image_path)
+            
+            # Track sequence number for this keyframe
+            self.keyframe_sequences[1] = sequence_num
+            
+            # Encode for interpolation
+            try:
+                latent = await self.vae_access.encode_async(
+                    self.current_image_path,
+                    for_interpolation=True
+                )
+                # Store in interpolation worker cache
+                self.interpolation_worker.keyframe_latents[1] = latent
+                self.interpolation_worker.keyframe_paths[1] = self.current_image_path
+                logger.info("  Bootstrap frame encoded to latent for interpolation")
+            except Exception as e:
+                logger.error(f"Failed to encode bootstrap frame: {e}")
+                # Continue anyway - we can still generate keyframes even without initial latent
+                # Interpolation for 1->2 may fail but subsequent cycles should work
+            
+            # Pre-register FIRST CYCLE (keyframe 2 + interpolations 1->2)
+            logger.info("Pre-registering first generation cycle...")
+            
+            # Register interpolations 1->2 FIRST (they come before keyframe 2 in sequence)
+            interp_seqs = self.buffer.register_interpolations(1, 2, 
+                self.config['generation']['hybrid']['interpolation_frames'])
+            logger.info(f"  Registered interpolations 1->2: seq {interp_seqs[0]}-{interp_seqs[-1]}")
+            
+            # Then register keyframe 2
+            kf2_seq = self.buffer.register_keyframe(2)
+            self.keyframe_sequences[2] = kf2_seq
+            logger.info(f"  Registered keyframe 2: seq {kf2_seq}")
+            
+            # Get prompt and negative prompt based on system type
+            if self.use_combinatorial:
+                bootstrap_prompt = self.prompt_manager.get_next_prompt()
+                bootstrap_negative = self.prompt_manager.get_negative_prompt()
+            else:
+                bootstrap_prompt = self.prompt_manager.get_next_prompt()
+                bootstrap_negative = self.prompt_manager.get_negative_prompt() if hasattr(self.prompt_manager, 'get_negative_prompt') else None
+            
+            # Submit keyframe 2 generation (DRIFT mode for bootstrap)
+            await self.keyframe_worker.submit_request(
+                current_image=self.current_image_path,
+                keyframe_num=2,
+                sequence_num=kf2_seq,
+                prompt=bootstrap_prompt,
+                negative_prompt=bootstrap_negative,
+                denoise=self.denoise_drift,
+                generation_mode="drift"
+            )
+            logger.info(f"  Submitted keyframe 2 generation request (DRIFT, denoise={self.denoise_drift:.2f})")
             
             # Run coordination loop
             logger.info("Starting coordination loop...")
@@ -442,10 +479,15 @@ class AsyncGenerationOrchestrator:
                 
                 if is_throttled:
                     # Buffer is full - don't wait for completions (there may be none!)
-                    # Use this idle time to pre-generate next fresh frame
-                    if self.fresh_buffer and not self.fresh_buffer.is_ready():
-                        logger.debug(f"  System throttled - pre-generating fresh frame...")
-                        await self.fresh_buffer.ensure_ready()
+                    # Fresh frame buffer handles its own regeneration in background
+                    if self.fresh_buffer:
+                        stats = self.fresh_buffer.get_stats()
+                        ready = stats.get('ready_count', 0)
+                        total = stats.get('total_templates', 0)
+                        logger.debug(
+                            f"  System throttled ({seconds_buffered:.1f}s / {target_seconds}s), "
+                            f"fresh buffer: {ready}/{total} ready"
+                        )
                     else:
                         logger.debug(f"  System throttled ({seconds_buffered:.1f}s / {target_seconds}s), waiting for buffer to drain...")
                     await asyncio.sleep(0.5)
@@ -653,6 +695,7 @@ class AsyncGenerationOrchestrator:
                         # Track injection
                         if injection_type == 'seed':
                             self.last_seed_injection_kf = next_kf
+                            self.template_switch_count += 1
                         else:
                             self.last_cache_injection_kf = next_kf
                             self.cache_injections += 1
@@ -763,6 +806,35 @@ class AsyncGenerationOrchestrator:
                     logger.info(f"  Cache injections: {self.cache_injections}")
                     logger.info("=" * 60)
                 
+                # === INTERVENTION STATS (every 50 keyframes) ===
+                # Logs intervention breakdown for tuning collapse prevention parameters
+                if next_kf % 50 == 0 and self.use_combinatorial:
+                    logger.info("=" * 60)
+                    logger.info(f"[INTERVENTION_STATS] Keyframe {next_kf}")
+                    logger.info(f"  Forced mutations: {self.forced_mutation_count}")
+                    logger.info(f"  Cache injections: {self.cache_injections}")
+                    logger.info(f"  Template switches: {self.template_switch_count}")
+                    logger.info(f"  Collapse detections: {self.collapse_detection_count}")
+                    
+                    # Calculate ratios for tuning guidance
+                    total_interventions = (
+                        self.forced_mutation_count + 
+                        self.cache_injections + 
+                        self.template_switch_count
+                    )
+                    if total_interventions > 0:
+                        mutation_pct = self.forced_mutation_count / total_interventions * 100
+                        cache_pct = self.cache_injections / total_interventions * 100
+                        switch_pct = self.template_switch_count / total_interventions * 100
+                        logger.info(
+                            f"  Ratios: mutations={mutation_pct:.0f}%, "
+                            f"cache={cache_pct:.0f}%, switches={switch_pct:.0f}%"
+                        )
+                        logger.info(
+                            f"  Target: mostly mutations, some cache, rare switches"
+                        )
+                    logger.info("=" * 60)
+                
                 # === 9. Memory Management ===
                 # Clean up old keyframe sequence tracking (keep last 10)
                 if len(self.keyframe_sequences) > 10:
@@ -866,6 +938,24 @@ class AsyncGenerationOrchestrator:
                             f"Similarity: {collapse_result['avg_similarity']:.3f}"
                         )
                     
+                    # === FORCED MUTATION (soft intervention) ===
+                    # Mutation happens FIRST as the lightest intervention
+                    # This gives BEND mode a chance to fix convergence before injection
+                    should_force_mutation = collapse_result.get('should_force_mutation', False)
+                    if should_force_mutation and self.use_combinatorial:
+                        # Force mutation to semantic opposites (2 components)
+                        self.prompt_manager.force_mutation_opposites(n_components=2)
+                        self.forced_mutation_count += 1
+                        logger.info(
+                            f"[COLLAPSE_RESPONSE] Forced mutation of 2 components "
+                            f"(reason: {collapse_result.get('trigger_reason', 'convergence')}, "
+                            f"total forced mutations: {self.forced_mutation_count})"
+                        )
+                    
+                    # Track collapse detection (any non-ok status)
+                    if collapse_result['status'] != 'ok':
+                        self.collapse_detection_count += 1
+                    
                     # Adjust injection rate based on collapse status
                     baseline_prob = self.config['generation']['cache']['injection_probability']
                     
@@ -959,85 +1049,108 @@ class AsyncGenerationOrchestrator:
             
             result = None
             
-            # === SEED INJECTION ===
+            # === SEED INJECTION (via Fresh Frame Buffer) ===
             if injection_type == 'seed':
-                logger.info(f"  -> Injecting SEED frame (keyframe {keyframe_num})")
+                logger.info(f"  -> Injecting FRESH frame (keyframe {keyframe_num})")
                 
-                # Try to use fresh frame buffer first (pre-generated with new template)
-                fresh_frame = None
-                if self.fresh_buffer:
-                    fresh_frame = self.fresh_buffer.consume()
+                # Get fresh frame from buffer (blocks if needed)
+                if not self.fresh_buffer:
+                    logger.error("No fresh buffer configured - cannot inject seed frame!")
+                    return None
                 
-                if fresh_frame:
-                    # Use pre-generated fresh frame with template switch
-                    target_path = fresh_frame.path
-                    new_template_id = fresh_frame.template_id
-                    new_components = fresh_frame.components
-                    buffer_age = time.time() - fresh_frame.generated_at
-                    
-                    logger.info(f"  [FRESH] Using pre-generated frame:")
-                    logger.info(f"    Template: '{new_template_id}'")
-                    logger.info(f"    Components: {new_components}")
-                    logger.info(f"    Buffer age: {buffer_age:.1f}s")
-                    logger.info(f"    Prompt: {fresh_frame.prompt[:80]}...")
-                    
-                    # Copy fresh frame to keyframe location
-                    keyframe_path = self.buffer.keyframe_dir / f"keyframe_{keyframe_num:03d}.png"
-                    shutil.copy2(target_path, keyframe_path)
-                    target_path = keyframe_path
-                    
-                    # Perform coordinated template switch
-                    old_template_id = self.prompt_manager.get_current_template_id() if self.use_combinatorial else None
-                    
-                    logger.info(f"  [TEMPLATE_SWITCH] '{old_template_id}' → '{new_template_id}'")
-                    
-                    # 1. Switch prompt system to new template
-                    if self.use_combinatorial:
-                        self.prompt_manager.switch_template(new_template_id, new_components)
-                        logger.info(f"    ✓ Prompt system switched")
-                    
-                    # 2. Switch cache manager (archive old, potentially restore if returning)
-                    if self.cache:
-                        self.cache.switch_template(new_template_id)
-                        logger.info(f"    ✓ Cache manager switched (old cache archived)")
-                    
-                    # 3. Reset collapse detector for new template baseline
-                    if self.collapse_detector:
-                        self.collapse_detector.reset_for_template(new_template_id)
-                        warmup = self.config['generation']['cache'].get('warmup_keyframes', 50)
-                        logger.info(f"    ✓ Collapse detector reset (warmup: {warmup} frames)")
-                    
-                    # Start pre-generating next fresh frame in background
-                    asyncio.create_task(self.fresh_buffer.ensure_ready())
-                    logger.info(f"    ✓ Started pre-generating next fresh frame")
-                    
-                    metadata = {
-                        'type': 'fresh_frame_injection',
-                        'template_id': new_template_id,
-                        'old_template_id': old_template_id,
-                        'prompt': fresh_frame.prompt
-                    }
+                fresh_frame = await self.fresh_buffer.select_and_consume()
+                
+                # Use pre-generated fresh frame with template switch
+                target_path = fresh_frame.path
+                new_template_id = fresh_frame.template_id
+                new_components = fresh_frame.components
+                buffer_age = time.time() - fresh_frame.generated_at
+                
+                logger.info(f"  [FRESH] Using pre-generated frame:")
+                logger.info(f"    Template: '{new_template_id}'")
+                logger.info(f"    Components: {new_components}")
+                logger.info(f"    Buffer age: {buffer_age:.1f}s")
+                logger.info(f"    Prompt: {fresh_frame.prompt[:80]}...")
+                
+                # === VAE INTERPOLATION: Blend current frame toward fresh frame ===
+                # This creates smoother visual transitions than direct copy
+                keyframe_path = self.buffer.keyframe_dir / f"keyframe_{keyframe_num:03d}.png"
+                
+                if current_path and current_path.exists():
+                    try:
+                        # Encode both frames to latent space
+                        current_latent = await self.vae_access.encode_async(
+                            current_path,
+                            for_interpolation=True
+                        )
+                        fresh_latent = await self.vae_access.encode_async(
+                            fresh_frame.path,
+                            for_interpolation=True
+                        )
+                        
+                        # Blend heavily toward fresh frame (default 85%)
+                        # This preserves most of the fresh aesthetic while smoothing the transition
+                        blend_weight = self.config['generation']['cache'].get('seed_blend_weight', 0.85)
+                        blended_latent = (
+                            fresh_latent * blend_weight +
+                            current_latent * (1.0 - blend_weight)
+                        )
+                        
+                        # Decode blended result
+                        blended_image = await self.vae_access.decode_async(
+                            blended_latent,
+                            upscale_to_target=True
+                        )
+                        
+                        # Save to keyframe location
+                        blended_image.save(keyframe_path, "PNG", optimize=False, compress_level=1)
+                        
+                        logger.info(
+                            f"  [TEMPLATE_SWITCH] Interpolated blend: "
+                            f"{blend_weight*100:.0f}% fresh + {(1-blend_weight)*100:.0f}% current"
+                        )
+                        
+                        target_path = keyframe_path
+                        
+                    except Exception as e:
+                        logger.error(f"Interpolation failed, falling back to direct copy: {e}")
+                        # Fallback to direct copy
+                        shutil.copy2(fresh_frame.path, keyframe_path)
+                        target_path = keyframe_path
                 else:
-                    # Fall back to legacy seed injection
-                    result = await self.injection_strategy.inject_seed_frame(
-                        target_keyframe_num=keyframe_num,
-                        current_image_path=current_path
-                    )
-                    
-                    if not result:
-                        return None
-                    
-                    target_path, metadata = result
-                    
-                    # Reset embedding history to break convergence signal
-                    if self.collapse_detector:
-                        reset_mode = self.config['generation']['cache'].get('embedding_history_reset', 'partial')
-                        if reset_mode == 'full':
-                            self.collapse_detector.reset()
-                        elif reset_mode == 'partial':
-                            keep_recent = self.config['generation']['cache'].get('embedding_history_keep_recent', 5)
-                            self.collapse_detector.partial_reset(keep_recent)
-                        logger.info(f"  Embedding history reset ({reset_mode}) after seed injection")
+                    # No current frame to blend from (e.g., bootstrap), use direct copy
+                    shutil.copy2(fresh_frame.path, keyframe_path)
+                    target_path = keyframe_path
+                
+                # Perform coordinated template switch
+                old_template_id = self.prompt_manager.get_current_template_id() if self.use_combinatorial else None
+                
+                logger.info(f"  [TEMPLATE_SWITCH] '{old_template_id}' → '{new_template_id}'")
+                
+                # 1. Switch prompt system to new template
+                if self.use_combinatorial:
+                    self.prompt_manager.switch_template(new_template_id, new_components)
+                    logger.info(f"    ✓ Prompt system switched")
+                
+                # 2. Switch cache manager (archive old, potentially restore if returning)
+                if self.cache:
+                    self.cache.switch_template(new_template_id)
+                    logger.info(f"    ✓ Cache manager switched (old cache archived)")
+                
+                # 3. Reset collapse detector for new template baseline
+                if self.collapse_detector:
+                    self.collapse_detector.reset_for_template(new_template_id)
+                    warmup = self.config['generation']['cache'].get('warmup_keyframes', 50)
+                    logger.info(f"    ✓ Collapse detector reset (warmup: {warmup} frames)")
+                
+                # Note: Buffer automatically triggers regeneration for consumed template
+                
+                metadata = {
+                    'type': 'fresh_frame_injection',
+                    'template_id': new_template_id,
+                    'old_template_id': old_template_id,
+                    'prompt': fresh_frame.prompt
+                }
                 
                 if target_path:
                     # Mark as ready in buffer
@@ -1219,22 +1332,31 @@ class AsyncGenerationOrchestrator:
             self.current_keyframe_num = last_good_kf
             logger.info(f"  Falling back to keyframe {last_good_kf}: {last_good_path.name}")
         else:
-            # No previous keyframe - try to use a seed image
+            # No previous keyframe - get fresh frame from buffer
             logger.warning(f"  No previous keyframe found!")
-            seed_dir = Path(self.config['system'].get('seed_dir', 'seeds'))
-            if seed_dir.exists():
-                seeds = list(seed_dir.glob("*.png")) + list(seed_dir.glob("*.jpg"))
-                if seeds:
-                    import random
-                    self.current_image_path = random.choice(seeds)
-                    self.current_keyframe_num = 0
-                    logger.info(f"  Using seed image: {self.current_image_path.name}")
-                else:
-                    logger.error(f"  No seed images available - cannot recover!")
-                    return
+            
+            if self.fresh_buffer and self.fresh_buffer.is_ready():
+                logger.info(f"  Getting fresh frame from buffer for recovery...")
+                try:
+                    # This is sync context in async handler - need to handle carefully
+                    # The fresh buffer should have frames ready from startup
+                    fresh_frame = self.fresh_buffer.peek()
+                    if fresh_frame:
+                        self.current_image_path = fresh_frame.path
+                        self.current_keyframe_num = 0
+                        logger.info(f"  Using fresh frame: {self.current_image_path.name}")
+                    else:
+                        logger.error(f"  Fresh buffer empty - cannot recover!")
+                        raise RuntimeError("Keyframe failure recovery failed: no frames available")
+                except Exception as e:
+                    logger.error(f"  Failed to get fresh frame: {e}")
+                    raise RuntimeError(f"Keyframe failure recovery failed: {e}")
             else:
-                logger.error(f"  No seed directory - cannot recover!")
-                return
+                logger.error(f"  No fresh buffer available - cannot recover!")
+                raise RuntimeError(
+                    "Keyframe failure recovery failed: no previous keyframe and no fresh buffer. "
+                    "This should not happen if fresh buffer was populated at startup."
+                )
         
         # === 4. Fix display position if stuck on deleted frames ===
         current_display = self.buffer.display_sequence_num
@@ -1324,7 +1446,11 @@ class AsyncGenerationOrchestrator:
             "cache_size": cache_size,
             "current_keyframe": self.current_keyframe_num,
             "avg_generation_time": avg_gen_time,  # CRITICAL: Required by status updater
-            "is_running": self.running
+            "is_running": self.running,
+            # === INTERVENTION STATS (Phase 4) ===
+            "forced_mutation_count": self.forced_mutation_count,
+            "template_switch_count": self.template_switch_count,
+            "collapse_detection_count": self.collapse_detection_count
         }
         
         # Add denoising state machine stats (Phase 2)

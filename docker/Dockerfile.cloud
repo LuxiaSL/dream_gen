@@ -31,9 +31,7 @@ COPY backend/ /app/backend/
 COPY prompts/ /app/prompts/
 COPY pyproject.toml /app/
 
-# Seeds are optional - fresh frame generation preferred for startup
-# Keep for backwards compatibility
-COPY seeds/ /app/seeds/
+# Note: Seeds removed - FreshFrameBuffer generates all bootstrap frames via txt2img
 
 # Embed build info for debugging
 ARG BUILD_DATE=unknown
@@ -43,7 +41,7 @@ RUN echo "BUILD_DATE=${BUILD_DATE}" > /app/BUILD_INFO && \
     echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /app/BUILD_INFO
 
 # Set ownership
-RUN chown -R dreamgen:dreamgen /app/backend /app/pyproject.toml /app/seeds
+RUN chown -R dreamgen:dreamgen /app/backend /app/pyproject.toml
 
 USER dreamgen
 

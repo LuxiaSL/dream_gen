@@ -7,10 +7,10 @@ system:
   comfyui_url: "http://127.0.0.1:8188"
   output_dir: "/app/output"
   cache_dir: "/app/cache"
-  seed_dir: "/app/seeds"
   log_dir: "/app/logs"
   gpu_id: 0
   log_level: "INFO"
+  # Note: seed_dir removed - FreshFrameBuffer generates all bootstrap frames via txt2img
 
 generation:
   use_async_orchestrator: true

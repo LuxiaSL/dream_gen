@@ -744,6 +744,120 @@ class CombinatorialPromptSystem:
         """
         return self.in_bend_mode
     
+    def force_mutation_opposites(self, n_components: int = 2) -> str:
+        """
+        Force mutation of N components to their semantic opposites.
+        
+        Called by collapse detection to push aesthetics away from convergence.
+        Uses category weights to select which components to mutate.
+        Prioritizes components that have semantic opposites defined.
+        Enters BEND mode after mutation.
+        
+        This is the "soft intervention" for collapse prevention - cheaper than
+        cache injection and uses the existing BEND mode infrastructure.
+        
+        Args:
+            n_components: Number of components to replace (default 2)
+        
+        Returns:
+            New prompt after mutation
+        """
+        if not self.current_template:
+            return self.current_prompt or ""
+        
+        import numpy as np
+        
+        mutated_categories = []
+        
+        for _ in range(n_components):
+            # Select category based on weights (excluding already mutated this call)
+            available_categories = [
+                c for c in self.category_weights.keys()
+                if c in self.current_multi_components 
+                and c not in mutated_categories
+                and self.current_multi_components[c]
+            ]
+            
+            if not available_categories:
+                break
+            
+            # Weighted selection
+            weights = [self.category_weights.get(c, 0.1) for c in available_categories]
+            total = sum(weights)
+            weights = [w / total for w in weights]
+            
+            selected_category = random.choices(available_categories, weights=weights, k=1)[0]
+            mutated_categories.append(selected_category)
+            
+            # Get current component
+            current_component = self.current_multi_components[selected_category][0]
+            
+            # Get pool excluding current
+            pool = self.components[selected_category]
+            pool_excluding_current = [c for c in pool if c.word != current_component.word]
+            
+            if not pool_excluding_current:
+                continue
+            
+            # Try to find the ACTUAL semantic opposite of the current component
+            # Component.opposite stores the word of its opposite (e.g., "warm" has opposite "cold")
+            # So we look for a component whose word matches current_component.opposite
+            new_component = None
+            
+            if current_component.opposite:
+                # Look for the component that IS the semantic opposite
+                for c in pool_excluding_current:
+                    if c.word == current_component.opposite:
+                        new_component = c
+                        logger.debug(
+                            f"[FORCE_MUTATE] Found exact opposite: "
+                            f"'{current_component.word}' → '{c.word}'"
+                        )
+                        break
+            
+            if new_component is None:
+                # No exact opposite found (or current has no opposite defined)
+                # Fallback: prefer components that have opposites (more semantically rich)
+                candidates_with_opposite = [c for c in pool_excluding_current if c.opposite]
+                if candidates_with_opposite:
+                    new_component = random.choice(candidates_with_opposite)
+                else:
+                    # Last resort: any different component
+                    new_component = random.choice(pool_excluding_current)
+            
+            # Apply mutation
+            old_word = current_component.word
+            self.current_multi_components[selected_category][0] = new_component
+            self.current_components[selected_category] = new_component
+            
+            logger.info(
+                f"[FORCE_MUTATE] {selected_category}: '{old_word}' → '{new_component.word}' "
+                f"(opposite: {new_component.opposite or 'none'})"
+            )
+        
+        if not mutated_categories:
+            logger.warning("[FORCE_MUTATE] No categories available to mutate")
+            return self.current_prompt or ""
+        
+        # Regenerate prompt
+        self._regenerate_prompt()
+        
+        # Enter BEND mode
+        self.in_bend_mode = True
+        self.bend_frames_remaining = self.bend_duration
+        
+        # Update stats
+        self.frames_since_mutation = 0
+        self.total_mutations += len(mutated_categories)
+        
+        logger.info(
+            f"[FORCE_MUTATE] Replaced {len(mutated_categories)} components, "
+            f"entering BEND mode ({self.bend_duration}f)"
+        )
+        logger.info(f"[FORCE_MUTATE] New prompt: {(self.current_prompt or '')[:100]}...")
+        
+        return self.current_prompt or ""
+    
     # ═══════════════════════════════════════════════════════════════════════════
     # TEMPLATE MANAGEMENT (for Phase 5 - Fresh Frame injection)
     # ═══════════════════════════════════════════════════════════════════════════
