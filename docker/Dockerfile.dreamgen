@@ -85,11 +85,11 @@ RUN echo "BUILD_DATE=${BUILD_DATE}" > /app/BUILD_INFO && \
 # Environment
 ENV PYTHONPATH=/app:/app/backend
 ENV LOG_LEVEL=INFO
-ENV CONFIG_PATH=/app/backend/config.cloud.yaml
+ENV CONFIG_PATH=/app/backend/config.pod.yaml
 
 # Default mode - set to "pod" for two-pod architecture
 # Serverless mode is legacy (combined ComfyUI + DreamGen in one container)
-ENV DREAMGEN_MODE=serverless
+ENV DREAMGEN_MODE=pod
 
 # VPS connection (set at runtime)
 # ENV VPS_WEBSOCKET_URL=wss://aetherawi.red/ws/gpu
