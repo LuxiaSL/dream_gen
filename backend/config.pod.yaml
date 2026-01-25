@@ -33,6 +33,7 @@ generation:
     interpolation_frames: 15    # Fewer frames for faster cycles
     target_interpolation_fps: 5.0
     keyframe_denoise: 0.2     # Lower for testing DRIFT mode
+    interpolation_decoder: "taesd"   # Use TAESD for ~9x faster decode (recommended for cloud)
     interpolation_resolution_divisor: 1
     interpolation_upscale_method: "bilinear"
     interpolation_downsample_method: "bicubic"
@@ -107,8 +108,8 @@ fresh_generation:
     bend_frames: 5             # Frames at high denoise after mutation
   
   mutation:
-    base_probability: 0.15     # Slightly higher for testing (more mutations)
-    staleness_threshold: 20    # Force mutation after N frames
+    base_probability: 0.125     # Slightly higher for testing (more mutations)
+    staleness_threshold: 30    # Force mutation after N frames
     category_weights:
       # All 6 categories with semantic opposites (best for mutation)
       color_logic: 0.22        # ALL templates - palette shifts

@@ -280,6 +280,29 @@ This is the "drift rate" knob:
 
 Lower denoise means each keyframe closely resembles its source (the previous keyframe), creating smooth aesthetic evolution. Higher denoise allows more dramatic changes but risks "breaking" the visual style.
 
+#### `interpolation_decoder`
+**Default:** `"vae"`
+
+Which decoder to use for interpolation frames:
+
+- `"vae"`: Full SD 1.5 VAE decoder (~230ms/frame at 1024x512, maximum quality)
+- `"taesd"`: Tiny AutoEncoder (~25ms/frame, ~9x faster, slight softness)
+
+**TAESD** (Tiny AutoEncoder for Stable Diffusion) is a distilled ~10MB decoder that provides dramatic speedup at the cost of slightly reduced fine detail. For interpolation frames—which are transitional and displayed briefly (~0.3s each)—the quality difference is essentially imperceptible at playback speed.
+
+**When to use TAESD:**
+- Cloud/RunPod deployment (reduces costs, faster iteration)
+- Streaming to VPS (more frames per second)
+- Lower-end GPUs (reduces decode bottleneck)
+- When buffer drains faster than generation fills it
+
+**When to use full VAE:**
+- Quality-critical local display (Rainmeter wallpaper)
+- When you have GPU headroom and quality matters most
+- If you notice artifacts in interpolation frames
+
+TAESD is loaded from HuggingFace (`madebyollin/taesd`) on first use and coexists with the full VAE (only ~20MB additional VRAM).
+
 #### `interpolation_resolution_divisor`
 **Default:** `1`
 
@@ -290,6 +313,8 @@ Divide the resolution by this factor for interpolation, then upscale the result.
 - `2`: Half resolution (significant speedup, slight softness)
 
 This is a powerful performance optimization. VAE operations scale with pixel count, so half resolution is roughly 4x faster. The upscaling (bilinear/bicubic) is very fast and the quality loss is often imperceptible in motion.
+
+**Note:** `interpolation_decoder: "taesd"` and `interpolation_resolution_divisor: 2` can be combined for maximum performance (~36x speedup total), though this may introduce noticeable softness.
 
 #### `interpolation_upscale_method`
 **Default:** `"bilinear"`
@@ -996,6 +1021,7 @@ How often to send keepalive messages.
 | More resilient buffer | ↑ `buffer_target_seconds` |
 | Better collapse detection | ↓ convergence thresholds |
 | Less aggressive intervention | ↑ cooldowns, ↑ convergence thresholds |
-| Higher quality | ↑ `resolution`, ↓ `interpolation_resolution_divisor` |
-| Better performance | ↓ `resolution`, ↑ `interpolation_resolution_divisor` |
+| Higher quality | ↑ `resolution`, ↓ `interpolation_resolution_divisor`, `interpolation_decoder: "vae"` |
+| Better performance | ↓ `resolution`, ↑ `interpolation_resolution_divisor`, `interpolation_decoder: "taesd"` |
+| Faster interpolation decode | `interpolation_decoder: "taesd"` (~9x speedup) |
 

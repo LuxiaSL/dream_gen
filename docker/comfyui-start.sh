@@ -95,13 +95,23 @@ echo "Nginx started (listening on port 8188)"
 echo "Starting ComfyUI on internal port 8189..."
 cd /app/ComfyUI
 
+# Verbose logging: shows prompt IDs, execution status, and detailed progress
+# This helps debug issues where prompts are submitted but results aren't received
+# Set COMFYUI_VERBOSE=0 to disable if needed
+VERBOSE_FLAG=""
+if [ "${COMFYUI_VERBOSE:-1}" != "0" ]; then
+    VERBOSE_FLAG="--verbose"
+    echo "Verbose logging enabled (prompt IDs will be logged)"
+fi
+
 # Start ComfyUI in background
 python main.py \
     --listen 127.0.0.1 \
     --port 8189 \
     --highvram \
     --cuda-malloc \
-    --preview-method none &
+    --preview-method none \
+    $VERBOSE_FLAG &
 
 COMFYUI_PID=$!
 echo "ComfyUI started (PID: $COMFYUI_PID)"

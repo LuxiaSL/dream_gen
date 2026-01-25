@@ -184,13 +184,23 @@ class DreamController:
                 # Get torch.compile setting
                 enable_compile = self.config.get('system', {}).get('enable_torch_compile', False)
                 self.logger.info(f"Enable torch compile: {enable_compile}")
+                
+                # Get interpolation decoder setting (taesd = ~9x faster decode for interpolations)
+                interp_decoder = self.config['generation']['hybrid'].get('interpolation_decoder', 'vae')
+                use_taesd = interp_decoder == 'taesd'
+                if use_taesd:
+                    self.logger.info("Interpolation decoder: TAESD (~9x faster decode)")
+                else:
+                    self.logger.info("Interpolation decoder: Full VAE (max quality)")
+                
                 self.latent_encoder = LatentEncoder(
                     device=device,
                     auto_load=True,
                     interpolation_resolution_divisor=resolution_divisor,
                     upscale_method=upscale_method,
                     target_resolution=target_resolution,
-                    enable_torch_compile=enable_compile
+                    enable_torch_compile=enable_compile,
+                    use_taesd_for_interpolations=use_taesd
                 )
                 
                 # Synchronize CUDA after loading models to ensure context is fully initialized

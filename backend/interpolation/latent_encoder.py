@@ -45,12 +45,13 @@ class LatentEncoder:
     - Encode images to latent space
     - Decode latents back to images
     - Batch operations for efficiency
+    - Optional TAESD for ~9x faster interpolation decoding
     """
     
     def __init__(self, vae_path: Optional[Path] = None, device: str = "cuda", auto_load: bool = False,
                  interpolation_resolution_divisor: int = 1, upscale_method: str = "bilinear",
                  downsample_method: str = "bilinear", target_resolution: Optional[Tuple[int, int]] = None,
-                 enable_torch_compile: bool = True):
+                 enable_torch_compile: bool = True, use_taesd_for_interpolations: bool = False):
         """
         Initialize VAE encoder/decoder
         
@@ -63,12 +64,17 @@ class LatentEncoder:
             downsample_method: Method for downsampling before encode ("bilinear", "bicubic", "lanczos")
             target_resolution: Force resize to this resolution (width, height) to avoid CUDA issues
             enable_torch_compile: Enable torch.compile optimization (may fail on some systems)
+            use_taesd_for_interpolations: Use TAESD (~9x faster) for interpolation batch decode
         """
         self.device = device if torch.cuda.is_available() else "cpu"
         self.vae = None
         self.vae_path = vae_path
         self.enable_torch_compile = enable_torch_compile
         self.vae_compiled = False  # Track if compilation was successful
+        
+        # TAESD for fast interpolation decode
+        self.use_taesd = use_taesd_for_interpolations
+        self.taesd = None
         
         # Tensor caching for preprocessing optimization
         self._preprocess_cache = {}
@@ -90,6 +96,10 @@ class LatentEncoder:
             self._load_vae(vae_path)
         elif auto_load:
             self._load_vae()
+        
+        # Load TAESD if requested (after VAE for scale factor)
+        if self.use_taesd:
+            self._load_taesd()
     
     def _load_vae(self, vae_path: Path = None):
         """
@@ -183,6 +193,52 @@ class LatentEncoder:
         except Exception as e:
             logger.error(f"Failed to load VAE: {e}", exc_info=True)
             raise
+    
+    def _load_taesd(self):
+        """
+        Load TAESD (Tiny AutoEncoder for Stable Diffusion) for fast interpolation decode
+        
+        TAESD is a distilled ~10MB decoder that provides ~9x speedup for VAE decode
+        at the cost of slightly reduced fine detail. Perfect for interpolation frames
+        which are transitional and displayed briefly.
+        
+        Benefits:
+        - ~9x faster decode (~25ms vs ~230ms per frame at 1024x512)
+        - 25x less VRAM (~20MB vs ~500MB)
+        - Same latent space as SD VAE (no conversion needed)
+        
+        The full VAE is still used for:
+        - Encoding (to preserve quality in latent space)
+        - Keyframe decode via ComfyUI
+        """
+        try:
+            from diffusers import AutoencoderTiny
+            
+            logger.info("Loading TAESD for fast interpolation decoding...")
+            mem_before = get_gpu_memory_mb()
+            
+            self.taesd = AutoencoderTiny.from_pretrained(
+                "madebyollin/taesd",
+                torch_dtype=torch.float16,
+            ).to(self.device)
+            self.taesd.eval()
+            
+            mem_after = get_gpu_memory_mb()
+            taesd_mem = mem_after - mem_before
+            
+            logger.info(f"[OK] TAESD loaded successfully")
+            logger.info(f"  Model: madebyollin/taesd")
+            logger.info(f"  VRAM usage: {taesd_mem:.1f} MB")
+            logger.info(f"  decode_batch() will use TAESD for ~9x speedup")
+            
+        except ImportError as e:
+            logger.error("Failed to import AutoencoderTiny - please install: uv pip install diffusers>=0.25.0")
+            logger.warning("Falling back to full VAE for interpolation decode")
+            self.use_taesd = False
+        except Exception as e:
+            logger.error(f"Failed to load TAESD: {e}", exc_info=True)
+            logger.warning("Falling back to full VAE for interpolation decode")
+            self.use_taesd = False
     
     def encode(self, image: Union[Image.Image, Path], for_interpolation: bool = False) -> torch.Tensor:
         """
@@ -410,6 +466,92 @@ class LatentEncoder:
         """
         Decode multiple latents to images in a single GPU call
         
+        Routes to TAESD (fast) or full VAE based on configuration.
+        TAESD provides ~9x speedup at slightly reduced quality - ideal for
+        interpolation frames which are transitional and displayed briefly.
+        
+        Args:
+            latents: Batched latent tensor (shape: [N, C, H, W])
+        
+        Returns:
+            List of PIL Images
+        """
+        # Route to TAESD if available and enabled
+        if self.use_taesd and self.taesd is not None:
+            return self._decode_batch_taesd(latents)
+        
+        # Fall back to full VAE
+        return self._decode_batch_vae(latents)
+    
+    def _decode_batch_taesd(self, latents: torch.Tensor) -> List[Image.Image]:
+        """
+        Fast batch decode using TAESD (~9x faster than full VAE)
+        
+        TAESD is a tiny distilled decoder that trades fine detail for speed.
+        The quality difference is minimal for interpolation frames.
+        
+        Args:
+            latents: Batched latent tensor (shape: [N, C, H, W])
+        
+        Returns:
+            List of PIL Images
+        """
+        if self.taesd is None:
+            logger.warning("TAESD not loaded - falling back to full VAE")
+            return self._decode_batch_vae(latents)
+        
+        t_start = time.perf_counter()
+        
+        # Unscale latents (same as full VAE path)
+        scaled_latents = latents / self.vae_scale_factor
+        
+        with torch.no_grad():
+            decoder_output = self.taesd.decode(scaled_latents)
+            image_tensors = decoder_output.sample
+            
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+        
+        decode_ms = (time.perf_counter() - t_start) * 1000
+        
+        # Postprocess - SAME as full VAE
+        # Testing showed TAESD actual output range is ~[-2, 1.5] (similar to VAE's [-1, 1])
+        # despite README claiming [0, 1]. The VAE postprocessing handles this correctly.
+        # See _taesd_research/TAESD_INTEGRATION_PLAN.md section 4 for details.
+        t_post = time.perf_counter()
+        image_tensors = (image_tensors * 0.5 + 0.5) * 255.0
+        image_tensors = torch.clamp(image_tensors, 0.0, 255.0)
+        image_tensors = image_tensors.to(dtype=torch.uint8)
+        image_tensors = image_tensors.permute(0, 2, 3, 1)
+        
+        # Single GPU→CPU transfer
+        image_arrays = image_tensors.cpu().numpy()
+        post_ms = (time.perf_counter() - t_post) * 1000
+        
+        # Convert to PIL
+        t_pil = time.perf_counter()
+        images = [Image.fromarray(image_arrays[i], mode='RGB') for i in range(image_arrays.shape[0])]
+        pil_ms = (time.perf_counter() - t_pil) * 1000
+        
+        total_ms = decode_ms + post_ms + pil_ms
+        
+        # Log timing (TAESD should be much faster)
+        if total_ms > 100 or len(images) > 5:
+            logger.info(
+                f"[PERF] TAESD batch decode {len(images)} frames: "
+                f"decode={decode_ms:.0f}ms, post={post_ms:.0f}ms, PIL={pil_ms:.0f}ms, "
+                f"total={total_ms:.0f}ms ({total_ms/len(images):.1f}ms/frame)"
+            )
+        
+        # Release reserved VRAM for ComfyUI
+        torch.cuda.empty_cache()
+        
+        return images
+    
+    def _decode_batch_vae(self, latents: torch.Tensor) -> List[Image.Image]:
+        """
+        Batch decode using full SD VAE (maximum quality)
+        
         Args:
             latents: Batched latent tensor (shape: [N, C, H, W])
         
@@ -425,7 +567,6 @@ class LatentEncoder:
         scaled_latents = latents / self.vae_scale_factor
         
         # Decode batch - VAE returns DecoderOutput, extract .sample
-        import time
         t_decode = time.perf_counter()
         
         # Log VRAM before decode (every 10th batch to avoid spam)
@@ -484,7 +625,7 @@ class LatentEncoder:
         total_ms = decode_ms + post_ms + pil_ms
         if total_ms > 200:  # Log if slow
             logger.info(
-                f"[PERF] Batch decode {len(images)} frames: "
+                f"[PERF] VAE batch decode {len(images)} frames: "
                 f"VAE={decode_ms:.0f}ms, postproc={post_ms:.0f}ms, PIL={pil_ms:.0f}ms, "
                 f"total={total_ms:.0f}ms ({total_ms/len(images):.0f}ms/frame)"
             )

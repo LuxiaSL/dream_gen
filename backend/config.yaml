@@ -61,6 +61,8 @@ generation:
                                  # 0.1-0.2 = slow evolution | 0.3-0.4 = balanced | 0.5+ = rapid change
     
     # --- Interpolation Performance ---
+    interpolation_decoder: "vae"        # "vae" (full quality) | "taesd" (~9x faster, slight blur)
+                                        # TAESD recommended for cloud/streaming where speed matters
     interpolation_resolution_divisor: 1   # 1=full res | 2=half res (4x faster, slight blur)
     interpolation_upscale_method: "bilinear"     # "bilinear" | "bicubic" (sharper, slower)
     interpolation_downsample_method: "bicubic"   # "lanczos" (best) | "bicubic" | "bilinear" (fastest)

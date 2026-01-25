@@ -82,17 +82,42 @@ RUN echo "Downloading SD 1.5 model..." \
 # nginx proxies port 8188 (external) -> 8189 (internal ComfyUI)
 # This adds basic auth protection for the ComfyUI API
 
+# Create custom log format for debugging (includes request time and upstream response time)
+RUN echo 'log_format comfyui_debug '\''$time_iso8601 | $status | $request_time s | '\'' \n\
+                            '\''$upstream_response_time s upstream | $request | '\'' \n\
+                            '\''$body_bytes_sent bytes | $remote_addr'\'';' \
+    > /etc/nginx/conf.d/comfyui_log_format.conf
+
 # Create nginx config for auth proxy
 RUN echo 'server { \n\
     listen 8188; \n\
     \n\
-    # Health check endpoint (no auth required) \n\
+    # Access logging with timing info - critical for debugging prompt issues \n\
+    access_log /dev/stdout comfyui_debug; \n\
+    error_log /dev/stderr warn; \n\
+    \n\
+    # Health check endpoint (no auth required, silent logging) \n\
     location /health { \n\
+        access_log off; \n\
         return 200 "healthy\\n"; \n\
         add_header Content-Type text/plain; \n\
     } \n\
     \n\
-    # All other requests require auth \n\
+    # WebSocket endpoint - separate for clarity \n\
+    location /ws { \n\
+        auth_basic "ComfyUI"; \n\
+        auth_basic_user_file /etc/nginx/.htpasswd; \n\
+        proxy_pass http://127.0.0.1:8189; \n\
+        proxy_http_version 1.1; \n\
+        proxy_set_header Upgrade $http_upgrade; \n\
+        proxy_set_header Connection "upgrade"; \n\
+        proxy_set_header Host $host; \n\
+        proxy_set_header X-Real-IP $remote_addr; \n\
+        proxy_read_timeout 3600s; \n\
+        proxy_send_timeout 3600s; \n\
+    } \n\
+    \n\
+    # All other requests (including /prompt submissions) \n\
     location / { \n\
         auth_basic "ComfyUI"; \n\
         auth_basic_user_file /etc/nginx/.htpasswd; \n\

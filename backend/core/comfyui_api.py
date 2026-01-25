@@ -150,38 +150,45 @@ class ComfyUIClient:
             "client_id": self.client_id,
         }
 
+        submit_time = time.time()
         try:
+            logger.debug(f"[SUBMIT] Queueing prompt to {self.base_url}/prompt (client_id: {self.client_id})")
+            
             response = self.session.post(
                 f"{self.base_url}/prompt",
                 json=payload,
                 timeout=10.0,
             )
+            
+            response_time = time.time() - submit_time
             response.raise_for_status()
             result = response.json()
             prompt_id = result.get("prompt_id")
             
             if prompt_id:
-                logger.info(f"Queued prompt: {prompt_id}")
+                # Log FULL prompt_id for correlation with ComfyUI logs
+                logger.info(f"[SUBMIT OK] prompt_id={prompt_id} (response: {response_time:.3f}s, status: {response.status_code})")
             else:
-                logger.warning(f"No prompt_id in response: {result}")
+                logger.warning(f"[SUBMIT WARN] No prompt_id in response: {result} (response: {response_time:.3f}s)")
             
             return prompt_id
             
         except requests.exceptions.Timeout:
-            logger.error("Queue prompt timed out")
+            logger.error(f"[SUBMIT FAIL] Timeout after {time.time() - submit_time:.1f}s posting to {self.base_url}/prompt")
             return None
         except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to queue prompt: {e}")
+            response_time = time.time() - submit_time
+            logger.error(f"[SUBMIT FAIL] {type(e).__name__} after {response_time:.3f}s: {e}")
             # Log response body if available for debugging
             if hasattr(e, 'response') and e.response is not None:
                 try:
                     error_detail = e.response.json()
-                    logger.error(f"ComfyUI error details: {error_detail}")
+                    logger.error(f"[SUBMIT FAIL] ComfyUI error details: {error_detail}")
                 except:
-                    logger.error(f"ComfyUI response text: {e.response.text[:500]}")
+                    logger.error(f"[SUBMIT FAIL] ComfyUI response text: {e.response.text[:500]}")
             return None
         except Exception as e:
-            logger.error(f"Unexpected error queueing prompt: {e}", exc_info=True)
+            logger.error(f"[SUBMIT FAIL] Unexpected error queueing prompt: {e}", exc_info=True)
             return None
 
     async def wait_for_completion(
@@ -220,32 +227,47 @@ class ComfyUIClient:
         execution_started = False
         last_progress_time = start_time
         messages_received = 0
+        last_message_types = []  # Track recent message types for debugging
+        
+        # Log full prompt_id for correlation
+        logger.info(f"[WAIT] Starting wait for prompt_id={prompt_id} (timeout: {timeout}s)")
         
         try:
             # websockets v13+ uses 'additional_headers', older versions use 'extra_headers'
             # Try the newer API first, fall back to older if needed
+            connect_start = time.time()
             try:
                 websocket = await websockets.connect(ws_url, additional_headers=headers)
             except TypeError:
                 # Older websockets version
                 websocket = await websockets.connect(ws_url, extra_headers=headers)
             
+            connect_time = time.time() - connect_start
+            logger.debug(f"[WAIT] WebSocket connected to {ws_url} in {connect_time:.3f}s")
+            
             async with websocket:
-                logger.debug(f"WebSocket connected, waiting for prompt {prompt_id}")
-                
                 while True:
                     # Check timeout
                     elapsed = time.time() - start_time
                     if elapsed > timeout:
-                        logger.error(f"Timeout waiting for prompt {prompt_id} after {elapsed:.1f}s")
-                        logger.error(f"  Execution started: {execution_started}")
-                        logger.error(f"  Messages received: {messages_received}")
-                        logger.error(f"  Time since last progress: {time.time() - last_progress_time:.1f}s")
+                        logger.error(f"[WAIT TIMEOUT] prompt_id={prompt_id} after {elapsed:.1f}s")
+                        logger.error(f"[WAIT TIMEOUT]   execution_started: {execution_started}")
+                        logger.error(f"[WAIT TIMEOUT]   messages_received: {messages_received}")
+                        logger.error(f"[WAIT TIMEOUT]   time_since_last_progress: {time.time() - last_progress_time:.1f}s")
+                        logger.error(f"[WAIT TIMEOUT]   recent_message_types: {last_message_types[-10:]}")
                         return False
                     
                     # Warn if we haven't seen execution_start after 10 seconds
                     if not execution_started and elapsed > 10 and int(elapsed) % 10 == 0:
-                        logger.warning(f"Still waiting for execution_start after {elapsed:.0f}s (prompt: {prompt_id[:8]}...)")
+                        logger.warning(f"[WAIT] Still waiting for execution_start after {elapsed:.0f}s (prompt_id={prompt_id})")
+                        # Log queue status to help debug
+                        try:
+                            queue = self.get_queue()
+                            running = len(queue.get("queue_running", []))
+                            pending = len(queue.get("queue_pending", []))
+                            logger.warning(f"[WAIT] ComfyUI queue: {running} running, {pending} pending")
+                        except Exception as e:
+                            logger.warning(f"[WAIT] Could not check queue: {e}")
                     
                     # Receive message with timeout
                     try:
@@ -257,6 +279,9 @@ class ComfyUIClient:
                         messages_received += 1
                         
                         msg_type = data.get("type")
+                        last_message_types.append(msg_type)
+                        if len(last_message_types) > 50:
+                            last_message_types = last_message_types[-50:]
                         
                         # Log progress updates
                         if msg_type == "progress":
@@ -266,22 +291,26 @@ class ComfyUIClient:
                             max_val = progress_data.get("max", 0)
                             if max_val > 0:
                                 pct = (value / max_val) * 100
-                                logger.debug(f"Progress: {value}/{max_val} ({pct:.1f}%)")
+                                logger.debug(f"[WAIT] Progress: {value}/{max_val} ({pct:.1f}%)")
                         
                         # Check for execution start
                         elif msg_type == "execution_start":
                             exec_prompt_id = data.get("data", {}).get("prompt_id")
+                            logger.debug(f"[WAIT] execution_start for {exec_prompt_id} (waiting for {prompt_id})")
                             if exec_prompt_id == prompt_id:
                                 execution_started = True
                                 last_progress_time = time.time()
-                                logger.info(f"Execution started for prompt {prompt_id[:8]}...")
+                                wait_until_start = elapsed
+                                logger.info(f"[WAIT] Execution started for prompt_id={prompt_id} (waited {wait_until_start:.2f}s)")
                         
                         # Check for successful completion
                         elif msg_type == "execution_success" or msg_type == "executed":
                             exec_prompt_id = data.get("data", {}).get("prompt_id")
                             if exec_prompt_id == prompt_id:
-                                logger.info(f"Prompt {prompt_id[:8]}... completed in {elapsed:.1f}s")
+                                logger.info(f"[WAIT OK] prompt_id={prompt_id} completed in {elapsed:.2f}s (messages: {messages_received})")
                                 return True
+                            else:
+                                logger.debug(f"[WAIT] {msg_type} for different prompt: {exec_prompt_id}")
                         
                         # Check for errors
                         elif msg_type == "execution_error":
@@ -289,29 +318,34 @@ class ComfyUIClient:
                             exec_prompt_id = exec_data.get("prompt_id")
                             if exec_prompt_id == prompt_id:
                                 error_msg = exec_data.get("exception_message", "Unknown error")
-                                logger.error(f"Prompt {prompt_id[:8]}... failed: {error_msg}")
+                                logger.error(f"[WAIT FAIL] prompt_id={prompt_id} error: {error_msg}")
                                 return False
+                            else:
+                                logger.warning(f"[WAIT] execution_error for different prompt: {exec_prompt_id}: {exec_data.get('exception_message', '?')}")
                         
                         # Log other message types for debugging (but not status which is spammy)
                         elif msg_type not in ("status", "progress_state", "executing"):
-                            logger.debug(f"ComfyUI message: {msg_type}")
+                            logger.debug(f"[WAIT] ComfyUI message: {msg_type}")
                     
                     except asyncio.TimeoutError:
                         # No message received in this interval, continue waiting
                         # But warn if it's been too long since any activity
-                        if time.time() - last_progress_time > 30:
-                            logger.warning(f"No ComfyUI activity for 30s+ (prompt: {prompt_id[:8]}...)")
+                        silence_duration = time.time() - last_progress_time
+                        if silence_duration > 30:
+                            logger.warning(f"[WAIT STALL] No ComfyUI activity for {silence_duration:.0f}s (prompt_id={prompt_id}, msgs: {messages_received})")
                             last_progress_time = time.time()  # Reset to avoid spam
                         continue
                     except json.JSONDecodeError as e:
-                        logger.warning(f"Failed to decode WebSocket message: {e}")
+                        logger.warning(f"[WAIT] Failed to decode WebSocket message: {e}")
                         continue
         
         except websockets.exceptions.WebSocketException as e:
-            logger.error(f"WebSocket error: {e}")
+            elapsed = time.time() - start_time
+            logger.error(f"[WAIT FAIL] WebSocket error after {elapsed:.2f}s for prompt_id={prompt_id}: {e}")
             return False
         except Exception as e:
-            logger.error(f"Unexpected error waiting for completion: {e}", exc_info=True)
+            elapsed = time.time() - start_time
+            logger.error(f"[WAIT FAIL] Unexpected error after {elapsed:.2f}s for prompt_id={prompt_id}: {e}", exc_info=True)
             return False
 
     def get_history(
