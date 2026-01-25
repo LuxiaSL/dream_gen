@@ -191,7 +191,7 @@ class VPSWebSocketClient:
     
     async def send_frame(self, frame_data: bytes) -> bool:
         """
-        Send a frame to VPS
+        Send a frame to VPS (legacy format without metadata)
         
         Args:
             frame_data: WebP-encoded frame bytes
@@ -200,6 +200,60 @@ class VPSWebSocketClient:
             True if sent successfully
         """
         return await self._send_binary(MessageType.FRAME, frame_data)
+    
+    async def send_frame_with_metadata(
+        self,
+        frame_data: bytes,
+        metadata_bytes: bytes
+    ) -> bool:
+        """
+        Send a frame to VPS with metadata (v2 format)
+        
+        Message format:
+            0x01 | metadata_len (4 bytes BE) | JSON metadata | WebP data
+        
+        Args:
+            frame_data: WebP-encoded frame bytes
+            metadata_bytes: JSON metadata encoded as UTF-8 bytes
+        
+        Returns:
+            True if sent successfully
+        """
+        if not self.connected:
+            return False
+        
+        try:
+            t_start = time.time()
+            
+            # Build message: type + metadata_len + metadata + frame
+            metadata_len = len(metadata_bytes)
+            message = (
+                bytes([MessageType.FRAME]) +
+                metadata_len.to_bytes(4, 'big') +
+                metadata_bytes +
+                frame_data
+            )
+            
+            await self._websocket.send(message)
+            send_time_ms = (time.time() - t_start) * 1000
+            
+            self.stats.messages_sent += 1
+            self.stats.bytes_sent += len(message)
+            
+            # Log slow sends (potential network issue)
+            if send_time_ms > 50:
+                logger.warning(
+                    f"[PERF] Slow WS send: {send_time_ms:.1f}ms for "
+                    f"{len(frame_data)/1024:.1f}KB frame + {len(metadata_bytes)}B metadata"
+                )
+            
+            return True
+        
+        except Exception as e:
+            logger.error(f"Failed to send frame with metadata: {e}")
+            self._connected = False
+            self._schedule_reconnect()
+            return False
     
     async def send_state(self, state_data: bytes) -> bool:
         """

@@ -529,13 +529,13 @@ class AsyncGenerationOrchestrator:
                 
                 # === 2. Mark Keyframe Ready ===
                 if sequence_num is not None:
-                    self.buffer.mark_ready(sequence_num, kf_path)
+                    self.buffer.mark_ready(sequence_num, kf_path, prompt=prompt)
                     logger.debug(f"  Marked keyframe {kf_num} ready (seq {sequence_num})")
                 else:
                     # Fallback: look up sequence number
                     sequence_num = self.keyframe_sequences.get(kf_num)
                     if sequence_num is not None:
-                        self.buffer.mark_ready(sequence_num, kf_path)
+                        self.buffer.mark_ready(sequence_num, kf_path, prompt=prompt)
                     else:
                         logger.error(f"  Cannot find sequence number for keyframe {kf_num}!")
                 

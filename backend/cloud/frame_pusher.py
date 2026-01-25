@@ -6,9 +6,20 @@ Handles both keyframes and interpolation frames based on configuration.
 
 WebP encoding at 85% quality provides excellent compression (~40-70KB per
 1024x512 frame) while maintaining visual quality for AI art.
+
+Frame Message Format (v2):
+  0x01 | metadata_len (4 bytes BE) | JSON metadata | WebP data
+
+Metadata JSON:
+  {
+    "fn": frame_number,      // Sequential frame number
+    "kf": keyframe_number,   // Current keyframe number
+    "p": "prompt text"       // Prompt for this keyframe (optional)
+  }
 """
 
 import asyncio
+import json
 import logging
 import time
 import io
@@ -89,18 +100,23 @@ class CloudFramePusher:
         is_keyframe: bool = False,
         frame_number: int = 0,
         keyframe_number: int = 0,
+        prompt: Optional[str] = None,
     ) -> bool:
         """
-        Encode and push a frame to VPS
+        Encode and push a frame to VPS with metadata
         
         Args:
             image: PIL Image to push
             is_keyframe: Whether this is a keyframe (vs interpolation)
-            frame_number: Sequential frame number
+            frame_number: Sequential frame number (server-authoritative)
             keyframe_number: Current keyframe number
+            prompt: Prompt text for this frame's keyframe (optional)
         
         Returns:
             True if pushed successfully
+        
+        Message format (v2):
+            0x01 | metadata_len (4 bytes BE) | JSON metadata | WebP data
         """
         # Check if we should push this frame
         if not is_keyframe and not self.include_interpolations:
@@ -118,9 +134,21 @@ class CloudFramePusher:
             frame_bytes = self._encode_frame(image)
             encode_time = time.time() - start_time
             
-            # Push via WebSocket
+            # Build metadata JSON
+            metadata = {
+                "fn": frame_number,
+                "kf": keyframe_number,
+            }
+            if prompt:
+                metadata["p"] = prompt
+            
+            metadata_bytes = json.dumps(metadata, separators=(',', ':')).encode('utf-8')
+            
+            # Push via WebSocket (with metadata)
             push_start = time.time()
-            success = await self.ws_client.send_frame(frame_bytes)
+            success = await self.ws_client.send_frame_with_metadata(
+                frame_bytes, metadata_bytes
+            )
             push_time = time.time() - push_start
             
             total_time = time.time() - start_time
@@ -128,7 +156,7 @@ class CloudFramePusher:
             if success:
                 # Update statistics
                 self.frames_pushed += 1
-                self.bytes_pushed += len(frame_bytes)
+                self.bytes_pushed += len(frame_bytes) + len(metadata_bytes) + 4
                 
                 if is_keyframe:
                     self.keyframes_pushed += 1

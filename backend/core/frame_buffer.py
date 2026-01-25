@@ -69,6 +69,7 @@ class FrameSpec:
     
     # Metadata
     generated_at: Optional[float] = None
+    prompt: Optional[str] = None  # Prompt text for this frame's keyframe
     
     def is_keyframe(self) -> bool:
         """Check if this is a keyframe"""
@@ -249,18 +250,26 @@ class FrameBuffer:
             self.frames[sequence_num].state = FrameState.GENERATING
             logger.debug(f"Marked generating: {self.frames[sequence_num]}")
     
-    def mark_ready(self, sequence_num: int, file_path: Optional[Path] = None) -> None:
+    def mark_ready(
+        self, 
+        sequence_num: int, 
+        file_path: Optional[Path] = None,
+        prompt: Optional[str] = None
+    ) -> None:
         """
         Mark a frame as ready (generation complete)
         
         Args:
             sequence_num: Sequence number of the frame
             file_path: Path where frame was saved (optional, uses registered path if None)
+            prompt: Prompt text for this keyframe (optional, for debugging/display)
         """
         if sequence_num in self.frames:
             self.frames[sequence_num].state = FrameState.READY
             if file_path:
                 self.frames[sequence_num].file_path = file_path
+            if prompt:
+                self.frames[sequence_num].prompt = prompt
             self.frames[sequence_num].generated_at = time.time()
             logger.debug(f"Marked ready: {self.frames[sequence_num]}")
     

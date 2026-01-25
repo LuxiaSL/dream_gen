@@ -52,7 +52,7 @@ class DisplayFrameSelector:
         target_fps: float = 4.0,
         min_buffer_seconds: float = 30.0,
         cleanup_displayed_frames: bool = False,
-        on_frame_callback: Optional[Callable[[Image.Image, int, bool], Awaitable[None]]] = None,
+        on_frame_callback: Optional[Callable[[Image.Image, int, bool, int, Optional[str]], Awaitable[None]]] = None,
         skip_disk_write: bool = False,
         keyframe_worker=None,  # Optional: KeyframeWorker for source image protection
         interpolation_worker=None  # Optional: InterpolationWorker for pending interpolation protection
@@ -66,7 +66,7 @@ class DisplayFrameSelector:
             target_fps: Target frame rate for display
             min_buffer_seconds: Minimum buffer before starting playback
             cleanup_displayed_frames: Whether to delete frames immediately after display
-            on_frame_callback: Optional async callback(image, frame_num, is_keyframe) 
+            on_frame_callback: Optional async callback(image, frame_num, is_keyframe, keyframe_num, prompt) 
                                called for each displayed frame (e.g., for cloud push)
             skip_disk_write: If True, skip writing current_frame.png (cloud mode optimization)
             keyframe_worker: Optional KeyframeWorker instance - if provided, will check
@@ -102,6 +102,11 @@ class DisplayFrameSelector:
         self.skipped_frames = 0
         self.last_frame_time = 0
         self._depletion_count = 0
+        
+        # Track current prompt (updated on keyframe display)
+        # Interpolated frames inherit the prompt from their start keyframe
+        self._current_prompt: Optional[str] = None
+        self._current_keyframe_num: int = 0
         
         # Output path
         self.current_frame_path = self.output_dir / "current_frame.png"
@@ -207,11 +212,24 @@ class DisplayFrameSelector:
             if not self.skip_disk_write:
                 await self._write_current_frame_async(image)
             
+            # Update current prompt and keyframe number on keyframe display
+            is_keyframe = frame_spec.frame_type.value == 'keyframe'
+            if is_keyframe:
+                if frame_spec.prompt:
+                    self._current_prompt = frame_spec.prompt
+                if frame_spec.keyframe_num is not None:
+                    self._current_keyframe_num = frame_spec.keyframe_num
+            
             # Call optional callback (e.g., for cloud push)
             if self.on_frame_callback:
                 try:
-                    is_keyframe = frame_spec.frame_type.value == 'keyframe'
-                    await self.on_frame_callback(image, self.frames_displayed, is_keyframe)
+                    await self.on_frame_callback(
+                        image, 
+                        self.frames_displayed, 
+                        is_keyframe,
+                        self._current_keyframe_num,
+                        self._current_prompt
+                    )
                 except Exception as callback_error:
                     logger.warning(f"Frame callback error (non-fatal): {callback_error}")
             

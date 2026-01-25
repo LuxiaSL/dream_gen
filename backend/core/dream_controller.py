@@ -707,16 +707,25 @@ class DreamController:
             self.logger.error(f"Failed to restore state: {e}", exc_info=True)
             # Continue without restored state - will start fresh
     
-    async def _on_frame_displayed(self, image: Image, frame_number: int, is_keyframe: bool) -> None:
+    async def _on_frame_displayed(
+        self, 
+        image: Image, 
+        frame_number: int, 
+        is_keyframe: bool,
+        keyframe_number: int = 0,
+        prompt: Optional[str] = None
+    ) -> None:
         """
         Callback invoked when a frame is displayed
         
-        Pushes the frame to cloud if enabled.
+        Pushes the frame to cloud if enabled, including metadata for viewer display.
         
         Args:
             image: PIL Image being displayed
             frame_number: Sequential frame number
             is_keyframe: Whether this is a keyframe
+            keyframe_number: Current keyframe number
+            prompt: Prompt text for the current keyframe
         """
         if not self.cloud_enabled or not self.frame_pusher:
             return
@@ -725,6 +734,8 @@ class DreamController:
             image=image,
             is_keyframe=is_keyframe,
             frame_number=frame_number,
+            keyframe_number=keyframe_number,
+            prompt=prompt,
         )
 
     def get_bootstrap_frame(self) -> Optional[Path]:

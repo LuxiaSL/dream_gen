@@ -124,7 +124,7 @@ class ActivityWatchdog:
         await watchdog.run(restart_callback)  # Background monitoring task
     """
     
-    def __init__(self, timeout_seconds: float = 90.0, max_restarts: int = 3):
+    def __init__(self, timeout_seconds: float = 120.0, max_restarts: int = 3):
         """
         Initialize the watchdog.
         
@@ -670,9 +670,9 @@ async def run_dream_generation(
         logger.info("Starting generation loop with watchdog...")
         controller.running = True
         
-        # Create watchdog with 90s timeout, max 3 restarts
+        # Create watchdog with 120s timeout, max 3 restarts
         global _watchdog
-        _watchdog = ActivityWatchdog(timeout_seconds=90.0, max_restarts=3)
+        _watchdog = ActivityWatchdog(timeout_seconds=120.0, max_restarts=3)
         
         # Hook watchdog heartbeat to frame pusher via callback (clean, no monkey-patching)
         if hasattr(controller, 'frame_pusher') and controller.frame_pusher:
