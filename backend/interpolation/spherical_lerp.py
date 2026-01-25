@@ -39,6 +39,9 @@ def spherical_lerp(
     Returns:
         Interpolated latent tensor (same shape as inputs)
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    
     # Validate inputs
     if latent_a.shape != latent_b.shape:
         raise ValueError(f"Latent shapes must match: {latent_a.shape} != {latent_b.shape}")
@@ -56,8 +59,9 @@ def spherical_lerp(
     if precomputed is not None:
         a_norm, b_norm, omega, sin_omega, mag_a, mag_b, original_shape = precomputed
         
-        # If vectors are nearly identical, fall back to linear
-        if torch.abs(omega) < epsilon:
+        # If vectors are nearly identical OR sin_omega is too small (numerical instability)
+        # Use a larger threshold for sin_omega to avoid division by near-zero
+        if torch.abs(omega) < epsilon or torch.abs(sin_omega) < 1e-4:
             result_magnitude = (1.0 - t) * mag_a + t * mag_b
             result_norm = (1.0 - t) * a_norm + t * b_norm
             result_flat = result_norm * result_magnitude
@@ -66,15 +70,36 @@ def spherical_lerp(
             weight_a = torch.sin((1.0 - t) * omega) / sin_omega
             weight_b = torch.sin(t * omega) / sin_omega
             
-            # Interpolate on unit sphere
-            result_norm = weight_a * a_norm + weight_b * b_norm
-            
-            # Scale back to interpolated magnitude
-            result_magnitude = (1.0 - t) * mag_a + t * mag_b
-            result_flat = result_norm * result_magnitude
+            # === DIAGNOSTIC: Check for NaN/Inf in weights ===
+            if torch.isnan(weight_a) or torch.isnan(weight_b) or torch.isinf(weight_a) or torch.isinf(weight_b):
+                logger.error(
+                    f"[SLERP DIAGNOSTIC] NaN/Inf in weights: "
+                    f"omega={omega.item():.6f}, sin_omega={sin_omega.item():.6f}, "
+                    f"t={t}, weight_a={weight_a.item()}, weight_b={weight_b.item()}"
+                )
+                # Fall back to linear interpolation
+                result_magnitude = (1.0 - t) * mag_a + t * mag_b
+                result_norm = (1.0 - t) * a_norm + t * b_norm
+                result_flat = result_norm * result_magnitude
+            else:
+                # Interpolate on unit sphere
+                result_norm = weight_a * a_norm + weight_b * b_norm
+                
+                # Scale back to interpolated magnitude
+                result_magnitude = (1.0 - t) * mag_a + t * mag_b
+                result_flat = result_norm * result_magnitude
         
         # Reshape back
         result = result_flat.reshape(original_shape)
+        
+        # === DIAGNOSTIC: Check result for NaN/Inf ===
+        if torch.isnan(result).any() or torch.isinf(result).any():
+            nan_count = torch.isnan(result).sum().item()
+            inf_count = torch.isinf(result).sum().item()
+            logger.error(
+                f"[SLERP DIAGNOSTIC] CORRUPTED RESULT: NaN={nan_count}, Inf={inf_count}, t={t}"
+            )
+        
         return result
     
     # Standard path (no pre-computed values)

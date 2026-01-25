@@ -348,6 +348,146 @@ class ComfyUIClient:
             logger.error(f"[WAIT FAIL] Unexpected error after {elapsed:.2f}s for prompt_id={prompt_id}: {e}", exc_info=True)
             return False
 
+    async def queue_and_wait(
+        self,
+        workflow: Dict[str, Any],
+        timeout: float = 60.0
+    ) -> Optional[str]:
+        """
+        Queue a workflow and wait for completion - RACE CONDITION SAFE.
+        
+        This method connects the WebSocket BEFORE submitting the prompt,
+        ensuring we're already listening when ComfyUI sends execution messages.
+        This prevents the race condition where fast prompts complete before
+        the WebSocket connection is established.
+        
+        Args:
+            workflow: ComfyUI workflow JSON (node graph)
+            timeout: Maximum time to wait (seconds)
+        
+        Returns:
+            prompt_id if successful, None if failed
+        """
+        # Build WebSocket URL with correct scheme
+        if self.base_url.startswith("https://"):
+            ws_url = f"wss://{self.base_url[8:]}/ws?clientId={self.client_id}"
+        else:
+            ws_url = f"ws://{self.base_url[7:]}/ws?clientId={self.client_id}"
+        
+        # Build headers for basic auth if needed
+        headers = {}
+        if self._has_auth:
+            import base64
+            credentials = f"{self.auth_user}:{self.auth_pass}"
+            auth_b64 = base64.b64encode(credentials.encode()).decode()
+            headers["Authorization"] = f"Basic {auth_b64}"
+        
+        start_time = time.time()
+        prompt_id = None
+        
+        logger.info(f"[QUEUE+WAIT] Connecting WebSocket BEFORE submitting prompt...")
+        
+        try:
+            # Connect WebSocket FIRST - this is the key fix!
+            connect_start = time.time()
+            try:
+                websocket = await websockets.connect(ws_url, additional_headers=headers)
+            except TypeError:
+                websocket = await websockets.connect(ws_url, extra_headers=headers)
+            
+            connect_time = time.time() - connect_start
+            logger.info(f"[QUEUE+WAIT] WebSocket connected in {connect_time:.3f}s - NOW submitting prompt")
+            
+            async with websocket:
+                # NOW submit the prompt (WebSocket is already listening)
+                payload = {
+                    "prompt": workflow,
+                    "client_id": self.client_id,
+                }
+                
+                submit_time = time.time()
+                try:
+                    response = self.session.post(
+                        f"{self.base_url}/prompt",
+                        json=payload,
+                        timeout=10.0,
+                    )
+                    response_time = time.time() - submit_time
+                    response.raise_for_status()
+                    result = response.json()
+                    prompt_id = result.get("prompt_id")
+                    
+                    if not prompt_id:
+                        logger.error(f"[QUEUE+WAIT] No prompt_id in response: {result}")
+                        return None
+                    
+                    logger.info(f"[QUEUE+WAIT] prompt_id={prompt_id} (submit: {response_time:.3f}s)")
+                    
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"[QUEUE+WAIT] Submit failed: {e}")
+                    return None
+                
+                # Wait for completion (WebSocket was connected BEFORE submit)
+                execution_started = False
+                last_progress_time = time.time()
+                messages_received = 0
+                
+                while True:
+                    elapsed = time.time() - start_time
+                    if elapsed > timeout:
+                        logger.error(f"[QUEUE+WAIT TIMEOUT] prompt_id={prompt_id} after {elapsed:.1f}s")
+                        return None
+                    
+                    if not execution_started and elapsed > 10 and int(elapsed) % 10 == 0:
+                        logger.warning(f"[QUEUE+WAIT] Still waiting for execution_start after {elapsed:.0f}s (prompt_id={prompt_id})")
+                    
+                    try:
+                        message = await asyncio.wait_for(websocket.recv(), timeout=1.0)
+                        data = json.loads(message)
+                        messages_received += 1
+                        msg_type = data.get("type")
+                        
+                        if msg_type == "progress":
+                            last_progress_time = time.time()
+                        
+                        elif msg_type == "execution_start":
+                            exec_prompt_id = data.get("data", {}).get("prompt_id")
+                            if exec_prompt_id == prompt_id:
+                                execution_started = True
+                                last_progress_time = time.time()
+                                logger.info(f"[QUEUE+WAIT] Execution started for prompt_id={prompt_id}")
+                        
+                        elif msg_type in ("execution_success", "executed"):
+                            exec_prompt_id = data.get("data", {}).get("prompt_id")
+                            if exec_prompt_id == prompt_id:
+                                elapsed = time.time() - start_time
+                                logger.info(f"[QUEUE+WAIT OK] prompt_id={prompt_id} completed in {elapsed:.2f}s")
+                                return prompt_id
+                        
+                        elif msg_type == "execution_error":
+                            exec_data = data.get("data", {})
+                            exec_prompt_id = exec_data.get("prompt_id")
+                            if exec_prompt_id == prompt_id:
+                                error_msg = exec_data.get("exception_message", "Unknown error")
+                                logger.error(f"[QUEUE+WAIT FAIL] prompt_id={prompt_id}: {error_msg}")
+                                return None
+                    
+                    except asyncio.TimeoutError:
+                        silence_duration = time.time() - last_progress_time
+                        if silence_duration > 30:
+                            logger.warning(f"[QUEUE+WAIT STALL] No activity for {silence_duration:.0f}s")
+                            last_progress_time = time.time()
+                        continue
+                    except json.JSONDecodeError:
+                        continue
+        
+        except websockets.exceptions.WebSocketException as e:
+            logger.error(f"[QUEUE+WAIT FAIL] WebSocket error: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"[QUEUE+WAIT FAIL] Unexpected error: {e}", exc_info=True)
+            return None
+
     def get_history(
         self, 
         prompt_id: Optional[str] = None,

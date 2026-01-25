@@ -505,24 +505,80 @@ class LatentEncoder:
         # Unscale latents (same as full VAE path)
         scaled_latents = latents / self.vae_scale_factor
         
+        # === DIAGNOSTIC: Check for NaN/Inf in input latents ===
+        if torch.isnan(scaled_latents).any() or torch.isinf(scaled_latents).any():
+            nan_count = torch.isnan(scaled_latents).sum().item()
+            inf_count = torch.isinf(scaled_latents).sum().item()
+            logger.error(
+                f"[TAESD DIAGNOSTIC] CORRUPTED INPUT LATENTS: "
+                f"NaN={nan_count}, Inf={inf_count} in batch of {latents.shape[0]}"
+            )
+            # Try to recover by replacing NaN/Inf with zeros
+            scaled_latents = torch.nan_to_num(scaled_latents, nan=0.0, posinf=0.0, neginf=0.0)
+        
         with torch.no_grad():
             decoder_output = self.taesd.decode(scaled_latents)
             image_tensors = decoder_output.sample
+            
+            # === DIAGNOSTIC: Check for NaN/Inf in output ===
+            if torch.isnan(image_tensors).any() or torch.isinf(image_tensors).any():
+                nan_count = torch.isnan(image_tensors).sum().item()
+                inf_count = torch.isinf(image_tensors).sum().item()
+                logger.error(
+                    f"[TAESD DIAGNOSTIC] CORRUPTED OUTPUT: "
+                    f"NaN={nan_count}, Inf={inf_count} - replacing with zeros"
+                )
+                image_tensors = torch.nan_to_num(image_tensors, nan=0.5, posinf=1.0, neginf=0.0)
             
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
         
         decode_ms = (time.perf_counter() - t_start) * 1000
         
-        # Postprocess - SAME as full VAE
-        # Testing showed TAESD actual output range is ~[-2, 1.5] (similar to VAE's [-1, 1])
-        # despite README claiming [0, 1]. The VAE postprocessing handles this correctly.
-        # See _taesd_research/TAESD_INTEGRATION_PLAN.md section 4 for details.
+        # === DIAGNOSTIC: Log actual output range for each frame ===
+        batch_size = image_tensors.shape[0]
+        raw_min = image_tensors.min().item()
+        raw_max = image_tensors.max().item()
+        
+        # Check per-frame ranges to detect outliers
+        anomalous_frames = []
+        for i in range(batch_size):
+            frame_min = image_tensors[i].min().item()
+            frame_max = image_tensors[i].max().item()
+            # Flag frames with unusual ranges (mostly negative or > 1.5)
+            if frame_min < -0.5 or frame_max < 0.5:
+                anomalous_frames.append((i, frame_min, frame_max))
+        
+        if anomalous_frames:
+            logger.warning(
+                f"[TAESD DIAGNOSTIC] Anomalous frames detected in batch of {batch_size}:"
+            )
+            for i, fmin, fmax in anomalous_frames:
+                logger.warning(f"  Frame {i}: range [{fmin:.3f}, {fmax:.3f}]")
+        
+        # Log batch statistics periodically (every batch, reduce to every 5th if too noisy)
+        logger.debug(
+            f"[TAESD] Batch {batch_size} frames: raw output range [{raw_min:.3f}, {raw_max:.3f}]"
+        )
+        
+        # Postprocess TAESD output to [0, 255]
+        # 
+        # TAESD nominally outputs in [0, 1] range (per the model's training).
+        # However, out-of-distribution latents (like slerp interpolations) can produce
+        # values outside this range. We use clamp + scale which matches the test file
+        # approach from test_taesd_compatibility.py.
+        #
+        # The VAE-style postprocessing (x*0.5+0.5) assumes [-1, 1] input which would
+        # cause washout if TAESD actually outputs [0, 1].
         t_post = time.perf_counter()
-        image_tensors = (image_tensors * 0.5 + 0.5) * 255.0
-        image_tensors = torch.clamp(image_tensors, 0.0, 255.0)
+        
+        # Clamp to [0, 1] then scale to [0, 255]
+        # This is the correct approach for TAESD per the test file
+        image_tensors = torch.clamp(image_tensors, 0.0, 1.0) * 255.0
         image_tensors = image_tensors.to(dtype=torch.uint8)
         image_tensors = image_tensors.permute(0, 2, 3, 1)
+        
+        postprocess_mode = "clamp_01"
         
         # Single GPU→CPU transfer
         image_arrays = image_tensors.cpu().numpy()
@@ -535,12 +591,13 @@ class LatentEncoder:
         
         total_ms = decode_ms + post_ms + pil_ms
         
-        # Log timing (TAESD should be much faster)
+        # Log timing and postprocess mode (TAESD should be much faster)
         if total_ms > 100 or len(images) > 5:
             logger.info(
                 f"[PERF] TAESD batch decode {len(images)} frames: "
                 f"decode={decode_ms:.0f}ms, post={post_ms:.0f}ms, PIL={pil_ms:.0f}ms, "
-                f"total={total_ms:.0f}ms ({total_ms/len(images):.1f}ms/frame)"
+                f"total={total_ms:.0f}ms ({total_ms/len(images):.1f}ms/frame), "
+                f"postprocess={postprocess_mode}, range=[{raw_min:.2f},{raw_max:.2f}]"
             )
         
         # Release reserved VRAM for ComfyUI

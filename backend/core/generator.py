@@ -503,33 +503,25 @@ class DreamGenerator:
         Returns:
             Path to generated image in our output directory
         """
-        # Queue prompt
-        logger.debug("Queueing workflow to ComfyUI (async)...")
-        prompt_id = self.client.queue_prompt(workflow)
-        if not prompt_id:
-            logger.error("Failed to queue workflow")
-            return None
-        
-        logger.info(f"Workflow queued with prompt_id: {prompt_id}")
-        
-        # Wait for completion via WebSocket (ASYNC - doesn't block event loop!)
+        # Queue prompt and wait for completion (race-condition safe!)
+        # This connects WebSocket BEFORE submitting to prevent missing fast execution messages
         try:
             timeout = self.config["performance"]["generation_timeout"]
             
-            logger.debug(f"Waiting for completion via WebSocket (timeout: {timeout}s)...")
-            success = await self.client.wait_for_completion(
-                prompt_id=prompt_id,
+            logger.debug(f"Queueing workflow with race-safe queue_and_wait (timeout: {timeout}s)...")
+            prompt_id = await self.client.queue_and_wait(
+                workflow=workflow,
                 timeout=timeout
             )
             
-            if not success:
-                logger.error(f"Generation failed or timed out (prompt_id: {prompt_id})")
+            if not prompt_id:
+                logger.error("Generation failed or timed out")
                 return None
             
             logger.debug(f"Generation completed (prompt_id: {prompt_id})")
             
         except Exception as e:
-            logger.error(f"Error waiting for completion: {e}", exc_info=True)
+            logger.error(f"Error in queue_and_wait: {e}", exc_info=True)
             return None
         
         # Get output images
