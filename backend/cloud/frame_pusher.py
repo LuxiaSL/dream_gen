@@ -201,58 +201,58 @@ class CloudFramePusher:
             
             total_time = time.time() - start_time
             
-                if success:
-                    # Frame was queued if we weren't connected when we started the send
-                    was_queued = not was_connected_before
-                    
-                    # Update statistics
-                    self.frames_pushed += 1
-                    self.bytes_pushed += len(frame_bytes) + len(metadata_bytes) + 4
-                    
-                    if is_keyframe:
-                        self.keyframes_pushed += 1
-                    else:
-                        self.interpolations_pushed += 1
-                    
-                    # Invoke callback on ANY successful frame processing (sent OR queued).
-                    # This is critical for watchdog heartbeat - the system is "alive" if
-                    # it's encoding frames, even if VPS is disconnected and frames queue.
-                    # Previously, only sent frames triggered heartbeat, causing false
-                    # watchdog timeouts during VPS reconnection attempts.
-                    if self._on_push_callback:
-                        try:
-                            self._on_push_callback()
-                        except Exception as e:
-                            logger.warning(f"Push callback failed: {e}")
-                    
-                    if was_queued:
-                        self.frames_queued += 1
-                        # Don't log every queued frame, just periodically
-                        if self.frames_queued % 10 == 1:
-                            logger.info(
-                                f"Frame {frame_number} queued (total queued: {self.frames_queued}, "
-                                f"queue size: {self.ws_client.queue_size})"
-                            )
-                    else:
-                        # Track timing (only for actually sent frames)
-                        self._record_timing(total_time)
-                        
-                        # Log frame push timing (always log for profiling)
-                        logger.debug(
-                            f"Pushed frame {frame_number}: {len(frame_bytes)/1024:.1f}KB "
-                            f"(encode: {encode_time*1000:.1f}ms, push: {push_time*1000:.1f}ms)"
+            if success:
+                # Frame was queued if we weren't connected when we started the send
+                was_queued = not was_connected_before
+                
+                # Update statistics
+                self.frames_pushed += 1
+                self.bytes_pushed += len(frame_bytes) + len(metadata_bytes) + 4
+                
+                if is_keyframe:
+                    self.keyframes_pushed += 1
+                else:
+                    self.interpolations_pushed += 1
+                
+                # Invoke callback on ANY successful frame processing (sent OR queued).
+                # This is critical for watchdog heartbeat - the system is "alive" if
+                # it's encoding frames, even if VPS is disconnected and frames queue.
+                # Previously, only sent frames triggered heartbeat, causing false
+                # watchdog timeouts during VPS reconnection attempts.
+                if self._on_push_callback:
+                    try:
+                        self._on_push_callback()
+                    except Exception as e:
+                        logger.warning(f"Push callback failed: {e}")
+                
+                if was_queued:
+                    self.frames_queued += 1
+                    # Don't log every queued frame, just periodically
+                    if self.frames_queued % 10 == 1:
+                        logger.info(
+                            f"Frame {frame_number} queued (total queued: {self.frames_queued}, "
+                            f"queue size: {self.ws_client.queue_size})"
                         )
-                        
-                        # Log slow pushes for performance debugging
-                        if total_time > 0.1:  # > 100ms is concerning
-                            logger.info(
-                                f"[PERF] Slow frame push {frame_number}: {total_time*1000:.1f}ms total "
-                                f"(encode={encode_time*1000:.1f}ms, network={push_time*1000:.1f}ms, "
-                                f"size={len(frame_bytes)/1024:.1f}KB)"
-                            )
-                        
-                        # Record to perf stats (tracks push throughput to VPS)
-                        get_perf_stats().record_frame_push(total_time)
+                else:
+                    # Track timing (only for actually sent frames)
+                    self._record_timing(total_time)
+                    
+                    # Log frame push timing (always log for profiling)
+                    logger.debug(
+                        f"Pushed frame {frame_number}: {len(frame_bytes)/1024:.1f}KB "
+                        f"(encode: {encode_time*1000:.1f}ms, push: {push_time*1000:.1f}ms)"
+                    )
+                    
+                    # Log slow pushes for performance debugging
+                    if total_time > 0.1:  # > 100ms is concerning
+                        logger.info(
+                            f"[PERF] Slow frame push {frame_number}: {total_time*1000:.1f}ms total "
+                            f"(encode={encode_time*1000:.1f}ms, network={push_time*1000:.1f}ms, "
+                            f"size={len(frame_bytes)/1024:.1f}KB)"
+                        )
+                    
+                    # Record to perf stats (tracks push throughput to VPS)
+                    get_perf_stats().record_frame_push(total_time)
             
             return success
         
