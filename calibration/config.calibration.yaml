@@ -27,19 +27,22 @@ generation:
   # Model type for WorkflowBuilder
   model: "sd15"
   
-  # SD 1.5 settings (read by WorkflowBuilder)
-  sd:
-    steps: 4
-    cfg_scale: 1.0
-    sampler: "euler"        # Must be valid FSamplerAdvanced sampler
-    scheduler: "simple"
+  # Resolution - MUST MATCH config.pod.yaml for valid baseline
+  resolution: [1024, 512]
   
-  # Pipeline settings (read by calibration benchmark)
+  # SD 1.5 settings (read by WorkflowBuilder) - MATCHES config.pod.yaml
+  sd:
+    steps: 15
+    cfg_scale: 8.0
+    sampler: "euler"
+    scheduler: "karras"
+  
+  # Pipeline settings (read by calibration benchmark) - MATCHES config.pod.yaml
   pipeline:
-    width: 512
-    height: 288
-    steps: 4
-    cfg: 1.0
+    width: 1024
+    height: 512
+    steps: 15
+    cfg: 8.0
     
   infinite:
     # We're generating keyframes only, no interpolation
