@@ -97,11 +97,13 @@ cd /app/ComfyUI
 
 # Verbose logging: shows prompt IDs, execution status, and detailed progress
 # This helps debug issues where prompts are submitted but results aren't received
-# Set COMFYUI_VERBOSE=0 to disable if needed
+# WARNING: --verbose causes FSampler (and possibly other nodes) to call cuda.synchronize()
+# on every step, which can SEVERELY degrade performance (4-6x slower!)
+# Set COMFYUI_VERBOSE=1 to enable if needed for debugging
 VERBOSE_FLAG=""
-if [ "${COMFYUI_VERBOSE:-1}" != "0" ]; then
+if [ "${COMFYUI_VERBOSE:-0}" == "1" ]; then
     VERBOSE_FLAG="--verbose"
-    echo "Verbose logging enabled (prompt IDs will be logged)"
+    echo "WARNING: Verbose logging enabled - this may significantly slow down generation!"
 fi
 
 # Start ComfyUI in background
