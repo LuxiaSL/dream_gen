@@ -632,9 +632,35 @@ async def run_dream_generation(
             controller.cloud_enabled = True
             controller._init_cloud_mode()
         
-        # Connect to VPS
+        # Connect to VPS with lifecycle callbacks for self-healing coordination
         vps_client = controller.vps_client
         if vps_client:
+            # Set up lifecycle callbacks for connection events
+            async def on_vps_disconnected():
+                logger.warning("VPS_LIFECYCLE: Connection lost - frames will be queued")
+                # Could pause generation here if needed, but queueing is preferred
+            
+            async def on_vps_reconnecting(attempt: int, url: str):
+                logger.info(f"VPS_LIFECYCLE: Reconnecting (attempt {attempt}) to {url}")
+            
+            async def on_vps_reconnected():
+                logger.info("VPS_LIFECYCLE: Connection restored - resuming normal operation")
+                # Re-send FPS config after reconnection
+                try:
+                    target_fps = controller.config.get('generation', {}).get('hybrid', {}).get('target_interpolation_fps', 5.0)
+                    import json
+                    fps_config = json.dumps({"target_fps": target_fps}).encode('utf-8')
+                    await vps_client.send_status(fps_config)
+                    logger.info(f"VPS_LIFECYCLE: Re-sent target FPS after reconnect: {target_fps}")
+                except Exception as e:
+                    logger.warning(f"VPS_LIFECYCLE: Failed to re-send FPS config: {e}")
+            
+            vps_client.set_lifecycle_callbacks(
+                on_disconnected=on_vps_disconnected,
+                on_reconnecting=on_vps_reconnecting,
+                on_reconnected=on_vps_reconnected,
+            )
+            
             logger.info("Connecting to VPS...")
             connected = await vps_client.connect()
             if not connected:
