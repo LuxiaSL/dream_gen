@@ -262,8 +262,9 @@ class CalibrationBenchmark:
         # Frame storage
         self.frames: List[FrameRecord] = []
         
-        # ComfyUI client (lazy init)
+        # ComfyUI client and workflow builder (lazy init)
         self._comfy_client = None
+        self._workflow_builder = None
         
     def _load_config(self, config_path: Optional[Path]) -> dict:
         """Load configuration, searching common paths"""
@@ -330,19 +331,25 @@ class CalibrationBenchmark:
             logger.warning(f"Could not initialize CombinatorialPromptSystem: {e}")
             self.prompt_system = None
     
-    async def _get_comfy_client(self):
+    def _get_comfy_client(self):
         """Lazy-init ComfyUI client"""
         if self._comfy_client is None:
             try:
-                from comfy.client import ComfyClient
+                from core.comfyui_api import ComfyUIClient
                 comfy_url = self.config.get('system', {}).get('comfyui_url', 'http://127.0.0.1:8188')
-                self._comfy_client = ComfyClient(comfy_url)
-                await self._comfy_client.connect()
-                logger.info(f"Connected to ComfyUI at {comfy_url}")
+                self._comfy_client = ComfyUIClient(comfy_url)
+                logger.info(f"Initialized ComfyUI client for {comfy_url}")
             except Exception as e:
-                logger.error(f"Failed to connect to ComfyUI: {e}")
+                logger.error(f"Failed to initialize ComfyUI client: {e}")
                 raise
         return self._comfy_client
+    
+    def _get_workflow_builder(self):
+        """Lazy-init workflow builder"""
+        if not hasattr(self, '_workflow_builder') or self._workflow_builder is None:
+            from core.workflow_builder import WorkflowBuilder
+            self._workflow_builder = WorkflowBuilder(self.config)
+        return self._workflow_builder
     
     async def _generate_keyframe(
         self,
@@ -351,13 +358,12 @@ class CalibrationBenchmark:
     ) -> Optional[Image.Image]:
         """Generate a keyframe using actual ComfyUI workflow"""
         try:
-            client = await self._get_comfy_client()
-            
-            from comfy.workflows import build_txt2img_workflow
+            client = self._get_comfy_client()
+            builder = self._get_workflow_builder()
             
             pipeline = self.config.get('generation', {}).get('pipeline', {})
             
-            workflow = build_txt2img_workflow(
+            workflow = builder.build_txt2img(
                 prompt=prompt,
                 negative_prompt=self.config.get('prompts', {}).get('negative', ''),
                 width=pipeline.get('width', 512),
@@ -367,10 +373,27 @@ class CalibrationBenchmark:
                 seed=seed or int(time.time() * 1000) % (2**32),
             )
             
-            result = await client.queue_prompt(workflow)
-            if result and 'images' in result:
-                return result['images'][0]
-            return None
+            # Queue and wait for completion
+            prompt_id = await client.queue_and_wait(workflow, timeout=60.0)
+            if not prompt_id:
+                logger.error("No prompt_id returned from queue_and_wait")
+                return None
+            
+            # Get output images
+            images = client.get_output_images(prompt_id)
+            if not images:
+                logger.error(f"No images in output for prompt {prompt_id}")
+                return None
+            
+            # Fetch the first image
+            image_data = client.get_image_data(images[0])
+            if not image_data:
+                logger.error(f"Failed to get image data for {images[0]}")
+                return None
+            
+            # Convert to PIL Image
+            from io import BytesIO
+            return Image.open(BytesIO(image_data))
             
         except Exception as e:
             logger.error(f"Keyframe generation failed: {e}")
