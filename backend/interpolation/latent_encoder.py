@@ -556,29 +556,54 @@ class LatentEncoder:
             for i, fmin, fmax in anomalous_frames:
                 logger.warning(f"  Frame {i}: range [{fmin:.3f}, {fmax:.3f}]")
         
-        # Log batch statistics periodically (every batch, reduce to every 5th if too noisy)
+        # === DIAGNOSTIC: Per-channel statistics ===
+        # Check if any channel has significantly different range (could explain color issues)
+        channel_stats = []
+        for c in range(3):  # R, G, B channels
+            ch_min = image_tensors[:, c, :, :].min().item()
+            ch_max = image_tensors[:, c, :, :].max().item()
+            ch_mean = image_tensors[:, c, :, :].mean().item()
+            channel_stats.append((ch_min, ch_max, ch_mean))
+        
+        # Log if channels have very different ranges
+        r_range = channel_stats[0][1] - channel_stats[0][0]
+        g_range = channel_stats[1][1] - channel_stats[1][0]
+        b_range = channel_stats[2][1] - channel_stats[2][0]
+        
+        if abs(r_range - g_range) > 0.5 or abs(r_range - b_range) > 0.5:
+            logger.warning(
+                f"[TAESD DIAGNOSTIC] Channel imbalance detected: "
+                f"R=[{channel_stats[0][0]:.2f},{channel_stats[0][1]:.2f}], "
+                f"G=[{channel_stats[1][0]:.2f},{channel_stats[1][1]:.2f}], "
+                f"B=[{channel_stats[2][0]:.2f},{channel_stats[2][1]:.2f}]"
+            )
+        
         logger.debug(
-            f"[TAESD] Batch {batch_size} frames: raw output range [{raw_min:.3f}, {raw_max:.3f}]"
+            f"[TAESD] Batch {batch_size} frames: "
+            f"range=[{raw_min:.3f},{raw_max:.3f}], "
+            f"R=[{channel_stats[0][0]:.2f},{channel_stats[0][1]:.2f}], "
+            f"G=[{channel_stats[1][0]:.2f},{channel_stats[1][1]:.2f}], "
+            f"B=[{channel_stats[2][0]:.2f},{channel_stats[2][1]:.2f}]"
         )
         
         # Postprocess TAESD output to [0, 255]
-        # 
-        # TAESD nominally outputs in [0, 1] range (per the model's training).
-        # However, out-of-distribution latents (like slerp interpolations) can produce
-        # values outside this range. We use clamp + scale which matches the test file
-        # approach from test_taesd_compatibility.py.
         #
-        # The VAE-style postprocessing (x*0.5+0.5) assumes [-1, 1] input which would
-        # cause washout if TAESD actually outputs [0, 1].
+        # RESEARCH FINDINGS (from _taesd_research/TAESD_INTEGRATION_PLAN.md):
+        # - TAESD README claims [0, 1] output, but actual testing showed [-2.075, 1.556]
+        # - This is similar to SD VAE's [-1, 1] range
+        # - Using VAE-style postprocessing: (x * 0.5 + 0.5) * 255
+        #
+        # NOTE: clamp(0,1) approach CRUSHES negative values to black, causing color loss!
+        # The research was done with random latents, but real slerp latents behave similarly.
         t_post = time.perf_counter()
         
-        # Clamp to [0, 1] then scale to [0, 255]
-        # This is the correct approach for TAESD per the test file
-        image_tensors = torch.clamp(image_tensors, 0.0, 1.0) * 255.0
+        # VAE-style postprocessing: maps [-1, 1] -> [0, 255]
+        image_tensors = (image_tensors * 0.5 + 0.5) * 255.0
+        image_tensors = torch.clamp(image_tensors, 0.0, 255.0)
         image_tensors = image_tensors.to(dtype=torch.uint8)
         image_tensors = image_tensors.permute(0, 2, 3, 1)
         
-        postprocess_mode = "clamp_01"
+        postprocess_mode = "vae_style"
         
         # Single GPU→CPU transfer
         image_arrays = image_tensors.cpu().numpy()
