@@ -109,8 +109,15 @@ class VPSWebSocketClient:
     CIRCUIT_BREAKER_RESET_TIME = 60.0  # Seconds before trying again after trip
     
     # Health monitoring settings
-    PING_TIMEOUT = 20.0  # Seconds to wait for pong before considering connection dead
-    HEALTH_CHECK_INTERVAL = 10.0  # Seconds between health checks
+    # NOTE: The websockets library already handles ping/pong with ping_timeout.
+    # This custom health monitor is a backup for detecting silent failures.
+    # It must be set HIGH to avoid false positives during warmup phase when
+    # no application-level messages are flowing (only websocket-level pings).
+    PING_TIMEOUT = 20.0  # Websocket library's ping timeout
+    HEALTH_CHECK_INTERVAL = 15.0  # Seconds between health checks
+    # Only trigger reconnect after this many seconds of silence.
+    # Set high to avoid false positives during warmup/idle periods.
+    HEALTH_DEAD_THRESHOLD = 90.0  # Seconds - must be > warmup time (~45s)
     
     # Message queue settings
     MAX_QUEUE_SIZE = 100  # Max messages to buffer during disconnect
@@ -419,6 +426,10 @@ class VPSWebSocketClient:
         
         Called when send/receive fails. Triggers lifecycle callback
         and schedules reconnection.
+        
+        IMPORTANT: This method properly closes the old WebSocket before
+        scheduling reconnection. This ensures the VPS knows the old
+        connection is dead and will accept the new one.
         """
         if not self._connected:
             return  # Already handled
@@ -429,6 +440,30 @@ class VPSWebSocketClient:
         self.stats.disconnect_time = time.time()
         
         logger.warning("Connection to VPS lost unexpectedly")
+        
+        # CRITICAL: Close the old WebSocket so VPS cleans up its reference.
+        # Without this, the VPS may still think the old connection is alive
+        # and reject our reconnection attempt with "GPU already connected".
+        if self._websocket:
+            try:
+                await self._websocket.close()
+            except Exception as e:
+                logger.debug(f"Error closing old WebSocket (expected if already dead): {e}")
+            self._websocket = None
+        
+        # Cancel background tasks that depend on the old connection
+        # They will be restarted when we reconnect
+        for task in [self._heartbeat_task, self._receive_task, self._health_monitor_task]:
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), timeout=1.0)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
+        
+        self._heartbeat_task = None
+        self._receive_task = None
+        self._health_monitor_task = None
         
         # Notify via lifecycle callback
         if self._on_disconnected:
@@ -762,8 +797,15 @@ class VPSWebSocketClient:
         """
         Proactive health monitoring
         
-        Checks connection health and triggers reconnection if connection
-        appears dead (no pong response for too long).
+        This is a BACKUP monitor for detecting silent connection failures.
+        The websockets library already handles ping/pong with its own timeout,
+        but this catches edge cases where the connection goes silent without
+        a clean disconnect.
+        
+        IMPORTANT: The threshold is set high (90s) to avoid false positives
+        during warmup/idle periods when no application-level messages flow.
+        During warmup, the GPU is generating frames locally and hasn't started
+        sending them yet, so VPS has nothing to send back.
         """
         while self._should_run:
             try:
@@ -772,19 +814,22 @@ class VPSWebSocketClient:
                 if not self.connected:
                     continue
                 
-                # Check if we've received a pong recently
+                # Check if we've received any message recently
+                # This tracks application-level messages, not websocket pings
                 if self.stats.last_pong_received:
-                    pong_age = time.time() - self.stats.last_pong_received
+                    silence_duration = time.time() - self.stats.last_pong_received
                     
-                    if pong_age > self.PING_TIMEOUT * 2:
+                    if silence_duration > self.HEALTH_DEAD_THRESHOLD:
                         logger.warning(
-                            f"Connection appears dead - no activity for {pong_age:.0f}s. "
+                            f"Connection appears dead - no activity for {silence_duration:.0f}s. "
                             f"Triggering reconnection..."
                         )
                         await self._handle_connection_lost()
-                    elif pong_age > self.PING_TIMEOUT:
-                        logger.warning(
-                            f"Connection may be degraded - no activity for {pong_age:.0f}s"
+                    elif silence_duration > self.HEALTH_DEAD_THRESHOLD * 0.5:
+                        # Warn at 50% threshold
+                        logger.info(
+                            f"No VPS messages for {silence_duration:.0f}s "
+                            f"(threshold: {self.HEALTH_DEAD_THRESHOLD:.0f}s)"
                         )
             
             except asyncio.CancelledError:
