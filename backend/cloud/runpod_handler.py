@@ -721,13 +721,17 @@ async def run_dream_generation(
                 except Exception as e:
                     logger.warning(f"Controller stop failed: {e}")
             
-            # Kill ComfyUI to ensure clean state
-            import subprocess
-            try:
-                subprocess.run(["pkill", "-f", "ComfyUI.*main.py"], timeout=5)
-                logger.info("ComfyUI process killed")
-            except Exception as e:
-                logger.warning(f"ComfyUI kill failed: {e}")
+            # In pod mode, ComfyUI is managed externally - don't try to restart it
+            if DREAMGEN_MODE == "pod":
+                logger.info("Pod mode: Skipping ComfyUI restart (managed externally)")
+            else:
+                # Serverless mode: Kill and restart ComfyUI
+                import subprocess
+                try:
+                    subprocess.run(["pkill", "-f", "ComfyUI.*main.py"], timeout=5)
+                    logger.info("ComfyUI process killed")
+                except Exception as e:
+                    logger.warning(f"ComfyUI kill failed: {e}")
             
             # Clear CUDA cache
             try:
@@ -742,11 +746,14 @@ async def run_dream_generation(
             # Wait a moment for cleanup
             await asyncio.sleep(2)
             
-            # Restart ComfyUI
-            logger.info("WATCHDOG RESTART: Restarting ComfyUI...")
-            if not await start_comfyui():
-                logger.error("Failed to restart ComfyUI!")
-                raise RuntimeError("Watchdog restart failed: ComfyUI won't start")
+            # Restart ComfyUI (only in serverless mode)
+            if DREAMGEN_MODE != "pod":
+                logger.info("WATCHDOG RESTART: Restarting ComfyUI...")
+                if not await start_comfyui():
+                    logger.error("Failed to restart ComfyUI!")
+                    raise RuntimeError("Watchdog restart failed: ComfyUI won't start")
+            else:
+                logger.info("Pod mode: Checking if ComfyUI is still healthy...")
             
             # Restart the controller's generation loop
             # This is done by simply returning - the generation_task will be
