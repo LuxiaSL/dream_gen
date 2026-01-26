@@ -83,9 +83,12 @@ ENV CALIBRATION_FRAMES=1500
 ENV CALIBRATION_OUTPUT_DIR=/workspace/calibration
 ENV COMFYUI_URL=http://127.0.0.1:8188
 
-# Health check
-HEALTHCHECK --interval=60s --timeout=30s --start-period=120s --retries=3 \
-    CMD test -f /workspace/calibration/.running || test -f /workspace/calibration/.complete || exit 1
+# Expose health check port
+EXPOSE 8080
+
+# Health check via HTTP endpoint (more reliable than file-based)
+HEALTHCHECK --interval=60s --timeout=10s --start-period=120s --retries=3 \
+    CMD curl -sf http://127.0.0.1:8080/health || test -f /workspace/calibration/.complete || exit 1
 
 # Copy and set entrypoint
 COPY docker/calibration-entrypoint.sh /app/calibration-entrypoint.sh

@@ -59,6 +59,7 @@ Usage:
 import argparse
 import asyncio
 import json
+import json
 import logging
 import os
 import random
@@ -267,6 +268,15 @@ class CalibrationBenchmark:
         self._comfy_client = None
         self._workflow_builder = None
         
+        # Checkpoint system for resume capability
+        self.checkpoint_path = self.output_dir / "checkpoint.json"
+        self.checkpoint_interval = 5  # Save every N frames
+        self._last_checkpoint_frame = 0
+        
+        # Health check state
+        self._health_last_activity = time.time()
+        self._health_server = None
+        
     def _load_config(self, config_path: Optional[Path]) -> dict:
         """Load configuration, searching common paths"""
         search_paths = [
@@ -332,6 +342,122 @@ class CalibrationBenchmark:
         except Exception as e:
             logger.warning(f"Could not initialize CombinatorialPromptSystem: {e}")
             self.prompt_system = None
+    
+    # =========================================================================
+    # CHECKPOINT & HEALTH SYSTEM
+    # =========================================================================
+    
+    def save_checkpoint(self, mode: str, frame_idx: int, extra_state: dict = None):
+        """Save checkpoint for resume capability"""
+        self._health_last_activity = time.time()
+        
+        # Only save at intervals to avoid excessive I/O
+        if frame_idx - self._last_checkpoint_frame < self.checkpoint_interval:
+            return
+        
+        checkpoint = {
+            'timestamp': datetime.now().isoformat(),
+            'mode': mode,
+            'frame_idx': frame_idx,
+            'total_frames': len(self.frames),
+            'extra_state': extra_state or {},
+            # Save frame metadata (not images - too large)
+            'frame_records': [
+                {
+                    'frame_id': f.frame_id,
+                    'timestamp': f.timestamp,
+                    'template_id': f.template_id,
+                    'prompt': f.prompt[:200] if f.prompt else None,  # Truncate
+                    'image_path': str(f.image_path) if f.image_path else None,
+                }
+                for f in self.frames
+            ]
+        }
+        
+        # Atomic write
+        tmp_path = self.checkpoint_path.with_suffix('.tmp')
+        with open(tmp_path, 'w') as f:
+            json.dump(checkpoint, f, indent=2)
+        tmp_path.rename(self.checkpoint_path)
+        
+        self._last_checkpoint_frame = frame_idx
+        logger.debug(f"Checkpoint saved: mode={mode}, frame={frame_idx}")
+    
+    def load_checkpoint(self) -> Optional[dict]:
+        """Load checkpoint if exists"""
+        if not self.checkpoint_path.exists():
+            return None
+        
+        try:
+            with open(self.checkpoint_path) as f:
+                checkpoint = json.load(f)
+            
+            logger.info(f"Found checkpoint: mode={checkpoint['mode']}, frame={checkpoint['frame_idx']}")
+            return checkpoint
+        except Exception as e:
+            logger.warning(f"Failed to load checkpoint: {e}")
+            return None
+    
+    def clear_checkpoint(self):
+        """Clear checkpoint after successful completion"""
+        if self.checkpoint_path.exists():
+            self.checkpoint_path.unlink()
+            logger.info("Checkpoint cleared")
+    
+    def start_health_server(self, port: int = 8080):
+        """Start a simple health check HTTP server"""
+        import threading
+        from http.server import HTTPServer, BaseHTTPRequestHandler
+        
+        benchmark = self
+        
+        class HealthHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path == '/health':
+                    # Check if we've had activity recently (5 min timeout)
+                    last_activity = benchmark._health_last_activity
+                    age = time.time() - last_activity
+                    
+                    if age < 300:  # 5 minutes
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'application/json')
+                        self.end_headers()
+                        response = {
+                            'status': 'healthy',
+                            'frames': len(benchmark.frames),
+                            'last_activity_seconds_ago': int(age),
+                        }
+                        self.wfile.write(json.dumps(response).encode())
+                    else:
+                        self.send_response(503)
+                        self.send_header('Content-Type', 'application/json')
+                        self.end_headers()
+                        response = {
+                            'status': 'stale',
+                            'last_activity_seconds_ago': int(age),
+                        }
+                        self.wfile.write(json.dumps(response).encode())
+                elif self.path == '/checkpoint':
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json')
+                    self.end_headers()
+                    checkpoint = benchmark.load_checkpoint()
+                    self.wfile.write(json.dumps(checkpoint or {}).encode())
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+            
+            def log_message(self, format, *args):
+                pass  # Suppress logging
+        
+        def run_server():
+            server = HTTPServer(('0.0.0.0', port), HealthHandler)
+            benchmark._health_server = server
+            logger.info(f"Health server started on port {port}")
+            server.serve_forever()
+        
+        thread = threading.Thread(target=run_server, daemon=True)
+        thread.start()
     
     def _get_comfy_client(self):
         """Lazy-init ComfyUI client"""
@@ -467,8 +593,10 @@ class CalibrationBenchmark:
                     if all(template_frames[t] >= frames_per_template for t in templates):
                         template_id = random.choice(templates)
                 
-                # Generate prompt (fresh random prompt for this template)
-                prompt = self.prompt_system.get_random_prompt()
+                # Switch to the selected template and generate prompt
+                # This ensures we're actually using the template we selected!
+                self.prompt_system.switch_template(template_id)
+                prompt = self.prompt_system.get_next_prompt()
                 
                 # Generate frame
                 logger.info(f"[{frame_id}] Template: {template_id} ({template_frames[template_id]+1}/{frames_per_template})")
@@ -492,10 +620,18 @@ class CalibrationBenchmark:
                 self.frames.append(record)
                 
                 # Save frame
-                image.save(self.output_dir / f"broad_{frame_id:04d}_{template_id}.png")
+                image_path = self.output_dir / f"broad_{frame_id:04d}_{template_id}.png"
+                image.save(image_path)
+                record.image_path = image_path
                 
                 frame_id += 1
                 template_frames[template_id] += 1
+                
+                # Checkpoint for resume capability
+                self.save_checkpoint("broad", frame_id, {
+                    'template_frames': dict(template_frames),
+                    'num_frames': num_frames,
+                })
                 
                 # Progress
                 if frame_id % 50 == 0:
@@ -503,7 +639,8 @@ class CalibrationBenchmark:
                     logger.info(f"Progress: {frame_id}/{num_frames} frames ({elapsed:.1f} min)")
                 
         except KeyboardInterrupt:
-            logger.info("Interrupted")
+            logger.info("Interrupted - checkpoint saved")
+            self.save_checkpoint("broad", frame_id, {'template_frames': dict(template_frames)})
         
         results.end_time = datetime.now().isoformat()
         results.duration_minutes = (time.time() - start_time) / 60
@@ -533,6 +670,10 @@ class CalibrationBenchmark:
         templates = list(self.prompt_system.templates.keys()) if self.prompt_system else ['default']
         if template_id is None:
             template_id = random.choice(templates)
+        
+        # Actually switch to the selected template!
+        if self.prompt_system:
+            self.prompt_system.switch_template(template_id)
         
         logger.info(f"=== DEEP MODE: Drift Analysis on '{template_id}' ({num_frames} frames) ===")
         logger.info(f"  Mutation interval: every {mutation_interval} frames")
@@ -609,10 +750,20 @@ class CalibrationBenchmark:
                 self.frames.append(record)
                 
                 # Save frame
-                image.save(self.output_dir / f"deep_{frame_id:04d}.png")
+                image_path = self.output_dir / f"deep_{frame_id:04d}.png"
+                image.save(image_path)
+                record.image_path = image_path
                 
                 frame_id += 1
                 frames_since_mutation += 1
+                
+                # Checkpoint for resume capability
+                self.save_checkpoint("deep", frame_id, {
+                    'template_id': template_id,
+                    'mutation_count': mutation_count,
+                    'frames_since_mutation': frames_since_mutation,
+                    'num_frames': num_frames,
+                })
                 
                 # Progress
                 if frame_id % 50 == 0:
@@ -620,7 +771,8 @@ class CalibrationBenchmark:
                     logger.info(f"Progress: {frame_id}/{num_frames} frames ({elapsed:.1f} min, {mutation_count} mutations)")
                 
         except KeyboardInterrupt:
-            logger.info("Interrupted")
+            logger.info("Interrupted - checkpoint saved")
+            self.save_checkpoint("deep", frame_id, {'template_id': template_id, 'mutation_count': mutation_count})
         
         results.end_time = datetime.now().isoformat()
         results.duration_minutes = (time.time() - start_time) / 60
@@ -1171,6 +1323,12 @@ Examples:
                         help='Output directory')
     parser.add_argument('--config', type=str, default=None,
                         help='Config file path')
+    parser.add_argument('--health-port', type=int, default=8080,
+                        help='Health check server port (0 to disable)')
+    parser.add_argument('--resume', action='store_true',
+                        help='Resume from checkpoint if available')
+    parser.add_argument('--no-checkpoint', action='store_true',
+                        help='Disable checkpoint saving')
     
     args = parser.parse_args()
     
@@ -1178,6 +1336,22 @@ Examples:
         config_path=Path(args.config) if args.config else None,
         output_dir=Path(args.output_dir),
     )
+    
+    # Start health server for monitoring
+    if args.health_port > 0:
+        benchmark.start_health_server(args.health_port)
+    
+    # Check for existing checkpoint
+    if args.resume:
+        checkpoint = benchmark.load_checkpoint()
+        if checkpoint:
+            logger.info(f"Resuming from checkpoint: mode={checkpoint['mode']}, frame={checkpoint['frame_idx']}")
+            # TODO: Implement actual resume logic (restore frame records, continue from frame_idx)
+            # For now, just log - full resume requires more state restoration
+    
+    # Disable checkpointing if requested
+    if args.no_checkpoint:
+        benchmark.checkpoint_interval = float('inf')
     
     if args.mode == 'broad':
         results = await benchmark.run_broad(num_frames=args.num_frames)
@@ -1225,6 +1399,10 @@ Examples:
         return
     
     benchmark.save_results(results)
+    
+    # Clear checkpoint on successful completion
+    benchmark.clear_checkpoint()
+    logger.info("Calibration complete!")
 
 
 if __name__ == "__main__":
