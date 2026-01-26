@@ -12,7 +12,8 @@
 #   CALIBRATION_OUTPUT_DIR - Where to save results (default: /workspace/calibration)
 
 system:
-  comfyui_url: "http://127.0.0.1:8188"
+  # NOTE: Override with COMFYUI_URL env var for remote ComfyUI (e.g. RunPod proxy)
+  comfyui_url: "http://127.0.0.1:8188"  # fallback if env not set
   output_dir: "/workspace/calibration/output"
   cache_dir: "/workspace/calibration/cache"
   log_dir: "/workspace/calibration/logs"

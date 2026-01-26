@@ -60,6 +60,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import random
 import sys
 import time
@@ -288,7 +289,8 @@ class CalibrationBenchmark:
         """Minimal default config for benchmarking"""
         return {
             'system': {
-                'comfyui_url': 'http://127.0.0.1:8188',
+                # Will be overridden by COMFYUI_URL env var if set
+                'comfyui_url': os.environ.get('COMFYUI_URL', 'http://127.0.0.1:8188'),
             },
             'generation': {
                 'pipeline': {
@@ -336,7 +338,8 @@ class CalibrationBenchmark:
         if self._comfy_client is None:
             try:
                 from core.comfyui_api import ComfyUIClient
-                comfy_url = self.config.get('system', {}).get('comfyui_url', 'http://127.0.0.1:8188')
+                # Environment variable takes precedence over config
+                comfy_url = os.environ.get('COMFYUI_URL') or self.config.get('system', {}).get('comfyui_url', 'http://127.0.0.1:8188')
                 self._comfy_client = ComfyUIClient(comfy_url)
                 logger.info(f"Initialized ComfyUI client for {comfy_url}")
             except Exception as e:
