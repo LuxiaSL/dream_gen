@@ -1,0 +1,123 @@
+# Calibration Mode Configuration
+# ================================
+# Minimal config for running calibration benchmarks.
+# No VPS streaming, no interpolation - just keyframe generation + logging.
+#
+# Usage on RunPod:
+#   1. Deploy with this config
+#   2. Run: uv run python backend/tools/calibration_benchmark.py broad --num-frames 500
+#   3. Download results from /workspace/calibration/
+#
+# Environment variables (optional):
+#   CALIBRATION_OUTPUT_DIR - Where to save results (default: /workspace/calibration)
+
+system:
+  comfyui_url: "http://127.0.0.1:8188"
+  output_dir: "/workspace/calibration/output"
+  cache_dir: "/workspace/calibration/cache"
+  log_dir: "/workspace/calibration/logs"
+  gpu_id: 0
+  log_level: "INFO"
+
+generation:
+  # Disable async orchestrator - we're doing simple sequential generation
+  use_async_orchestrator: false
+  
+  pipeline:
+    width: 512
+    height: 288
+    steps: 4
+    cfg: 1.0
+    sampler: "euler"
+    scheduler: "simple"
+    
+  infinite:
+    # We're generating keyframes only, no interpolation
+    interpolation_frames: 0
+    target_interpolation_fps: 5.0
+    keyframe_denoise: 0.2
+    interpolation_decoder: "vae"
+    interpolation_resolution_divisor: 1
+    
+  # Cache settings - using recommended values from calibration analysis
+  cache:
+    max_size: 50
+    similarity_method: "dual_metric"
+    population_mode: "selective"
+    cache_interpolations: false
+    cache_diversity_logic: "all"
+    
+    # ColorHist thresholds (calibrated from 378 keyframe analysis)
+    color_histogram:
+      bins_per_channel: 32
+      diversity_threshold: 1.84       # P75 + 0.1
+      dissimilarity_range: [0.97, 2.06]  # P25 to P90
+      convergence_threshold: 0.75     # σ × 1.5
+      force_cache_threshold: 1.50     # σ × 3.0
+    
+    # pHash thresholds (calibrated - MAJOR FIX from default)
+    phash:
+      hash_size: 8
+      diversity_threshold: 0.61       # P75 + 0.05 (was 0.80!)
+      dissimilarity_range: [0.47, 0.62]  # P25 to P90 (was [0.68, 0.92]!)
+      convergence_threshold: 0.11     # σ × 1.2
+      force_cache_threshold: 0.23     # σ × 2.5
+    
+    injection_logic: "any"
+    injection_mode: "dissimilar"
+    injection_probability: 0.15
+    blend_weight: 0.75
+    
+    # Collapse detection
+    collapse_detection: true
+    warmup_keyframes: 50
+    collapse_history_size: 200
+    collapse_detection_window: 100
+    collapse_baseline_comparison: true
+    convergence_mode: "absolute"
+    log_convergence_stats: true
+    
+    # Seed injection disabled for calibration
+    seed_injection_floor: 0.0
+    seed_injection_max: 0.0
+
+# Fresh generation settings (mutations)
+fresh_generation:
+  enabled: true
+  buffer_size: 12
+  generation_batch_size: 3
+  
+  mode:
+    default: "drift"
+    drift_probability: 0.85
+    bend_probability: 0.15
+    bend_frames: 5
+  
+  mutation:
+    base_probability: 0.125
+    staleness_threshold: 15     # Target: mutation every ~12 frames
+    category_weights:
+      color_logic: 0.22
+      medium_render: 0.18
+      light_behavior: 0.20
+      atmosphere_field: 0.16
+      temporal_state: 0.14
+      texture_density: 0.10
+    similarity_target: 0.55
+    similarity_range: 0.25
+
+# Display settings - keep frames for analysis
+display:
+  buffer_target_seconds: 45.0
+  min_buffer_seconds: 10.0
+  cleanup_displayed_frames: false  # Keep all frames
+  max_output_frames: 1000
+
+# Prompts
+prompts:
+  negative: "blurry, low quality, watermark, text, signature, jpeg artifacts, compression artifacts"
+
+# Cloud mode DISABLED for calibration
+cloud:
+  enabled: false
+
