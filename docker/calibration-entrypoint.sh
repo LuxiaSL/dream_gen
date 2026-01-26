@@ -23,6 +23,10 @@ UPLOAD_TOKEN="${UPLOAD_AUTH_TOKEN:-}"
 HEALTH_PORT="${HEALTH_CHECK_PORT:-8080}"
 MAX_RETRIES="${MAX_RESTART_RETRIES:-3}"
 HEALTH_TIMEOUT="${HEALTH_STALE_TIMEOUT:-300}"  # 5 minutes
+MAX_DEEP_ROUNDS="${MAX_DEEP_ROUNDS:-3}"  # Limit deep rounds in full mode
+
+# State file for tracking full mode progress (survives restarts)
+FULL_STATE_FILE="${OUTPUT_DIR}/.full_mode_state.json"
 
 # Colors
 RED='\033[0;31m'
@@ -46,12 +50,13 @@ echo "╚═══════════════════════�
 echo -e "${NC}"
 
 echo -e "${BLUE}Configuration:${NC}"
-echo "  Mode:         $MODE"
-echo "  Frames:       $FRAMES"
-echo "  Output:       $OUTPUT_DIR"
-echo "  ComfyUI:      $COMFYUI"
-echo "  Health Port:  $HEALTH_PORT"
-echo "  Max Retries:  $MAX_RETRIES"
+echo "  Mode:           $MODE"
+echo "  Frames:         $FRAMES"
+echo "  Output:         $OUTPUT_DIR"
+echo "  ComfyUI:        $COMFYUI"
+echo "  Health Port:    $HEALTH_PORT"
+echo "  Max Retries:    $MAX_RETRIES"
+echo "  Max Deep Rounds: $MAX_DEEP_ROUNDS (full mode only)"
 echo ""
 
 # Create output directory
@@ -116,16 +121,119 @@ wait_for_comfyui() {
 check_health() {
     local response
     response=$(curl -sf --max-time 5 "http://127.0.0.1:${HEALTH_PORT}/health" 2>/dev/null) || return 1
-    
+
     # Parse last_activity_seconds_ago from JSON
     local age
     age=$(echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin).get('last_activity_seconds_ago', 9999))" 2>/dev/null) || return 1
-    
+
     if [ "$age" -gt "$HEALTH_TIMEOUT" ]; then
         echo -e "${RED}Health check: stale (${age}s since last activity)${NC}"
         return 1
     fi
     return 0
+}
+
+# ==================== Full Mode State Tracking ====================
+# Tracks which phases of "full" mode have completed (survives restarts)
+
+init_full_state() {
+    if [ ! -f "$FULL_STATE_FILE" ]; then
+        echo -e "${BLUE}Initializing full mode state tracker...${NC}"
+        python3 -c "
+import json
+state = {
+    'mode': 'full',
+    'started_at': '$(date -Iseconds)',
+    'broad_completed': False,
+    'deep_rounds_completed': [],
+    'deep_rounds_limit': $MAX_DEEP_ROUNDS,
+    'intervention_completed': False,
+    'total_deep_rounds_ran': 0
+}
+with open('$FULL_STATE_FILE', 'w') as f:
+    json.dump(state, f, indent=2)
+print('State initialized')
+"
+    else
+        echo -e "${BLUE}Found existing full mode state file${NC}"
+        cat "$FULL_STATE_FILE"
+    fi
+}
+
+get_full_state() {
+    local key=$1
+    python3 -c "
+import json
+with open('$FULL_STATE_FILE') as f:
+    state = json.load(f)
+print(state.get('$key', ''))
+" 2>/dev/null
+}
+
+is_deep_round_completed() {
+    local template=$1
+    python3 -c "
+import json
+with open('$FULL_STATE_FILE') as f:
+    state = json.load(f)
+completed = state.get('deep_rounds_completed', [])
+print('true' if '$template' in completed else 'false')
+" 2>/dev/null
+}
+
+get_deep_rounds_count() {
+    python3 -c "
+import json
+with open('$FULL_STATE_FILE') as f:
+    state = json.load(f)
+print(state.get('total_deep_rounds_ran', 0))
+" 2>/dev/null
+}
+
+mark_phase_completed() {
+    local phase=$1
+    local template="${2:-}"
+
+    echo -e "${GREEN}Marking phase completed: $phase ${template}${NC}"
+    python3 -c "
+import json
+with open('$FULL_STATE_FILE') as f:
+    state = json.load(f)
+
+if '$phase' == 'broad':
+    state['broad_completed'] = True
+elif '$phase' == 'deep':
+    template = '$template'
+    if template and template not in state.get('deep_rounds_completed', []):
+        state.setdefault('deep_rounds_completed', []).append(template)
+        state['total_deep_rounds_ran'] = state.get('total_deep_rounds_ran', 0) + 1
+elif '$phase' == 'intervention':
+    state['intervention_completed'] = True
+
+state['last_updated'] = '$(date -Iseconds)'
+with open('$FULL_STATE_FILE', 'w') as f:
+    json.dump(state, f, indent=2)
+print(f'Updated state: {phase} ${template}')
+"
+}
+
+check_deep_round_limit() {
+    local current_count
+    current_count=$(get_deep_rounds_count)
+
+    if [ "$current_count" -ge "$MAX_DEEP_ROUNDS" ]; then
+        echo -e "${YELLOW}Deep round limit reached: $current_count / $MAX_DEEP_ROUNDS${NC}"
+        return 1
+    fi
+    echo -e "${BLUE}Deep rounds: $current_count / $MAX_DEEP_ROUNDS${NC}"
+    return 0
+}
+
+clear_full_state() {
+    if [ -f "$FULL_STATE_FILE" ]; then
+        echo -e "${YELLOW}Clearing full mode state...${NC}"
+        rm -f "$FULL_STATE_FILE"
+    fi
 }
 
 # Run calibration with a specific mode
@@ -295,26 +403,76 @@ case "$MODE" in
         BROAD_FRAMES=$(( FRAMES / 4 ))
         DEEP_FRAMES=$(( FRAMES / 6 ))
         INTERVENTION_FRAMES=$(( FRAMES / 4 ))
-        
+
+        # Initialize state tracking for full mode
+        init_full_state
+
         echo -e "${CYAN}Full calibration suite:${NC}"
         echo "  Broad:        $BROAD_FRAMES frames (all templates)"
-        echo "  Deep:         $DEEP_FRAMES frames × 3 templates"
+        echo "  Deep:         $DEEP_FRAMES frames × up to $MAX_DEEP_ROUNDS templates (limit enforced)"
         echo "  Intervention: $INTERVENTION_FRAMES frames"
         echo ""
-        
-        run_with_retry broad "$BROAD_FRAMES" || FAILED=true
-        
-        if [ "$FAILED" != "true" ]; then
-            run_with_retry deep "$DEEP_FRAMES" "--template material_study" || FAILED=true
+
+        # --- BROAD phase ---
+        if [ "$(get_full_state broad_completed)" = "True" ]; then
+            echo -e "${GREEN}✓ Broad phase already completed (skipping)${NC}"
+        else
+            if run_with_retry broad "$BROAD_FRAMES"; then
+                mark_phase_completed broad
+            else
+                FAILED=true
+            fi
         fi
+
+        # --- DEEP phases (with limit enforcement) ---
+        DEEP_TEMPLATES=("material_study" "atmospheric_depth" "textural_macro")
+
+        for template in "${DEEP_TEMPLATES[@]}"; do
+            if [ "$FAILED" = "true" ]; then
+                break
+            fi
+
+            # Check if already completed
+            if [ "$(is_deep_round_completed "$template")" = "true" ]; then
+                echo -e "${GREEN}✓ Deep round '$template' already completed (skipping)${NC}"
+                continue
+            fi
+
+            # Check deep round limit BEFORE running
+            if ! check_deep_round_limit; then
+                echo -e "${YELLOW}⚠ Skipping deep round '$template' - limit reached${NC}"
+                continue
+            fi
+
+            echo -e "${BLUE}Running deep round: $template${NC}"
+            if run_with_retry deep "$DEEP_FRAMES" "--template $template"; then
+                mark_phase_completed deep "$template"
+            else
+                FAILED=true
+            fi
+        done
+
+        # Report deep round status
+        DEEP_COMPLETED=$(get_deep_rounds_count)
+        echo -e "${CYAN}Deep rounds completed: $DEEP_COMPLETED / $MAX_DEEP_ROUNDS limit${NC}"
+
+        # --- INTERVENTION phase ---
         if [ "$FAILED" != "true" ]; then
-            run_with_retry deep "$DEEP_FRAMES" "--template atmospheric_depth" || FAILED=true
+            if [ "$(get_full_state intervention_completed)" = "True" ]; then
+                echo -e "${GREEN}✓ Intervention phase already completed (skipping)${NC}"
+            else
+                if run_with_retry intervention "$INTERVENTION_FRAMES"; then
+                    mark_phase_completed intervention
+                else
+                    FAILED=true
+                fi
+            fi
         fi
+
+        # Clear state on successful completion
         if [ "$FAILED" != "true" ]; then
-            run_with_retry deep "$DEEP_FRAMES" "--template textural_macro" || FAILED=true
-        fi
-        if [ "$FAILED" != "true" ]; then
-            run_with_retry intervention "$INTERVENTION_FRAMES" || FAILED=true
+            echo -e "${GREEN}Full calibration suite completed successfully${NC}"
+            clear_full_state
         fi
         ;;
     
@@ -348,6 +506,27 @@ echo "  Duration:    ${DURATION_MIN} minutes (${DURATION}s)"
 echo "  Mode:        $MODE"
 echo "  Frames:      $FRAMES"
 echo "  Retries:     $RETRY_COUNT"
+
+# Show deep round tracking info for full mode
+if [ "$MODE" = "full" ] && [ -f "$FULL_STATE_FILE" ]; then
+    echo ""
+    echo -e "${BLUE}Deep Round Tracking:${NC}"
+    python3 -c "
+import json
+try:
+    with open('$FULL_STATE_FILE') as f:
+        state = json.load(f)
+    completed = state.get('deep_rounds_completed', [])
+    total_ran = state.get('total_deep_rounds_ran', 0)
+    limit = state.get('deep_rounds_limit', $MAX_DEEP_ROUNDS)
+    print(f'  Deep rounds ran:    {total_ran} / {limit} limit')
+    print(f'  Templates completed: {completed}')
+    print(f'  Broad completed:    {state.get(\"broad_completed\", False)}')
+    print(f'  Intervention done:  {state.get(\"intervention_completed\", False)}')
+except Exception as e:
+    print(f'  (error reading state: {e})')
+"
+fi
 echo ""
 echo -e "${BLUE}Results:${NC}"
 ls -la "$OUTPUT_DIR"/*.json 2>/dev/null || echo "  (no JSON files)"
