@@ -289,17 +289,42 @@ class FrameBuffer:
         """
         Get the next frame in sequence that's ready to display
         
+        Automatically skips FAILED frames to prevent display freezes.
+        
         Returns:
             FrameSpec if available, None if next frame not ready
         """
-        if self.display_sequence_num not in self.frames:
+        # Skip any FAILED frames (don't block display)
+        skipped = 0
+        while self.display_sequence_num in self.frames:
+            frame_spec = self.frames[self.display_sequence_num]
+            
+            if frame_spec.state == FrameState.FAILED:
+                logger.warning(
+                    f"[SKIP FAILED] Skipping failed frame: {frame_spec} "
+                    f"(auto-advancing display)"
+                )
+                self.display_sequence_num += 1
+                skipped += 1
+                
+                # Safety limit - don't skip more than 50 consecutive failed frames
+                if skipped > 50:
+                    logger.error(
+                        f"[SKIP LIMIT] Skipped 50+ consecutive failed frames - "
+                        f"catastrophic failure in generation pipeline?"
+                    )
+                    return None
+                continue
+            
+            if frame_spec.is_ready():
+                if skipped > 0:
+                    logger.info(f"[SKIP DONE] Skipped {skipped} failed frames, resuming at seq {self.display_sequence_num}")
+                return frame_spec
+            
+            # Frame exists but not ready and not failed (PENDING or GENERATING)
             return None
         
-        frame_spec = self.frames[self.display_sequence_num]
-        
-        if frame_spec.is_ready():
-            return frame_spec
-        
+        # No frame at this sequence number
         return None
     
     def advance_display(self) -> None:

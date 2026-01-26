@@ -17,6 +17,7 @@ import torch
 
 from utils.vram_profiler import dump_vram_on_oom, is_oom_error
 from utils.perf_stats import get_perf_stats
+from core.frame_buffer import FrameState
 
 logger = logging.getLogger(__name__)
 
@@ -290,7 +291,7 @@ class InterpolationWorker:
         timings['slerp_all'] = time.perf_counter() - t_slerp_start
         
         # === PHASE 2: Decode ALL latents in TRUE BATCH (single GPU call!) ===
-        logger.debug(f"  Phase 2: Batch decoding {len(latents_and_specs)} frames...")
+        logger.info(f"  Phase 2: Batch decoding {len(latents_and_specs)} frames...")
         t_decode_start = time.perf_counter()
         
         # Extract just the latents for batch decode
@@ -304,6 +305,15 @@ class InterpolationWorker:
             decoded_images = []
             for i, (image, (_, frame_spec, sequence_num)) in enumerate(zip(images, latents_and_specs)):
                 decoded_images.append((image, frame_spec, sequence_num))
+            
+            # Verify batch decode returned expected count
+            if len(decoded_images) != len(latents_and_specs):
+                logger.warning(
+                    f"[DECODE MISMATCH] Expected {len(latents_and_specs)} images, "
+                    f"got {len(decoded_images)} - batch decode may have failed partially"
+                )
+            else:
+                logger.info(f"  Phase 2 complete: {len(decoded_images)} images decoded")
         except Exception as e:
             logger.error(f"Batch decode failed, falling back to sequential: {e}", exc_info=True)
             
@@ -336,7 +346,7 @@ class InterpolationWorker:
         timings['decode_all'] = time.perf_counter() - t_decode_start
         
         # === PHASE 3: Save ALL images ASYNC (no blocking) ===
-        logger.debug(f"  Phase 3: Saving {len(decoded_images)} frames async...")
+        logger.info(f"  Phase 3: Saving {len(decoded_images)} frames to disk...")
         t_save_start = time.perf_counter()
         
         save_tasks = []
@@ -350,19 +360,59 @@ class InterpolationWorker:
             )
             save_tasks.append((save_task, frame_spec, sequence_num))
         
-        # Wait for all saves to complete
+        # Wait for all saves to complete (with timeout protection)
         success_count = 0
-        for save_task, frame_spec, sequence_num in save_tasks:
+        save_timeout = 30.0  # Max 30s per frame save - disk issues should fail fast
+        
+        for i, (save_task, frame_spec, sequence_num) in enumerate(save_tasks):
             try:
-                await save_task
+                # Use asyncio.wait_for to prevent infinite hangs on disk I/O
+                await asyncio.wait_for(save_task, timeout=save_timeout)
                 self.frame_buffer.mark_ready(sequence_num, frame_spec.file_path)
                 success_count += 1
                 self.frames_generated += 1
+                
+                # Log progress for debugging hung saves
+                if (i + 1) % 5 == 0 or i == len(save_tasks) - 1:
+                    logger.debug(f"  Saved {i + 1}/{len(save_tasks)} frames")
+                    
+            except asyncio.TimeoutError:
+                logger.error(
+                    f"[SAVE TIMEOUT] Frame {sequence_num} ({frame_spec.file_path.name}) "
+                    f"took >{save_timeout}s - disk I/O stall?"
+                )
+                self.frame_buffer.mark_failed(sequence_num)
             except Exception as e:
                 logger.error(f"Failed to save frame {sequence_num}: {e}", exc_info=True)
+                self.frame_buffer.mark_failed(sequence_num)
         
         timings['save_all'] = time.perf_counter() - t_save_start
         timings['total'] = time.perf_counter() - cycle_start
+        
+        # Report save status
+        if success_count < count:
+            logger.warning(
+                f"[PARTIAL SAVE] Only {success_count}/{count} frames saved for "
+                f"KF{start_kf_num}->KF{end_kf_num} - check for disk or timeout issues"
+            )
+            
+            # Safety: Mark any frames still stuck in GENERATING as FAILED
+            # This ensures display can skip them instead of freezing
+            stuck_frames = 0
+            for seq_num in interp_sequence_nums:
+                if seq_num in self.frame_buffer.frames:
+                    frame = self.frame_buffer.frames[seq_num]
+                    if frame.state == FrameState.GENERATING:
+                        self.frame_buffer.mark_failed(seq_num)
+                        stuck_frames += 1
+            
+            if stuck_frames > 0:
+                logger.warning(
+                    f"[CLEANUP] Marked {stuck_frames} stuck GENERATING frames as FAILED "
+                    f"for KF{start_kf_num}->KF{end_kf_num}"
+                )
+        else:
+            logger.info(f"  Phase 3 complete: {success_count}/{count} frames saved")
         
         # === PROFILING: Calculate statistics ===
         avg_slerp = timings['slerp_all'] / count if count > 0 else 0
