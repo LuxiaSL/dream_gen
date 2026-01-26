@@ -404,20 +404,43 @@ class CalibrationBenchmark:
             self.checkpoint_path.unlink()
             logger.info("Checkpoint cleared")
     
+    def _load_full_mode_state(self) -> Optional[dict]:
+        """Load full mode state file if it exists (for deep round tracking)"""
+        state_file = self.output_dir / ".full_mode_state.json"
+        if state_file.exists():
+            try:
+                with open(state_file) as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return None
+
     def start_health_server(self, port: int = 8080):
         """Start a simple health check HTTP server"""
         import threading
         from http.server import HTTPServer, BaseHTTPRequestHandler
-        
+
         benchmark = self
-        
+
         class HealthHandler(BaseHTTPRequestHandler):
             def do_GET(self):
                 if self.path == '/health':
                     # Check if we've had activity recently (5 min timeout)
                     last_activity = benchmark._health_last_activity
                     age = time.time() - last_activity
-                    
+
+                    # Load full mode state for deep round tracking
+                    full_state = benchmark._load_full_mode_state()
+                    deep_tracking = None
+                    if full_state:
+                        deep_tracking = {
+                            'deep_rounds_completed': full_state.get('deep_rounds_completed', []),
+                            'total_deep_rounds_ran': full_state.get('total_deep_rounds_ran', 0),
+                            'deep_rounds_limit': full_state.get('deep_rounds_limit', 3),
+                            'broad_completed': full_state.get('broad_completed', False),
+                            'intervention_completed': full_state.get('intervention_completed', False),
+                        }
+
                     if age < 300:  # 5 minutes
                         self.send_response(200)
                         self.send_header('Content-Type', 'application/json')
@@ -427,6 +450,8 @@ class CalibrationBenchmark:
                             'frames': len(benchmark.frames),
                             'last_activity_seconds_ago': int(age),
                         }
+                        if deep_tracking:
+                            response['deep_round_tracking'] = deep_tracking
                         self.wfile.write(json.dumps(response).encode())
                     else:
                         self.send_response(503)
@@ -436,6 +461,8 @@ class CalibrationBenchmark:
                             'status': 'stale',
                             'last_activity_seconds_ago': int(age),
                         }
+                        if deep_tracking:
+                            response['deep_round_tracking'] = deep_tracking
                         self.wfile.write(json.dumps(response).encode())
                 elif self.path == '/checkpoint':
                     self.send_response(200)
@@ -443,19 +470,38 @@ class CalibrationBenchmark:
                     self.end_headers()
                     checkpoint = benchmark.load_checkpoint()
                     self.wfile.write(json.dumps(checkpoint or {}).encode())
+                elif self.path == '/deep-rounds':
+                    # Dedicated endpoint for deep round tracking
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json')
+                    self.end_headers()
+                    full_state = benchmark._load_full_mode_state()
+                    if full_state:
+                        response = {
+                            'deep_rounds_completed': full_state.get('deep_rounds_completed', []),
+                            'total_deep_rounds_ran': full_state.get('total_deep_rounds_ran', 0),
+                            'deep_rounds_limit': full_state.get('deep_rounds_limit', 3),
+                            'broad_completed': full_state.get('broad_completed', False),
+                            'intervention_completed': full_state.get('intervention_completed', False),
+                            'started_at': full_state.get('started_at'),
+                            'last_updated': full_state.get('last_updated'),
+                        }
+                    else:
+                        response = {'message': 'No full mode state found (not running in full mode?)'}
+                    self.wfile.write(json.dumps(response).encode())
                 else:
                     self.send_response(404)
                     self.end_headers()
-            
+
             def log_message(self, format, *args):
                 pass  # Suppress logging
-        
+
         def run_server():
             server = HTTPServer(('0.0.0.0', port), HealthHandler)
             benchmark._health_server = server
             logger.info(f"Health server started on port {port}")
             server.serve_forever()
-        
+
         thread = threading.Thread(target=run_server, daemon=True)
         thread.start()
     
