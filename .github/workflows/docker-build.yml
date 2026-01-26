@@ -16,6 +16,7 @@ on:
       - 'docker/**'
       - 'prompts/**'
       - 'seeds/**'
+      - 'calibration/**'
       - 'pyproject.toml'
       - '.github/workflows/docker-build.yml'
   workflow_dispatch:
@@ -30,6 +31,11 @@ on:
         required: false
         default: 'false'
         type: boolean
+      rebuild_calibration:
+        description: 'Force rebuild Calibration benchmark image'
+        required: false
+        default: 'false'
+        type: boolean
       rebuild_legacy:
         description: 'Rebuild legacy combined image (serverless)'
         required: false
@@ -41,6 +47,8 @@ env:
   # Two-pod architecture images
   COMFYUI_IMAGE: luxiasl/dreamgen-comfyui
   DREAMGEN_IMAGE: luxiasl/dreamgen-backend
+  # Calibration benchmark image
+  CALIBRATION_IMAGE: luxiasl/dreamgen-calibration
   # Legacy images (serverless)
   BASE_IMAGE: luxiasl/dreamgen-base
   MAIN_IMAGE: luxiasl/dreamgen
@@ -52,6 +60,7 @@ jobs:
     outputs:
       comfyui_changed: ${{ steps.check.outputs.comfyui_changed }}
       dreamgen_changed: ${{ steps.check.outputs.dreamgen_changed }}
+      calibration_changed: ${{ steps.check.outputs.calibration_changed }}
       legacy_changed: ${{ steps.check.outputs.legacy_changed }}
     steps:
       - uses: actions/checkout@v4
@@ -83,6 +92,18 @@ jobs:
           else
             echo "dreamgen_changed=false" >> $GITHUB_OUTPUT
             echo "DreamGen: No changes"
+          fi
+          
+          # Calibration image changes
+          if [[ "${{ github.event.inputs.rebuild_calibration }}" == "true" ]]; then
+            echo "calibration_changed=true" >> $GITHUB_OUTPUT
+            echo "Calibration: Force rebuild requested"
+          elif git diff --name-only HEAD~1 HEAD | grep -qE "backend/tools/calibration|calibration/|docker/Dockerfile.calibration|docker/calibration-entrypoint.sh"; then
+            echo "calibration_changed=true" >> $GITHUB_OUTPUT
+            echo "Calibration: Benchmark files changed"
+          else
+            echo "calibration_changed=false" >> $GITHUB_OUTPUT
+            echo "Calibration: No changes"
           fi
           
           # Legacy image changes
@@ -181,6 +202,52 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Image:** \`${{ env.DREAMGEN_IMAGE }}:latest\`" >> $GITHUB_STEP_SUMMARY
           echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+
+  # ==================== Build Calibration Benchmark Image ====================
+  build-calibration:
+    needs: check-changes
+    if: needs.check-changes.outputs.calibration_changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      
+      - name: Build and push Calibration image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/Dockerfile.calibration
+          push: true
+          tags: |
+            ${{ env.CALIBRATION_IMAGE }}:latest
+            ${{ env.CALIBRATION_IMAGE }}:${{ github.sha }}
+          build-args: |
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            GIT_COMMIT=${{ github.sha }}
+          cache-from: type=registry,ref=${{ env.CALIBRATION_IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.CALIBRATION_IMAGE }}:buildcache,mode=max
+      
+      - name: Summary
+        run: |
+          echo "### Calibration Benchmark Image Built! 📊" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ env.CALIBRATION_IMAGE }}:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Run as template:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "CALIBRATION_MODE=full" >> $GITHUB_STEP_SUMMARY
+          echo "CALIBRATION_FRAMES=1500" >> $GITHUB_STEP_SUMMARY
+          echo "COMFYUI_URL=http://127.0.0.1:8188" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
 
   # ==================== Build Legacy Images (serverless, optional) ====================
   build-legacy-base:

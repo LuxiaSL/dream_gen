@@ -1133,7 +1133,7 @@ Examples:
 """
     )
     
-    parser.add_argument('mode', choices=['broad', 'deep', 'intervention', 'diagonal', 'analyze', 'full'],
+    parser.add_argument('mode', choices=['broad', 'deep', 'intervention', 'analyze', 'full'],
                         help='Experiment mode')
     parser.add_argument('--num-frames', type=int, default=500,
                         help='Number of keyframes to generate (default: 500 = 1 sprint)')

@@ -1,0 +1,95 @@
+# DreamGen Calibration Benchmark Image
+# =====================================
+# Standalone image for running calibration benchmarks.
+# Generates keyframes across templates and outputs threshold recommendations.
+#
+# Build:
+#   docker build -f docker/Dockerfile.calibration -t luxiasl/dreamgen-calibration:latest .
+#   docker push luxiasl/dreamgen-calibration:latest
+#
+# Run (RunPod Template):
+#   Set as template image, auto-runs calibration suite on startup
+#
+# Environment Variables:
+#   CALIBRATION_MODE         - "broad", "deep", "intervention", "full" (default: full)
+#   CALIBRATION_FRAMES       - Frames per mode (default: 500)
+#   CALIBRATION_OUTPUT_DIR   - Where to save results (default: /workspace/calibration)
+#   COMFYUI_URL              - ComfyUI endpoint (default: http://127.0.0.1:8188)
+#   UPLOAD_RESULTS_URL       - Optional: URL to POST results JSON
+#   UPLOAD_AUTH_TOKEN        - Optional: Auth token for upload
+#
+# Outputs:
+#   /workspace/calibration/
+#   ├── calibration_*.json     - Benchmark results with recommendations
+#   ├── output/                - Generated keyframe images
+#   └── logs/                  - Debug logs
+
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# System dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 \
+    libglib2.0-0 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Python dependencies (same as dreamgen + analysis tools)
+RUN pip install --no-cache-dir \
+    websockets \
+    msgpack \
+    pillow \
+    numpy \
+    pyyaml \
+    aiohttp \
+    imagehash \
+    scikit-image \
+    scipy \
+    diffusers \
+    huggingface-hub \
+    accelerate \
+    torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu128
+
+# Copy backend code
+COPY backend/ /app/backend/
+
+# Copy prompts (required for CombinatorialPromptSystem)
+COPY prompts/ /app/prompts/
+
+# Copy calibration config
+COPY calibration/ /app/calibration/
+
+# Create directories
+RUN mkdir -p /workspace/calibration/output /workspace/calibration/logs
+
+# Build info
+ARG BUILD_DATE=unknown
+ARG GIT_COMMIT=unknown
+RUN echo "BUILD_DATE=${BUILD_DATE}" > /app/BUILD_INFO && \
+    echo "GIT_COMMIT=${GIT_COMMIT}" >> /app/BUILD_INFO && \
+    echo "IMAGE_TYPE=calibration" >> /app/BUILD_INFO
+
+# Environment
+ENV PYTHONPATH=/app:/app/backend
+ENV LOG_LEVEL=INFO
+
+# Calibration defaults
+ENV CALIBRATION_MODE=full
+ENV CALIBRATION_FRAMES=1500
+ENV CALIBRATION_OUTPUT_DIR=/workspace/calibration
+ENV COMFYUI_URL=http://127.0.0.1:8188
+
+# Health check
+HEALTHCHECK --interval=60s --timeout=30s --start-period=120s --retries=3 \
+    CMD test -f /workspace/calibration/.running || test -f /workspace/calibration/.complete || exit 1
+
+# Copy and set entrypoint
+COPY docker/calibration-entrypoint.sh /app/calibration-entrypoint.sh
+RUN chmod +x /app/calibration-entrypoint.sh
+
+ENTRYPOINT ["/app/calibration-entrypoint.sh"]
+

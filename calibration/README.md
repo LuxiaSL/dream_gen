@@ -1,8 +1,56 @@
 # Dream Gen Calibration Suite
 
-Tools for establishing similarity baselines and optimizing intervention thresholds.
+Standalone Docker image for establishing similarity baselines and optimizing intervention thresholds.
 
-## Quick Start
+## Quick Start (RunPod Template)
+
+### 1. Create a RunPod Template
+
+**Name:** `dreamgen-calibration`
+
+**Container Image:** `luxiasl/dreamgen-calibration:latest`
+
+**Docker Command:** *(leave empty - entrypoint handles it)*
+
+**Environment Variables:**
+```
+CALIBRATION_MODE=full
+CALIBRATION_FRAMES=1500
+COMFYUI_URL=http://127.0.0.1:8188
+```
+
+**Note:** The calibration image expects ComfyUI to be running. For a combined template, use the multi-container approach below.
+
+### 2. Combined ComfyUI + Calibration
+
+Create a RunPod template with our ComfyUI image, then override the command:
+
+**Container Image:** `luxiasl/dreamgen-comfyui:latest`
+
+**Docker Command:**
+```bash
+bash -c "nginx && python /opt/ComfyUI/main.py --listen 0.0.0.0 --port 8188 &
+sleep 60 && 
+docker run --rm --gpus all --network host \
+  -v /workspace:/workspace \
+  -e CALIBRATION_MODE=full \
+  -e CALIBRATION_FRAMES=1500 \
+  -e COMFYUI_URL=http://127.0.0.1:8188 \
+  luxiasl/dreamgen-calibration:latest"
+```
+
+Or run calibration manually after starting the pod:
+
+```bash
+# On a running ComfyUI pod
+docker run --rm --gpus all --network host \
+  -v /workspace:/workspace \
+  -e CALIBRATION_MODE=full \
+  -e CALIBRATION_FRAMES=1500 \
+  luxiasl/dreamgen-calibration:latest
+```
+
+## Manual Setup (Development)
 
 ### On an Existing RunPod
 
@@ -47,6 +95,18 @@ For healthy visual variety in a 500-keyframe sprint (~25 min playback):
 | Cache injection | 33-50 keyframes | ~10-15 injections |
 | Mutation | 7-18 keyframes | ~28-42 mutations |
 
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CALIBRATION_MODE` | `full` | Which test suite to run |
+| `CALIBRATION_FRAMES` | `1500` | Total frames to generate |
+| `CALIBRATION_OUTPUT_DIR` | `/workspace/calibration` | Output directory |
+| `COMFYUI_URL` | `http://127.0.0.1:8188` | ComfyUI API endpoint |
+| `UPLOAD_RESULTS_URL` | *(none)* | POST results JSON here when done |
+| `UPLOAD_AUTH_TOKEN` | *(none)* | Bearer token for upload |
+| `KEEP_RUNNING` | `false` | Keep container alive after completion |
+
 ## Output Files
 
 ```
@@ -54,11 +114,14 @@ For healthy visual variety in a 500-keyframe sprint (~25 min playback):
 ├── calibration_broad_YYYYMMDD_HHMMSS.json    # Template survey results
 ├── calibration_deep_YYYYMMDD_HHMMSS.json     # Drift analysis results
 ├── calibration_intervention_YYYYMMDD_HHMMSS.json  # Effect sizes
+├── calibration_combined.json                  # All results (for upload)
 ├── output/                                    # Generated keyframes
 │   ├── broad_0001_material_study.png
 │   ├── deep_0001.png
 │   └── ...
 └── logs/                                      # Debug logs
+    ├── calibration_broad.log
+    └── ...
 ```
 
 ## Using Results
@@ -105,12 +168,17 @@ The default range excluded >90% of frame pairs, causing single-frame injection l
 Consecutive frames are naturally much more similar. Collapse detection thresholds
 should be tuned against consecutive similarity, not all-pairs.
 
-## Environment Variables
+## CI/CD
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CALIBRATION_OUTPUT_DIR` | `/workspace/calibration` | Output directory |
-| `COMFYUI_URL` | `http://127.0.0.1:8188` | ComfyUI API endpoint |
+The calibration image is automatically built and pushed when:
+- Files in `calibration/` change
+- Files in `backend/tools/calibration*` change
+- Manually triggered via GitHub Actions (workflow_dispatch)
+
+**Manually trigger a build:**
+```bash
+gh workflow run docker-build.yml -f rebuild_calibration=true
+```
 
 ## Manual Python Usage
 
@@ -129,4 +197,3 @@ benchmark.save_results(results)
 # Or run generation (requires ComfyUI)
 results = await benchmark.run_broad(num_frames=500)
 ```
-
