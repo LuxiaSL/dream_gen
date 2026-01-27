@@ -105,8 +105,8 @@ generation:
     manual_bypass:
       enabled: true                     # ACTIVE - bypass all adaptive detection
       mutation_interval: 5              # Force mutation every 5 frames (% 5)
-      cache_injection_interval: 25      # Cache injection every 25 frames (% 25)
-      template_swap_interval: 75        # Fresh frame/template swap every 75 frames (% 75)
+      cache_injection_interval: 20      # Cache injection every 20 frames (% 20)
+      template_swap_interval: 40        # Fresh frame/template swap every 40 frames (% 40)
 
 # === FRESH GENERATION - Infinite generation system ===
 fresh_generation:
