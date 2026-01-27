@@ -134,7 +134,7 @@ fresh_generation:
 display:
   buffer_target_seconds: 45.0   # Shorter buffer for testing
   min_buffer_seconds: 10.0
-  cleanup_displayed_frames: false # for now, keep all frames to analyze after and set new baselines
+  cleanup_displayed_frames: true  # Enabled - no longer collecting training data
   max_output_frames: 400
 
 prompts:
