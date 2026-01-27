@@ -247,6 +247,23 @@ class AsyncGenerationOrchestrator:
             self.denoise_bend = 0.50  # Default bend denoise
             self.bend_duration = 4
         
+        # === MANUAL BYPASS MODE (Simple Frame Counting) ===
+        # Bypasses all complex metrics/convergence detection with simple modulo triggers
+        manual_bypass_config = self.config['generation']['cache'].get('manual_bypass', {})
+        self.manual_bypass_enabled = manual_bypass_config.get('enabled', False)
+        self.manual_bypass_mutation_interval = manual_bypass_config.get('mutation_interval', 5)
+        self.manual_bypass_cache_interval = manual_bypass_config.get('cache_injection_interval', 25)
+        self.manual_bypass_template_interval = manual_bypass_config.get('template_swap_interval', 75)
+        
+        if self.manual_bypass_enabled:
+            logger.info("=" * 60)
+            logger.info("MANUAL BYPASS MODE ENABLED")
+            logger.info("  All adaptive metrics/convergence detection BYPASSED")
+            logger.info(f"  Mutation every {self.manual_bypass_mutation_interval} frames (% {self.manual_bypass_mutation_interval})")
+            logger.info(f"  Cache injection every {self.manual_bypass_cache_interval} frames (% {self.manual_bypass_cache_interval})")
+            logger.info(f"  Template swap every {self.manual_bypass_template_interval} frames (% {self.manual_bypass_template_interval})")
+            logger.info("=" * 60)
+        
         if self.use_combinatorial:
             logger.info("Denoising state machine ENABLED (CombinatorialPromptSystem detected)")
             logger.info(f"  - DRIFT denoise: {self.denoise_drift}")
@@ -719,8 +736,26 @@ class AsyncGenerationOrchestrator:
                 negative_prompt = None
                 
                 if self.use_combinatorial:
-                    # Check if should mutate components
-                    if self.prompt_manager.should_mutate():
+                    # === MANUAL BYPASS: Force mutation on interval ===
+                    should_force_mutation_bypass = (
+                        self.manual_bypass_enabled and
+                        next_kf > 0 and
+                        next_kf % self.manual_bypass_mutation_interval == 0 and
+                        # Don't force mutation if we're already doing a bigger intervention
+                        next_kf % self.manual_bypass_cache_interval != 0 and
+                        next_kf % self.manual_bypass_template_interval != 0
+                    )
+                    
+                    if should_force_mutation_bypass:
+                        logger.info(
+                            f"  [MANUAL_BYPASS] Frame {next_kf} triggers FORCED MUTATION "
+                            f"(% {self.manual_bypass_mutation_interval} == 0)"
+                        )
+                        self.prompt_manager.mutate()
+                        self.forced_mutation_count += 1
+                        logger.info(f"  [MUTATION] Manual bypass forced mutation, entering BEND mode")
+                    # Check if should mutate components (normal adaptive path)
+                    elif self.prompt_manager.should_mutate():
                         self.prompt_manager.mutate()
                         logger.info(f"  [MUTATION] Component mutated, entering BEND mode")
                     
@@ -881,6 +916,7 @@ class AsyncGenerationOrchestrator:
         Decide if should inject cached/seed frame (INLINE decision)
         
         Integrates:
+        - Manual bypass mode (simple frame counting)
         - Collapse detection (analyze convergence)
         - Cooldown checks (prevent injection loops)
         - Warmup period (skip injections during warmup)
@@ -898,6 +934,37 @@ class AsyncGenerationOrchestrator:
             return False, None
         
         kf_num = self.current_keyframe_num + 1
+        
+        # === MANUAL BYPASS MODE ===
+        # Simple frame counting bypasses all adaptive metrics
+        if self.manual_bypass_enabled:
+            # Priority order: template swap > cache injection > mutation (handled separately)
+            # Check template swap first (most dramatic intervention)
+            if kf_num > 0 and kf_num % self.manual_bypass_template_interval == 0:
+                logger.info(
+                    f"[MANUAL_BYPASS] Frame {kf_num} triggers TEMPLATE SWAP "
+                    f"(% {self.manual_bypass_template_interval} == 0)"
+                )
+                return True, 'seed'
+            
+            # Check cache injection (medium intervention)
+            if kf_num > 0 and kf_num % self.manual_bypass_cache_interval == 0:
+                # Only if cache has frames
+                if self.cache.size() > 0:
+                    logger.info(
+                        f"[MANUAL_BYPASS] Frame {kf_num} triggers CACHE INJECTION "
+                        f"(% {self.manual_bypass_cache_interval} == 0)"
+                    )
+                    return True, 'cache'
+                else:
+                    logger.debug(
+                        f"[MANUAL_BYPASS] Frame {kf_num} would trigger cache injection "
+                        f"but cache is empty - skipping"
+                    )
+            
+            # Mutation is handled separately in _coordinate() since it's not an injection
+            # It just forces a mutation before normal generation
+            return False, None
         
         # === WARMUP PERIOD CHECK ===
         warmup_keyframes = self.config['generation']['cache'].get('warmup_keyframes', 0)
