@@ -1,8 +1,10 @@
-# Dream Window - Complete Installation Guide
+# dream_gen - Complete Installation Guide
 
 **From Zero to Running: A Beginner-Friendly Guide**
 
-This guide assumes little-to-no technical experience. Follow each step carefully, and you'll have Dream Window generating beautiful AI art on your desktop!
+This guide covers Windows desktop installation with the Rainmeter widget. For cloud deployment (RunPod), see [RUNPOD_DEPLOYMENT_GUIDE.md](RUNPOD_DEPLOYMENT_GUIDE.md).
+
+This guide assumes little-to-no technical experience. Follow each step carefully, and you'll have dream_gen creating beautiful AI art on your desktop!
 
 ---
 
@@ -12,11 +14,11 @@ This guide assumes little-to-no technical experience. Follow each step carefully
 2. [System Requirements](#system-requirements)
 3. [Step 1: Install Python](#step-1-install-python)
 4. [Step 2: Install UV Package Manager](#step-2-install-uv-package-manager)
-5. [Step 3: Download Dream Window](#step-3-download-dream-window)
+5. [Step 3: Download dream_gen](#step-3-download-dream-window)
 6. [Step 4: Install ComfyUI](#step-4-install-comfyui)
 7. [Step 5: Download Stable Diffusion 1.5 Model](#step-5-download-stable-diffusion-15-model)
-8. [Step 6: Install Dream Window Dependencies](#step-6-install-dream-window-dependencies)
-9. [Step 7: Configure Dream Window](#step-7-configure-dream-window)
+8. [Step 6: Install dream_gen Dependencies](#step-6-install-dream-window-dependencies)
+9. [Step 7: Configure dream_gen](#step-7-configure-dream-window)
 10. [Step 8: Install Rainmeter (Optional but Recommended)](#step-8-install-rainmeter-optional-but-recommended)
 11. [Step 9: First Run](#step-9-first-run)
 12. [Performance Settings by GPU Tier](#performance-settings-by-gpu-tier)
@@ -64,7 +66,7 @@ Before we begin, you'll need:
 
 ## Step 1: Install Python
 
-Dream Window requires **Python 3.11 or 3.12**. Do NOT use Python 3.13+ as it's not yet fully compatible.
+dream_gen requires **Python 3.11 or 3.12**. Do NOT use Python 3.13+ as it's not yet fully compatible.
 
 ### Download Python
 
@@ -126,14 +128,14 @@ UV is a fast, modern Python package manager that makes installation much easier.
 
 ---
 
-## Step 3: Download Dream Window
+## Step 3: Download dream_gen
 
 ### Option A: Using Git (Recommended)
 
 If you have Git installed:
 
 1. Open PowerShell
-2. Navigate to where you want to install Dream Window (e.g., Documents):
+2. Navigate to where you want to install dream_gen (e.g., Documents):
    ```powershell
    cd $HOME\Documents\projects
    ```
@@ -147,7 +149,7 @@ If you have Git installed:
 
 If you don't have Git:
 
-1. Go to the Dream Window GitHub page
+1. Go to the dream_gen GitHub page
 2. Click the green **"Code"** button
 3. Click **"Download ZIP"**
 4. Extract the ZIP file to a permanent location:
@@ -162,13 +164,13 @@ If you don't have Git:
 - **Example good path:** `C:\Users\John\Documents\projects\dream_gen`
 - **Example bad path:** `C:\Users\John\Desktop\New Folder (1)\dream_gen-main`
 
-From now on, we'll call this location your **"Dream Window folder"**.
+From now on, we'll call this location your **"dream_gen folder"**.
 
 ---
 
 ## Step 4: Install ComfyUI
 
-ComfyUI is the AI image generation backend that Dream Window uses.
+ComfyUI is the AI image generation backend that dream_gen uses.
 
 ### Download ComfyUI
 
@@ -180,13 +182,13 @@ ComfyUI is the AI image generation backend that Dream Window uses.
    - Install 7-Zip
    - Right-click the ComfyUI file → 7-Zip → Extract Here
 
-### Place ComfyUI in Dream Window
+### Place ComfyUI in dream_gen
 
 **CRITICAL:** ComfyUI must go in the correct location!
 
 1. After extracting, you'll have a folder called `ComfyUI_windows_portable` or similar
 2. **Rename this folder to just `ComfyUI`**
-3. Move/copy this `ComfyUI` folder into your Dream Window folder
+3. Move/copy this `ComfyUI` folder into your dream_gen folder
 4. The final path should be:
    ```
    C:\Users\YourName\Documents\projects\dream_gen\diffusion\ComfyUI\
@@ -194,7 +196,7 @@ ComfyUI is the AI image generation backend that Dream Window uses.
 
 ### Verify ComfyUI Structure
 
-After placement, your Dream Window folder should look like this:
+After placement, your dream_gen folder should look like this:
 
 ```
 dream_gen\
@@ -228,7 +230,7 @@ dream_gen\
 
 ## Step 5: Download Stable Diffusion 1.5 Model
 
-Dream Window uses Stable Diffusion 1.5 as its default model.
+dream_gen uses Stable Diffusion 1.5 as its default model.
 
 ### Download the Model
 
@@ -256,14 +258,14 @@ Dream Window uses Stable Diffusion 1.5 as its default model.
 
 ---
 
-## Step 6: Install Dream Window Dependencies
+## Step 6: Install dream_gen Dependencies
 
-Now we'll install all the Python libraries Dream Window needs.
+Now we'll install all the Python libraries dream_gen needs.
 
-### Navigate to Dream Window Folder
+### Navigate to dream_gen Folder
 
 1. Open PowerShell
-2. Navigate to your Dream Window folder:
+2. Navigate to your dream_gen folder:
    ```powershell
    cd C:\Users\YourName\Documents\projects\dream_gen
    ```
@@ -271,7 +273,7 @@ Now we'll install all the Python libraries Dream Window needs.
 
 ### Create Virtual Environment
 
-This creates an isolated Python environment for Dream Window:
+This creates an isolated Python environment for dream_gen:
 
 ```powershell
 uv venv
@@ -348,13 +350,13 @@ You should see:
 
 ---
 
-## Step 7: Configure Dream Window
+## Step 7: Configure dream_gen
 
-Now we'll configure Dream Window for your system.
+Now we'll configure dream_gen for your system.
 
 ### Open Configuration File
 
-1. Navigate to your Dream Window folder
+1. Navigate to your dream_gen folder
 2. Open `backend\config.yaml` in a text editor
    - Notepad works, but [Notepad++](https://notepad-plus-plus.org/) or [VS Code](https://code.visualstudio.com/) are better
 3. We'll edit several settings
@@ -373,7 +375,7 @@ system:
 
 **GPU ID Guide:**
 - **Single GPU:** Set to `0`
-- **Dual GPU (Dream Window on second GPU):** Set to `1`
+- **Dual GPU (dream_gen on second GPU):** Set to `1`
 - To check your GPU setup, run in PowerShell:
   ```powershell
   nvidia-smi -L
@@ -432,9 +434,9 @@ Rainmeter displays the AI art on your desktop as a widget.
 3. Run the installer
 4. Follow the installation wizard (default settings are fine)
 
-### Install Dream Window Skin
+### Install dream_gen Skin
 
-1. Open PowerShell in your Dream Window folder
+1. Open PowerShell in your dream_gen folder
 2. Run:
    ```powershell
    .\rainmeter_skin\install.ps1
@@ -449,7 +451,7 @@ Rainmeter displays the AI art on your desktop as a widget.
    - Select **"Manage"**
    - Find **"DreamWindow"** in the left panel
    - Open `@Resources\Variables.inc`
-   - Set `ProjectPath` to your Dream Window folder:
+   - Set `ProjectPath` to your dream_gen folder:
      ```ini
      ProjectPath=C:\Users\YourName\Documents\projects\dream_gen\
      ```
@@ -462,19 +464,19 @@ Rainmeter displays the AI art on your desktop as a widget.
 3. Click **"DreamWindow.ini"**
 4. Click **"Load"** in the top-right
 
-The widget should appear on your desktop (might be blank until Dream Window starts generating).
+The widget should appear on your desktop (might be blank until dream_gen starts generating).
 
 ---
 
 ## Step 9: First Run
 
-Everything is installed! Time to run Dream Window.
+Everything is installed! Time to run dream_gen.
 
 ### Method 1: Using Daemon (Recommended)
 
-The daemon automatically manages both ComfyUI and Dream Window:
+The daemon automatically manages both ComfyUI and dream_gen:
 
-1. Open PowerShell in your Dream Window folder
+1. Open PowerShell in your dream_gen folder
 2. Activate virtual environment:
    ```powershell
    .venv\Scripts\activate
@@ -501,7 +503,7 @@ cd diffusion\ComfyUI
 ```
 Wait for "To see the GUI go to: http://127.0.0.1:8188"
 
-**Terminal 2 - Dream Window:**
+**Terminal 2 - dream_gen:**
 ```powershell
 cd C:\Users\YourName\Documents\projects\dream_gen
 .venv\Scripts\activate
@@ -548,7 +550,7 @@ Watch PowerShell for these key messages:
 
 ## Performance Settings by GPU Tier
 
-Optimize Dream Window for your hardware. Edit `backend\config.yaml`:
+Optimize dream_gen for your hardware. Edit `backend\config.yaml`:
 
 ### Tier 1: High-End (RTX 3080+, RTX 4070+, 12GB+ VRAM)
 
@@ -741,7 +743,7 @@ Solutions:
    nvidia-smi
    ```
 
-### Dream Window Issues
+### dream_gen Issues
 
 **Problem: "No module named 'torch'"**
 
@@ -818,7 +820,7 @@ Solutions:
 Solutions:
 1. Verify `output\current_frame.png` exists
 2. Check ProjectPath in `rainmeter_skin\@Resources\Variables.inc`
-3. Make sure Dream Window is running (generating frames)
+3. Make sure dream_gen is running (generating frames)
 4. Refresh the skin: Right-click widget → Refresh Skin
 
 **Problem: "Widget shows old/frozen image"**
@@ -850,15 +852,15 @@ Solutions:
    ```
 3. Use performance mode settings (see Tier 4 above)
 
-**Problem: "System laggy while Dream Window runs"**
+**Problem: "System laggy while dream_gen runs"**
 
 Solutions:
-1. If dual GPU: Verify Dream Window is using the correct GPU:
+1. If dual GPU: Verify dream_gen is using the correct GPU:
    ```yaml
    gpu_id: 1  # Use second GPU
    ```
 2. Lower priority in Task Manager:
-   - Find `python.exe` (Dream Window)
+   - Find `python.exe` (dream_gen)
    - Right-click → Set Priority → Below Normal
 3. Enable game detection to auto-pause:
    ```yaml
@@ -910,9 +912,16 @@ Solutions:
 
 ### Customize Your Aesthetic
 
-Edit `backend\config.yaml` to change the visual style:
+dream_gen uses a combinatorial prompt system for infinite variety. The system has two parts:
 
+1. **Templates** (`prompts/templates.yaml`): Define prompt structure with `{category}` slots
+2. **Components** (`prompts/components.yaml`): Word pools that fill the slots
+
+**Quick customization via config.yaml** (legacy mode, simpler):
 ```yaml
+fresh_generation:
+  enabled: false  # Disable combinatorial system
+
 prompts:
   theme_pairs:
     - positive: "your custom prompt here"
@@ -920,35 +929,60 @@ prompts:
 ```
 
 **Tips:**
-- The default aesthetic is "ethereal technical angels" - monochrome with cyan/red accents
-- Experiment with different themes: cyberpunk, nature, abstract, architecture
-- Keep prompts consistent for cohesive evolution
-- Use negative prompts to avoid unwanted elements
+- The default aesthetic uses the combinatorial system with templates for endless variety
+- Each template emphasizes different visual axes (material, environment, process, etc.)
+- Components have semantic opposites that auto-generate negative prompts
+- DRIFT mode = same prompt, gradual evolution; BEND mode = prompt mutation, visual shift
 
-### Add Custom Seed Images
+### Customize Prompts via Combinatorial System
 
-1. Place your own images in the `seeds\` folder
-2. Dream Window will occasionally inject these for variety
-3. Good seed images:
-   - Match your desired resolution (512x256 or similar aspect ratio)
-   - Align with your prompt aesthetic
-   - High quality, clear subjects
+dream_gen uses a combinatorial prompt system with templates and component pools. To customize:
 
-### Fine-Tune Cache Behavior
+1. **Edit `prompts/templates.yaml`** to add new prompt structures:
+   ```yaml
+   - id: "my_template"
+     structure: "{subject_form} in {setting_location}, {color_logic}, {light_behavior}"
+     required_components: [subject_form, setting_location, color_logic, light_behavior]
+   ```
 
-The cache prevents visual "mode collapse" (getting stuck on similar images):
+2. **Edit `prompts/components.yaml`** to add new words to pools:
+   ```yaml
+   components:
+     color_logic:
+       - word: "monochrome"
+         opposite: "vibrant colors"
+       - word: "neon accents"
+         opposite: "muted tones"
+   ```
+
+3. The system automatically generates negative prompts from component opposites
+
+### Fine-Tune Cache and Mutation Behavior
+
+The cache and mutation systems prevent visual "mode collapse" (getting stuck on similar images):
 
 ```yaml
-cache:
-  injection_probability: 0.15      # How often to inject cached frames (15%)
-  diversity_threshold: 1.92        # How different cached frames must be
-  seed_injection_probability: 0.20 # How often to inject seed images
+generation:
+  cache:
+    injection_probability: 0.15      # How often to inject cached frames (15%)
+    collapse_detection: true         # Monitor for visual stagnation
+    
+    # Manual bypass: simple frame-counting (alternative to adaptive detection)
+    manual_bypass:
+      enabled: false
+      mutation_interval: 5           # Force mutation every N frames
+      cache_injection_interval: 25   # Cache injection every N frames
+
+fresh_generation:
+  mutation:
+    base_probability: 0.12           # Random mutation chance per keyframe
+    staleness_threshold: 25          # Force mutation after N frames without change
 ```
 
 **Experiment with:**
-- Higher injection = more variety, less cohesion
-- Lower injection = more cohesion, risk of mode collapse
-- Adjust thresholds to control diversity
+- Higher mutation probability = more variety, less cohesion
+- Lower mutation probability = more cohesion, risk of mode collapse
+- Enable manual_bypass for predictable, frame-counting based intervention
 
 ### Monitor Performance
 
@@ -974,7 +1008,7 @@ If you see bad signs, lower your performance settings.
 
 ### Advanced: Dual GPU Setup
 
-If you have two GPUs and want Dream Window on the secondary GPU:
+If you have two GPUs and want dream_gen on the secondary GPU:
 
 1. **In `config.yaml`:**
    ```yaml
@@ -990,12 +1024,12 @@ If you have two GPUs and want Dream Window on the secondary GPU:
    ```powershell
    nvidia-smi
    ```
-   - Watch GPU1 memory increase when Dream Window starts
+   - Watch GPU1 memory increase when dream_gen starts
    - GPU0 should stay free for gaming/other work
 
 3. **Benefits:**
    - Zero impact on gaming GPU
-   - Run Dream Window 24/7 without performance hit
+   - Run dream_gen 24/7 without performance hit
    - Games won't fight for VRAM
 
 ### Enable Game Detection
@@ -1011,7 +1045,7 @@ game_detection:
     - "your_game.exe"  # Add your games here
 ```
 
-Dream Window will:
+dream_gen will:
 - Monitor process list every 5 seconds
 - Pause generation when game detected
 - Free VRAM for the game
@@ -1023,7 +1057,7 @@ Dream Window will:
 
 ### Resources
 
-- **Documentation:** Check the `docs\` folder in Dream Window
+- **Documentation:** Check the `docs\` folder in dream_gen
 - **GitHub Issues:** [https://github.com/LuxiaSL/dream_gen/issues](https://github.com/LuxiaSL/dream_gen/issues)
 - **Discord:** Contact @luxia
 
@@ -1050,18 +1084,18 @@ Logs: [paste error from log]
 
 ## Conclusion
 
-You now have Dream Window fully installed! 🎉
+You now have dream_gen fully installed! 🎉
 
 **Quick command reference for daily use:**
 
 ```powershell
-# Navigate to Dream Window
+# Navigate to dream_gen
 cd C:\Users\YourName\Documents\projects\dream_gen
 
 # Activate virtual environment
 .venv\Scripts\activate
 
-# Run Dream Window (daemon mode)
+# Run dream_gen (daemon mode)
 uv run daemon.py
 
 # Or run manually (two terminals)
@@ -1078,7 +1112,7 @@ uv run backend\main.py
 - Or close the terminal windows
 
 **Daily workflow:**
-1. Start Dream Window (daemon or manual)
+1. Start dream_gen (daemon or manual)
 2. Load Rainmeter skin if not auto-loaded
 3. Watch the magic! ✨
 4. Customize prompts/settings as desired
@@ -1088,7 +1122,18 @@ Enjoy your living AI dream window! 🌟
 
 ---
 
-**Version:** 1.0.0  
-**Last Updated:** November 2024  
-**For:** Dream Window by Luxia
+**Version:** 2.0.0  
+**Last Updated:** January 2026  
+**For:** dream_gen by Luxia
+
+---
+
+## Cloud Deployment
+
+This guide covers Windows desktop installation. For cloud deployment on RunPod (the primary deployment method), see:
+
+- **[RUNPOD_DEPLOYMENT_GUIDE.md](RUNPOD_DEPLOYMENT_GUIDE.md)** — Complete cloud setup guide
+- **[CONFIG_REFERENCE.md](CONFIG_REFERENCE.md)** — All configuration options explained
+
+Cloud mode streams frames to a VPS for browser-based viewing at sites like [aetherawi.red/dreams](https://aetherawi.red/dreams).
 

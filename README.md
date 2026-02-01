@@ -1,413 +1,306 @@
-# Dream Window
+# dream_gen
 
-**A living AI dream on your desktop - continuously morphing ethereal imagery that never repeats.**
+**A truly infinite diffusion stream — continuous AI art that systematically explores latent space without ever collapsing.**
 
-> *"Like an automated dreams of electric sheep generator. A little HUD that is constantly running diffusion, showing images constantly shifting."*
-
-Dream Window is a desktop widget that displays endlessly evolving AI-generated art. Using a hybrid generation pipeline combining diffusion models with latent space interpolation, it creates smooth, dreamlike transitions between AI-generated keyframes while maintaining a distinctive ethereal technical aesthetic.
+> *Watch it live at [aetherawi.red/dreams](https://aetherawi.red/dreams)*
+> 
+> *Part of the [Aethera](https://github.com/LuxiaSL/aethera) platform*
+>
+> *Made by [luxia](https://x.com/slLuxia) & [celeste](https://x.com/parafactual)*
 
 <p align="center">
-  <img src="examples/gen_1.webp" alt="Dream Window in action - ethereal AI-generated art continuously morphing" width="45%">
-  <img src="examples/gen_3.webp" alt="Dream Window in action - ethereal AI-generated art continuously morphing" width="45%">
-  <br>
-  <em>Example generations showing the ethereal technical aesthetic</em>
+  <img src="examples/loop/Screenshot From 2026-01-27 04-27-22.png" alt="dream_gen output — plume through crystal" width="48%">
+  <img src="examples/loop/Screenshot From 2026-01-24 04-02-49.png" alt="dream_gen output — neural membranes" width="48%">
 </p>
 
-## 📖 Installation
+This isn't just morphing images. It's a self-sustaining generation loop that drifts through aesthetic space indefinitely — combining diffusion, interpolation, and a three-layer collapse prevention system that ensures it never gets stuck. The techniques all exist independently; diffusion, img2img feedback, VAE interpolation, perceptual hashing. But they haven't been put together quite like this before.
 
-**New to Dream Window?** Check out the **[Complete Installation Guide](docs/INSTALLATION_GUIDE.md)** for step-by-step instructions from zero to running, including Python setup, ComfyUI installation, and performance optimization for your GPU!
+The result: a stream that runs for hours, days, weeks — producing frames that are fire-and-forget ephemeral, each one unique, systematically exploring combinations that emerge from the interplay of prompts, mutations, cache injections, and template swaps. All for about a dollar an hour.
 
-## ✨ Key Features
+---
 
-- **Hybrid Generation Architecture**: Keyframes generated via img2img diffusion, smoothly interpolated using VAE latent space with spherical linear interpolation (slerp)
-- **Buffered Playback System**: 30-second rolling buffer ensures uninterrupted, smooth visual flow
-- **Dual-Metric Cache Injection**: Prevents visual mode collapse using ColorHist + pHash-8 similarity detection with OR logic for comprehensive collapse prevention
-- **Zero Gaming Impact**: Runs on dedicated GPU with automatic game detection and VRAM management
-- **Desktop Integration**: Lightweight Rainmeter widget with configurable styling and live status indicators
-- **Production-Ready Daemon**: Autonomous process management with auto-restart, health monitoring, and graceful shutdown
-- **Cloud Mode**: Stream frames to a web server for browser-based viewing (optional)
-
-## 🎯 What Makes This Different
-
-Most AI art generators create individual images. Dream Window creates a *continuous stream* - think of it as a window into an algorithm's dreams that morphs through aesthetic space without ever truly repeating.
-
-The secret is in the architecture:
-- **Keyframes**: Full diffusion generation provides diversity and detail
-- **Interpolations**: VAE latent interpolation between each keyframe provides buttery-smooth transitions
-- **Buffer and Queueing**: Allows frames to build up, coordinates between them, makes sure the "current frame" is always available and sequential
-- **Cache System**: Dual-metric similarity (ColorHist + pHash-8) detects and prevents mode collapse by intelligently reinjecting diverse past frames
-
-This hybrid approach gives you both visual quality and real-time performance that pure diffusion could never achieve.
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-- Windows 10/11
-- NVIDIA GPU (tested on Maxwell Titan X, works on 10xx and newer)
-- Python 3.11 or 3.12
-- [ComfyUI](https://github.com/comfyanonymous/ComfyUI) installed
-- [Rainmeter](https://www.rainmeter.net/) (for the desktop widget)
-
-### Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/LuxiaSL/dream_gen.git
-cd dream_gen
-
-# Create virtual environment and install dependencies
-uv venv
-.venv\Scripts\activate
-
-# Modern GPUs (RTX 20+, GTX 16 series): Just use uv sync!
-uv sync
-
-# Older GPUs (GTX 10 series, Pascal): Use CUDA 12.1
-# uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-# uv sync
-
-# Very old GPUs (Maxwell Titan X, etc): Use CUDA 11.8
-# uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-# uv sync
-
-# See docs/PYTORCH_CUDA_COMPATIBILITY.md for detailed GPU compatibility info
-
-# Configure paths in backend/config.yaml
-# Set your ComfyUI path, output directories, etc.
-notepad backend\config.yaml
-
-# Install Rainmeter widget
-.\rainmeter_skin\install.ps1
-```
-
-### Running
-
-```bash
-# Option 1: Run everything via daemon (recommended)
-uv run daemon.py
-
-# Option 2: Run components separately
-# Terminal 1: Start ComfyUI
-cd diffusion\ComfyUI
-.\run_nvidia_gpu.bat
-
-# Terminal 2: Start Dream Controller
-uv run backend\main.py
-```
-
-Load the Dream Window skin in Rainmeter and watch the magic happen!
-
-## 🏗️ Architecture
+## The Core Loop
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      DREAM WINDOW                            │
-│                                                              │
-│  ┌──────────────┐      ┌───────────────┐      ┌──────────┐ │
-│  │  Rainmeter   │◄─────│  Controller   │◄─────│ ComfyUI  │ │
-│  │   Widget     │ File │  (Python)     │ HTTP │ Backend  │ │
-│  │              │ Watch│               │ API  │ (GPU #2) │ │
-│  └──────────────┘      └───────┬───────┘      └──────────┘ │
-│                                 │                            │
-│                        ┌────────▼────────┐                  │
-│                        │  Frame Buffer   │                  │
-│                        │  - Keyframes    │                  │
-│                        │  - Interpolated │                  │
-│                        │  - 30s buffer   │                  │
-│                        └────────┬────────┘                  │
-│                                 │                            │
-│                        ┌────────▼────────┐                  │
-│                        │  Cache Manager  │                  │
-│                        │  - Dual-metric  │                  │
-│                        │  - LRU storage  │                  │
-│                        │  - Injection    │                  │
-│                        └─────────────────┘                  │
-└─────────────────────────────────────────────────────────────┘
+                        ┌────────────────────────────────────────┐
+                        │         COLLAPSE PREVENTION            │
+                        │                                        │
+                        │  Layer 1: Mutation   → BEND mode 0.7   │
+                        │  Layer 2: Cache      → blend in ~60%   │
+                        │  Layer 3: Swap       → fresh txt2img ──┼───┐
+                        │                                        │   │
+                        └────────────────────────────────────────┘   │
+                                                                     │
+╔════════════════════════════════════════════════════════════════════╪════════╗
+║                                                                    │        ║
+║                                                                    ▼        ║
+║   ┌─────────────────────────────────────────────────────────────────────┐   ║
+║   │                          KEYFRAME GENERATION                        │   ║
+║   │                                                                     │   ║
+║   │   KEYFRAME N-1  ───img2img───►  KEYFRAME N  ◄───  FRESH FRAME       │   ║
+║   │        │          (0.2 drift      │              (txt2img on        │   ║
+║   │        │           or 0.7 BEND)   │               startup/swap)     │   ║
+║   │        │                          │                                 │   ║
+║   └────────┼──────────────────────────┼─────────────────────────────────┘   ║
+║            │                          │                                     ║
+║            │                          │                                     ║
+║            ▼                          ▼                                     ║
+║   ┌──────────────────────────────────────────────────────────────────────┐  ║
+║   │                           INTERPOLATION                              │  ║
+║   │                                                                      │  ║
+║   │        VAE encode ──► LATENT N-1 ◄──slerp──► LATENT N ◄── VAE encode │  ║
+║   │                              │                                       │  ║
+║   │                              ▼                                       │  ║
+║   │                      12 blended latents                              │  ║
+║   │                              │                                       │  ║
+║   │                              ▼                                       │  ║
+║   │                         VAE decode                                   │  ║
+║   │                              │                                       │  ║
+║   └──────────────────────────────┼───────────────────────────────────────┘  ║
+║                                  │                                          ║
+║                                  ▼                                          ║
+║   ┌─────────────────────────────────────────────────────────────────────┐   ║
+║   │                         OUTPUT STREAM                               │   ║
+║   │                                                                     │   ║
+║   │        12 interpolated frames  +  keyframe  ───►  WebSocket ───►    │   ║
+║   │                                                                     │   ║
+║   └─────────────────────────────────────────────────────────────────────┘   ║
+║                                          │                                  ║
+║                                          ▼                                  ║
+║                                 (keyframe N becomes N-1)                    ║
+║                                          │                                  ║
+║                                          │                                  ║
+╚══════════════════════════════════════════╪══════════════════════════════════╝
+                                           │
+                                     ┌─────┘
+                                     │
+                                     ▼
+                               (loop continues)
 ```
 
-### Generation Flow
+1. **Startup**: txt2img generates a fresh frame from the combinatorial prompt system
+2. **img2img**: Each keyframe evolves from the previous (denoise 0.2 DRIFT, or 0.7 BEND after mutations)
+3. **Slerp**: VAE encodes both keyframes, spherically interpolates 12 latents, decodes all
+4. **Stream**: All frames push to viewers — interpolations for smoothness, keyframes for evolution
+5. **Collapse prevention**: Triggers at frame-count intervals, escalating through three layers
 
-1. **Keyframe Generation**: Controller requests diffusion generation via ComfyUI API
-2. **Latent Encoding**: Keyframe is encoded to VAE latent space
-3. **Interpolation**: Spherical lerp between keyframe latents creates smooth in-betweens
-4. **Frame Buffer**: All frames stored in sequence, maintaining 30s rolling buffer
-5. **Display Selection**: Buffer provides frames at target FPS (default 4fps) to Rainmeter
-6. **Cache Injection**: Dual-metric similarity detection (ColorHist + pHash-8) prevents mode collapse
+Each keyframe at 1024×512. Each interpolation frame decoded from blended latents. Frames stream to the VPS via WebSocket, broadcast to any browsers watching. Nothing stored permanently — it's all ephemeral, except for the screenshots I save.
 
-## ☁️ Cloud Mode
+---
 
-Dream Window can run on cloud GPUs and stream frames to a web server for browser-based viewing. This enables:
+## The Combinatorial Prompt System (designed & inspired by [celeste](https://x.com/parafactual))
 
-- **Cross-Platform Access**: Watch Dream Window on any device with a browser
-- **Cost-Effective GPU Usage**: Pay only when viewers are present (per-second billing)
-- **State Persistence**: Generation resumes seamlessly across GPU restarts
+This is where infinity comes from.
+
+### Templates × Components = Billions of Prompts
+
+**Templates** define prompt structure with slot placeholders:
+
+```
+"{subject_form} made of {material_substance}, {texture_density} surface, 
+ {light_behavior}, {color_logic}, {medium_render}"
+```
+
+**Components** fill those slots from curated word pools:
+
+```yaml
+color_logic:
+  - word: "split complementary palette"
+    opposite: "monochrome"
+  - word: "analogous warm tones"  
+    opposite: "cool discord"
+  - word: "iridescent color shift"
+    opposite: "matte single hue"
+  # ... 17 more
+```
+
+Each component has a **semantic opposite** — used both for negative prompt generation and for forced mutations during collapse prevention.
+
+### 12 Visual Axes, ~20 Components Each
+
+| Category | Examples | Role |
+|----------|----------|------|
+| `subject_form` | crystalline figure, weathered monument, recursive fractal | Primary visual entity |
+| `material_substance` | oxidized copper, liquid mercury, volcanic glass | What it's made of |
+| `texture_density` | eroded granular, tessellated geometric, fibrous organic | Surface quality |
+| `light_behavior` | caustic light rays, subsurface scattering, light bleeding | How light interacts |
+| `color_logic` | split complementary, triadic neon, monochrome with accent | Palette relationships |
+| `atmosphere_field` | volumetric fog layers, particle suspension, heat distortion | Environmental media |
+| `phenomenon_pattern` | crystalline growth, digital corruption, fluid dynamics | Visual processes |
+| `spatial_logic` | golden spiral composition, radial symmetry, isometric grid | Compositional arrangement |
+| `scale_perspective` | electron microscope view, aerial survey, macro lens | Viewing position |
+| `temporal_state` | mid-dissolution, fossilizing, time-lapse bloom | Moment in transformation |
+| `setting_location` | submerged cathedral, volcanic vent, abandoned server room | Environmental context |
+| `medium_render` | cyanotype print, thermal imaging, oil paint impasto | Artistic technique |
+
+### How the Word Lists Were Built
+
+The components weren't just brainstormed — they were systematically expanded:
+
+1. **Seed terms**: Hand-picked initial set per category with descriptions of what belongs
+2. **LLM expansion**: Prompted Claude Opus 4.5 and Kimi-K2 to generate novel terms fitting each category's semantics
+3. **Iteration**: Continued the loop until ~200 candidates per category
+4. **Farthest-point sampling**: Computed CLIP text embeddings, selected 40 maximally-distant samples
+5. **Manual curation**: Cleaned down to ~20 per category, ensuring semantic opposites exist
+
+The result: word pools that are both diverse (far apart in embedding space) and coherent (all genuinely belong to their category). Each template uses 5-7 categories, meaning billions of possible prompt combinations — and that's before mutations start shifting things mid-stream.
+
+---
+
+## Three-Layer Collapse Prevention
+
+The fundamental problem with img2img feedback loops: they converge. Small biases amplify. Everything trends toward a single color, a single composition, a fixed point.
+
+dream_gen fights this with three escalating intervention layers, each with cooldowns that force variety from the layers above.
+
+### Layer 1: Mutations (DRIFT → BEND)
+
+During normal operation, the system runs in **DRIFT mode** — img2img at 0.2 denoise, slow aesthetic evolution within the current prompt.
+
+Periodically (via modulo frame counting tuned from testing), a **mutation** triggers:
+- Select a component category (weighted by visual impact)
+- Swap the current word for its **semantic opposite** (or random if none)
+- Enter **BEND mode** — denoise jumps to 0.7 for ~5 keyframes
+- The new prompt takes effect quickly, pushing the image in a genuinely new direction
+
+Then: cooldown. The mutation layer locks out, forcing any further intervention to come from Layer 2.
+
+### Layer 2: Cache Injection
+
+Over time, the system collects frames into a cache:
+- **Keyframes** that show high uniqueness (via pHash-8 + ColorHist)
+- **t=0.5 interpolation midpoints** — transitional states not present in keyframes
+
+When Layer 2 triggers, a cached frame is selected for **maximum dissimilarity** to the current aesthetic and blended in at ~60% weight. The old visual trace remains, but the injection drags things toward a different region of color/structure space.
+
+pHash-8 captures structural/compositional similarity. ColorHist (32 bins × HSV) captures palette. Together they cover the two main axes of mode collapse. Both run on CPU, leaving GPU free for diffusion and interpolation.
+
+Then: longer cooldown. If this layer triggers too frequently within a time window, it "breaks" — escalating to Layer 3.
+
+### Layer 3: Template Swap
+
+The emergency reset. When mutations and cache injections aren't enough:
+
+1. **Fresh frame** generated via txt2img from a new template + random components
+2. Blended in at **~90% weight** — almost complete replacement, trace of the old
+3. The cache carries forward (those unique frames are still valuable)
+4. New prompt, new structure, new starting point
+5. The exploration continues down a completely different branch
+
+To make this instant, fresh frames are **pre-generated** at startup — one per template, with their prompts ready for downstream mutations. As each gets used, it regenerates in the background. The system never waits.
+
+---
+
+## What Makes This Interesting
+
+> "I expected morphing images. But this is genuinely exploring latent space in a systematic manner. Continuously."
+
+The emergent behaviors are what make it worth watching:
+
+- **Visible shifts**: You can *see* when the lighting component changes, when color logic mutates, when structure reorganizes. It's like watching what an image would look like if generated with a different prompt — while maintaining information from the original.
+
+- **Pseudo-determinism**: Even at full denoising, img2img carries a trace of its source. The starting frame propagates forward as a kind of seed. Mutations push against it but never fully escape. Template swaps are the only true breaks.
+
+- **Backwards engineering**: Knowing all the templates and components, try to guess the prompt from a frame. It's surprisingly hard — even for 1-2 components. The combinatorial explosion and mutation history make each frame's lineage opaque.
+
+- **Cache hits**: The frames that make it into the cache (high uniqueness in both color AND structure) tend to be the most visually striking. When they get reinjected later, they bring back moments that worked.
+
+- **Infinite without repetition**: Before the combinatorial system, things hovered around the static seed images. Now every fresh frame is genuinely novel, every mutation pathway unexplored, every template swap a new beginning. The flywheel is off.
+
+---
+
+## Technical Details
+
+| Spec | Value |
+|------|-------|
+| Resolution | 1024×512 |
+| Keyframe generation | ~1.5s (SD 1.5 via ComfyUI) |
+| Interpolation | 12 frames via VAE slerp, ~0.15s each |
+| Effective FPS | ~5 frames/second streamed |
+| Cache metrics | pHash-8 (structure) + ColorHist (color), CPU-based |
+| Cloud cost | ~$1/hour on RunPod |
+| Storage | None — frames are ephemeral |
 
 ### Architecture
 
 ```
-┌─────────────────┐     WebSocket      ┌─────────────────┐     WebSocket      ┌─────────────────┐
-│  Cloud GPU      │ ──────────────────► │  VPS (æthera)   │ ──────────────────► │  Browsers       │
-│  (RunPod)       │   Binary frames    │  Frame Hub      │   Binary frames    │  /dreams page   │
-│                 │   + State sync     │                 │   + Status msgs    │                 │
-└─────────────────┘                    └─────────────────┘                    └─────────────────┘
+┌─────────────────┐     WebSocket       ┌─────────────────┐     WebSocket       ┌─────────────────┐
+│  RunPod GPU     │ ──────────────────► │  VPS (Aethera)  │ ──────────────────► │  Browsers       │
+│  dream_gen      │   Binary frames     │  Frame Hub      │   Binary frames     │  /dreams        │
+└─────────────────┘                     └─────────────────┘                     └─────────────────┘
 ```
 
-### Enabling Cloud Mode
+The GPU runs autonomously. Frames push to the VPS. The VPS broadcasts to any connected viewers and manages GPU lifecycle (spin up when viewers arrive, spin down after grace period). State syncs periodically for resume across restarts.
 
-1. Set `cloud.enabled: true` in `backend/config.yaml`
-2. Configure the VPS WebSocket URL and auth token
-3. Deploy to RunPod using the provided Docker image
+---
 
-```yaml
-# backend/config.yaml
-cloud:
-  enabled: true
-  vps_websocket_url: "wss://your-domain.com/ws/gpu"
-  auth_token: "your_secure_shared_secret"
-  
-  frame_push:
-    format: "webp"
-    quality: 85
-  
-  state_sync:
-    interval_keyframes: 10  # Save state every 10 keyframes
-    push_on_shutdown: true
-  
-  resolution_override: [1024, 512]  # Higher res for cloud
-```
-
-### Cloud Components
-
-| Component | File | Purpose |
-|-----------|------|---------|
-| `VPSWebSocketClient` | `cloud/websocket_client.py` | Maintains connection to VPS |
-| `CloudFramePusher` | `cloud/frame_pusher.py` | Encodes and transmits frames |
-| `CloudStateSync` | `cloud/state_sync.py` | Periodic state snapshots |
-| `runpod_handler` | `cloud/runpod_handler.py` | Serverless entry point |
-
-### Backward Compatibility
-
-Cloud mode is **fully optional**. With `cloud.enabled: false` (default), Dream Window runs exactly as before — Rainmeter widget, local output, no external connections.
-
-When cloud mode is enabled, both outputs run simultaneously:
-- Local `output/current_frame.png` for Rainmeter
-- WebSocket stream to VPS for browsers
-
-### Deployment
-
-See `docs/CLOUD_DEPLOYMENT_PLAN.md` for the full deployment guide, including:
-- RunPod setup with Flashboot
-- Docker image building
-- VPS configuration
-- Cost projections
-
-## 📁 Project Structure
+## Project Structure
 
 ```
-dream-gen/
+dream_gen/
 ├── backend/
-│   ├── core/                    # Core generation logic
-│   │   ├── dream_controller.py  # Main orchestrator
-│   │   ├── generation_coordinator.py  # Keyframe + interpolation coordination
-│   │   ├── frame_buffer.py      # Buffered frame sequencing
-│   │   ├── display_selector.py  # Frame selection for display
-│   │   ├── generator.py         # ComfyUI API wrapper
-│   │   └── workflow_builder.py  # Dynamic workflow construction
-│   ├── cache/                   # Aesthetic caching system
-│   │   ├── manager.py           # LRU cache manager
-│   │   ├── injection_strategy.py # Cache injection strategies
-│   │   └── collapse_detector.py # Mode collapse detection
-│   ├── cloud/                   # Cloud mode (optional)
-│   │   ├── websocket_client.py  # VPS WebSocket connection
-│   │   ├── frame_pusher.py      # Frame encoding + transmission
-│   │   ├── state_sync.py        # State persistence
-│   │   └── runpod_handler.py    # Serverless entry point
-│   ├── interpolation/           # Latent space interpolation
-│   │   ├── latent_encoder.py    # VAE encoding/decoding
-│   │   └── spherical_lerp.py    # Slerp implementation
-│   ├── utils/                   # Utility modules
-│   │   ├── color_encoder.py     # ColorHist similarity encoder
-│   │   ├── phash_encoder.py     # Perceptual hash encoder
-│   │   ├── prompt_manager.py    # Prompt rotation
-│   │   └── ...
-│   └── config.yaml              # Main configuration
-├── daemon.py                    # Production daemon manager
-├── daemon_control.py            # Daemon control interface
-├── docker/                      # Cloud deployment
-│   ├── Dockerfile.cloud         # GPU container image
-│   └── docker-compose.cloud.yml # Local testing
-├── rainmeter_skin/              # Desktop widget
-├── comfyui_workflows/           # Workflow JSON templates
-├── seeds/                       # Initial seed images
-└── docs/                        # Documentation
+│   ├── core/                    # Generation loop, orchestration
+│   ├── cache/                   # pHash + ColorHist similarity, LRU cache
+│   ├── cloud/                   # WebSocket client, frame pushing, state sync
+│   ├── interpolation/           # VAE encode/decode, slerp
+│   ├── prompts/                 # CombinatorialPromptSystem
+│   └── config.yaml              # All the knobs
+├── prompts/
+│   ├── templates.yaml           # 12+ prompt structures
+│   ├── components.yaml          # 12 categories × ~20 words each
+│   └── components_embeddings.npz # Pre-computed for similarity selection
+├── daemon.py                    # Production process manager
+└── docker/                      # RunPod deployment images
 ```
 
-## ⚙️ Configuration
+### Running Locally
 
-Key settings in `backend/config.yaml`:
+```bash
+# Clone
+git clone https://github.com/LuxiaSL/dream_gen.git
+cd dream_gen
 
-```yaml
-system:
-  comfyui_url: "http://127.0.0.1:8188"  # ComfyUI API endpoint
-  gpu_id: 1                               # Dedicated GPU for generation
+# Install (requires Python 3.11+, NVIDIA GPU, ComfyUI)
+uv venv && .venv/Scripts/activate  # or source .venv/bin/activate
+uv sync
 
-generation:
-  model: "sd15"                           # or whatever model you want to run inside comfyui
-  resolution: [512, 256]                  # Width x Height (update Rainmeter dims too!)
-  mode: "hybrid"                          # Recommended
-  
-  hybrid:
-    interpolation_frames: 10              # Frames between keyframes
-    target_interpolation_fps: 4           # Display framerate
-    keyframe_denoise: 0.3                 # Img2img strength
-    interpolation_resolution_divisor: 1   # 1=full, 2=half (faster)
+# Configure
+cp backend/config.yaml backend/config.local.yaml
+# Edit paths, enable/disable cloud mode
 
-  cache:
-    max_size: 50                          # Cached frame limit
-    injection_probability: 0.15           # 15% chance per keyframe
-    similarity_method: "dual_metric"      # ColorHist + pHash-8 OR logic
-    
-    color_histogram:
-      diversity_threshold: 1.95           # Color diversity threshold
-    phash:
-      diversity_threshold: 0.82           # Structural diversity threshold
-
-prompts:
-  theme_pairs:
-    - positive: "ethereal digital angel, dissolving particles, technical wireframe..."
-      negative: "colors, warm tones, low quality..."
-  rotation_interval: 20                   # Keyframes before theme rotation
+# Run
+uv run daemon.py  # Manages ComfyUI + generation loop
 ```
 
-### 📐 Changing Generation Resolution
+See [docs/INSTALLATION_GUIDE.md](docs/INSTALLATION_GUIDE.md) for detailed Windows desktop setup.
+See [docs/RUNPOD_DEPLOYMENT_GUIDE.md](docs/RUNPOD_DEPLOYMENT_GUIDE.md) for cloud deployment.
+See [docs/CONFIG_REFERENCE.md](docs/CONFIG_REFERENCE.md) for all configuration options.
 
-To change the output resolution (e.g., to 512x512 or 1024x512):
+---
 
-1. **Update backend config** (`backend/config.yaml`):
-   ```yaml
-   generation:
-     resolution: [1024, 512]  # [width, height]
-   ```
-
-2. **Update Rainmeter widget** (`rainmeter_skin/@Resources/Variables.inc`):
-   ```ini
-   ViewportWidth=1024      # Match width
-   ViewportHeight=512      # Match height
-   WidgetWidth=1040        # ViewportWidth + 16
-   WidgetHeight=608        # ViewportHeight + 96
-   ```
-
-3. **Restart both services** for changes to take effect
-
-**Note:** Larger resolutions will reduce FPS. Adjust `interpolation_resolution_divisor` for performance tuning.
-
-## 🎨 Aesthetic Customization
-
-The visual style is controlled by:
-
-1. **Prompts** (`config.yaml` → `prompts.theme_pairs`): Define the aesthetic space with paired positive/negative prompts
-2. **Seed Images** (`seeds/`): Starting points that influence evolution
-3. **Denoise Strength** (`config.yaml` → `generation.hybrid.keyframe_denoise`): Controls how much each keyframe drifts
-
-The default aesthetic is "ethereal technical angels" - monochrome with cyan/red accents, particle dissolution, architectural wireframes. Each theme now has a tailored negative prompt for better control. Change the prompt pairs and seeds to explore different aesthetic spaces!
-
-## 🎮 Dual-GPU Setup & Game Detection
-
-Dream Window is designed to coexist peacefully with gaming:
-
-- **Dedicated GPU**: Runs on GPU #2, completely isolated from gaming GPU
-- **Game Detection**: Monitors process list for known games
-- **Auto-Pause**: Automatically pauses generation and frees VRAM when games detected
-- **Auto-Resume**: Restarts generation when game closes
-
-Configure in `config.yaml` → `game_detection.known_games`.
-
-## 📊 Performance
-
-**On Maxwell Titan X (12GB) w/ default config:**
-- Keyframe generation: ~2.1s (SD 1.5)
-- Interpolation: ~0.25s per frame (full res) or ~0.07s (half res)
-- Memory usage: ~6-8GB VRAM
-- CPU overhead: Negligible (<2%)
-
-**Framerate modes:**
-- Full resolution (512x256): ~4 FPS
-- 3/4 resolution (384x192): ~8 FPS
-- Half resolution (256x128): ~15 FPS
-- Configure via `interpolation_resolution_divisor`
-
-## 🔧 Troubleshooting
-
-**ComfyUI not starting?**
-- Check `daemon.comfyui.startup_script` path in config.yaml
-- Verify ComfyUI runs standalone first
-- Check `logs/daemon.log` for errors
-
-**No frames generating?**
-- Ensure ComfyUI API is accessible: `curl http://127.0.0.1:8188/system_stats`
-- Check GPU availability: `nvidia-smi`
-- Review `logs/dream_controller.log`
-
-**Rainmeter widget blank?**
-- Verify `output/current_frame.png` exists
-- Check ProjectPath in `rainmeter_skin/@Resources/Variables.inc`
-- Ensure backend is running
-
-**Frames stuttering?**
-- Increase buffer target: `display.buffer_target_seconds: 60`
-- Lower resolution: `interpolation_resolution_divisor: 2`
-- Reduce interpolation frames: `hybrid.interpolation_frames: 5`
-
-Any other issues, contact @luxia on discord or open an issue.
-
-## 🤝 Contributing
-
-Contributions welcome! Areas of interest:
-
-- **Additional Diffusion Suites**: ComfyUI is strong; could stand to support many others for flexibility/choice, as well as other models
-- **Improved Rainmeter Control/Display**: More buttons/knobs to tune the diffusion on the fly from the rainmeter widget itself.
-- **Refactoring + Cross-System Capabilities**: System and software agnostic, separating away from Rainmeter explicitly and moving towards independent pieces with the core logic
-- **Single GPU Support**: Self explanatory. Hardcoded to try and offload to secondary GPU, can be altered or made to support single ones. Pairs well with system agnostic development.
-## 📜 License
-
-MIT License - see LICENSE file for details.
-
-## 🙏 Acknowledgments
-
-- **ComfyUI** by comfyanonymous - The backbone of the generation pipeline
-- **Stable Diffusion** - Making this level of AI art accessible
-- **Rainmeter** - Elegant desktop customization platform
-
-## 🌟 Gallery
+## Gallery
 
 <p align="center">
-
-  <img src="examples/gen_1.webp" alt="Example generations from Dream Window" width="100%">
+  <img src="examples/loop/1.png" alt="bioluminescent mangrove swamp" width="100%">
   <br>
-
-  ---
-
+  <img src="examples/loop/Screenshot%20From%202026-01-26%2018-30-52.png" alt="voronoi zebra pattern" width="100%">
   <br>
-  <img src="examples/gen_2.webp" alt="Example generations from Dream Window" width="100%">
-
+  <img src="examples/loop/Screenshot%20From%202026-01-27%2003-48-13.png" alt="pastel interference clouds" width="100%">
   <br>
-
-  ---
-
+  <img src="examples/loop/2.png" alt="crimson crepuscular rays" width="100%">
   <br>
-  <img src="examples/gen_3.webp" alt="Example generations from Dream Window" width="100%">
-  
-  <br>
-
-  ---
-
-  <br>
-  <img src="examples/gen_4.webp" alt="Example generations from Dream Window" width="100%">
-  
-  <br>
-
-  ---
-
-  <em>The system in action - endless variations that never repeat</em>
+  <em>Frames captured from the stream — each one ephemeral, each one unique</em>
 </p>
+
+---
+
+## License
+
+MIT License — see [LICENSE](LICENSE) for details.
+
+## Acknowledgments
+
+- **[celeste](https://x.com/parafactual)**, my muse and co-conspirator
+- **[ComfyUI](https://github.com/comfyanonymous/ComfyUI)** — The generation backend
+- **Stable Diffusion** — Making this level of AI art accessible
+- **Claude** — Component list expansion and curation assistance

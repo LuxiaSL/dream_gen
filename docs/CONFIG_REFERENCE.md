@@ -1,4 +1,4 @@
-# Dream Window Configuration Reference
+# dream_gen Configuration Reference
 
 > Complete documentation for `backend/config.yaml`
 
@@ -13,12 +13,14 @@ This document explains every configuration section in depth, covering the underl
    - [Model Parameters](#21-model-parameters-flux-and-sd)
    - [Hybrid Mode](#22-hybrid-mode)
    - [Cache System](#23-cache-system)
-3. [Display](#3-display)
-4. [Prompts](#4-prompts)
-5. [Game Detection](#5-game-detection)
-6. [Performance](#6-performance)
-7. [Daemon](#7-daemon)
-8. [Cloud](#8-cloud)
+   - [Manual Bypass Mode](#24-manual-bypass-mode)
+3. [Fresh Generation](#3-fresh-generation)
+4. [Display](#4-display)
+5. [Prompts](#5-prompts-legacy)
+6. [Game Detection](#6-game-detection)
+7. [Performance](#7-performance)
+8. [Daemon](#8-daemon)
+9. [Cloud](#9-cloud)
 
 ---
 
@@ -63,22 +65,23 @@ Persistent storage for the LRU image cache. Contains:
 
 The cache is separate from output because it should persist across runs while output can be cleaned up. If disk space is limited, you might want this on a different drive than `output_dir`.
 
-#### `seed_dir`
-**Default:** `"./seeds"`
+#### `seed_dir` (Deprecated)
 
-Directory containing seed images (PNG/JPG) used for:
-1. **Bootstrap**: The first generation uses a random seed image
-2. **Emergency injection**: When severe mode collapse is detected
-3. **Periodic refresh**: Adaptive seed injection based on collapse frequency
+**Note:** Seed images are no longer used. The `FreshFrameBuffer` system now generates bootstrap frames via txt2img using the combinatorial prompt system. This provides better-quality starting points that match the current aesthetic configuration.
 
-More diverse seeds = more variety when the system needs to break out of a loop. The images don't need to match your prompts exactly—they serve as starting points that the diffusion process will transform.
+The bootstrap process:
+1. On startup, generates initial frames using txt2img (full generation, no input image)
+2. These become the first keyframes and establish the visual baseline
+3. Subsequent keyframes evolve via img2img from previous frames
+
+For collapse recovery, the system now uses cache injection and forced component mutations via the BEND mode system rather than external seed images.
 
 #### `gpu_id`
 **Default:** `0`
 
 Which CUDA device to use for VAE operations (encoding/decoding latents for interpolation). This is passed to PyTorch as `cuda:{gpu_id}`.
 
-In multi-GPU setups, you might dedicate one GPU to Dream Window while keeping another for gaming or other work. Note that ComfyUI has its own GPU selection (configured in its startup script), so both need to align if you want them on the same or different GPUs.
+In multi-GPU setups, you might dedicate one GPU to dream_gen while keeping another for gaming or other work. Note that ComfyUI has its own GPU selection (configured in its startup script), so both need to align if you want them on the same or different GPUs.
 
 #### `log_dir` and `log_level`
 **Defaults:** `"./logs"`, `"INFO"`
@@ -95,11 +98,11 @@ Logs accumulate indefinitely, so for long-running deployments, consider external
 
 ## 2. Generation
 
-The core of Dream Window—controls how images are created and evolved.
+The core of dream_gen—controls how images are created and evolved.
 
 ### Architecture Overview
 
-Dream Window generates a continuous stream of images through a hybrid pipeline:
+dream_gen generates a continuous stream of images through a hybrid pipeline:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -187,7 +190,7 @@ These blocks configure diffusion parameters based on the selected model.
 
 Number of denoising iterations per generation. More steps = more refined output but slower.
 
-For Dream Window's drifting aesthetic, fewer steps work well because:
+For dream_gen's drifting aesthetic, fewer steps work well because:
 1. We're doing img2img with low denoise, so the model doesn't need to create from scratch
 2. Slight imperfections contribute to the dreamy quality
 3. Speed matters for maintaining smooth animation
@@ -234,7 +237,7 @@ Karras typically produces better results with SD 1.5 at low step counts.
 
 ### 2.2 Hybrid Mode
 
-The heart of Dream Window's animation system.
+The heart of dream_gen's animation system.
 
 #### `interpolation_frames`
 **Default:** `10`
@@ -354,7 +357,7 @@ Each generation slightly amplifies tendencies in the input. Without intervention
 
 #### The Prevention Strategy
 
-Dream Window uses a **dual-metric watchdog** system:
+dream_gen uses a **dual-metric watchdog** system:
 
 1. **ColorHist**: Tracks color palette distribution (96-dimensional histogram)
 2. **pHash-8**: Tracks structural/compositional similarity (64-bit perceptual hash)
@@ -578,9 +581,11 @@ Log detailed convergence metrics for tuning. The logs show delta values so you c
 
 ---
 
-#### Adaptive Seed Injection
+#### Adaptive Seed/Template Injection (Legacy)
 
-Seeds are "emergency interventions"—when cache injection isn't enough, inject a completely fresh image from the seed directory.
+**Note:** With `fresh_generation.enabled: true`, these settings are mostly superseded by the BEND mode mutation system. The primary collapse recovery is now forced component mutation, with template swaps as the emergency fallback.
+
+When fresh generation is disabled, these settings control "emergency interventions"—when cache injection isn't enough.
 
 ##### `seed_injection_floor` and `seed_injection_max`
 **Defaults:** `0.02`, `0.15`
@@ -629,13 +634,151 @@ These are documented for future reference but currently have no effect.
 
 ---
 
-## 3. Display
+### 2.4 Manual Bypass Mode
+
+A simple, predictable alternative to the adaptive collapse detection system.
+
+#### Why Manual Bypass?
+
+The adaptive detection system uses rolling windows, warmup periods, convergence thresholds, and multi-metric comparison. While effective, it can be hard to tune and may produce unexpected behavior during template transitions.
+
+Manual bypass offers a simple alternative: trigger actions based on pure frame counting.
+
+```yaml
+manual_bypass:
+  enabled: true
+  mutation_interval: 5       # Force mutation every 5 frames
+  cache_injection_interval: 25
+  template_swap_interval: 75
+```
+
+When `enabled: true`, the adaptive system is bypassed entirely. Instead:
+- Every 5th keyframe: Force a component mutation (via BEND mode)
+- Every 25th keyframe: Inject a dissimilar frame from cache
+- Every 75th keyframe: Generate a fresh frame with new template
+
+#### `enabled`
+**Default:** `false`
+
+Master toggle for manual bypass mode.
+
+#### `mutation_interval`
+**Default:** `5`
+
+Force a component mutation every N keyframes. This triggers BEND mode (high denoise for visual transition).
+
+Lower values = more variety, less cohesion. Higher values = longer aesthetic runs.
+
+#### `cache_injection_interval`
+**Default:** `25`
+
+Inject a dissimilar cached frame every N keyframes. Acts as a "soft reset" to the current aesthetic.
+
+#### `template_swap_interval`
+**Default:** `75`
+
+Switch to a completely new template with fresh components every N keyframes. This is the most dramatic intervention—use sparingly.
+
+#### When to Use
+
+- **Debugging**: Predictable timing makes it easier to observe system behavior
+- **Streaming**: Consistent variety without unpredictable collapse interventions
+- **Simple operation**: "Just make it change every X frames" without tuning thresholds
+
+---
+
+## 3. Fresh Generation
+
+The combinatorial prompt system for infinite variety.
+
+### Overview
+
+Fresh generation replaces static prompt pairs with a template + component system that generates billions of unique prompts. It also introduces DRIFT/BEND modes for smooth aesthetic evolution.
+
+```
+Template: "{subject_form} made of {material_substance}, {color_logic}"
+     ↓
+Components: subject_form="crystalline figure", material_substance="obsidian glass", color_logic="split complementary"
+     ↓
+Prompt: "crystalline figure made of obsidian glass, split complementary"
+```
+
+### `enabled`
+**Default:** `true`
+
+When enabled, the CombinatorialPromptSystem replaces the legacy `prompts.theme_pairs` system.
+
+---
+
+### Denoising Modes
+
+#### `denoising.drift`
+**Default:** `0.20`
+
+Denoise strength during normal operation (DRIFT mode). The same prompt evolves gradually through img2img with low denoise.
+
+Lower values = very slow, subtle evolution. Higher values = faster drift but less stability.
+
+#### `denoising.bend`
+**Default:** `0.50`
+
+Denoise strength after a component mutation (BEND mode). Higher denoise allows the visual to "bend" toward the new prompt.
+
+This should be significantly higher than drift to create visible transitions.
+
+#### `denoising.bend_frames`
+**Default:** `4`
+
+How many keyframes to stay in BEND mode after a mutation. This determines how long the high-denoise transition lasts.
+
+---
+
+### Mutation Settings
+
+#### `mutation.base_probability`
+**Default:** `0.12`
+
+Random chance of mutation on each keyframe (12%). This creates organic variety without predictable timing.
+
+#### `mutation.staleness_threshold`
+**Default:** `25`
+
+Force a mutation after N keyframes without change. Prevents getting stuck on one aesthetic indefinitely.
+
+#### `mutation.category_weights`
+
+Probability weights for which component category gets mutated:
+
+```yaml
+category_weights:
+  color_logic: 0.35      # Palette changes (most impactful)
+  atmosphere_field: 0.25 # Environmental effects
+  light_behavior: 0.20   # Lighting changes
+  temporal_state: 0.15   # Decay/growth state
+  texture_density: 0.05  # Surface quality
+```
+
+Higher weights = more likely to be selected for mutation. Adjust based on which visual axes you want to vary most.
+
+#### `mutation.similarity_target`
+**Default:** `0.55`
+
+When selecting a new component, prefer ones with this semantic similarity to the current component. This creates smooth transitions—not too similar (boring) and not too different (jarring).
+
+#### `mutation.similarity_range`
+**Default:** `0.25`
+
+Acceptable range around the similarity target. Components outside this range are less likely to be selected.
+
+---
+
+## 4. Display
 
 Controls frame output and buffer management.
 
 ### Buffer System
 
-Dream Window uses a buffer to ensure smooth playback:
+dream_gen uses a buffer to ensure smooth playback:
 
 ```
 Generation → Buffer → Display
@@ -682,9 +825,9 @@ Legacy cleanup mechanism—keep only last N frames. Deprecated if `cleanup_displ
 
 ---
 
-## 4. Prompts
+## 5. Prompts (Legacy)
 
-Controls the text guidance for generation.
+Controls the text guidance for generation when `fresh_generation.enabled: false`.
 
 ### Theme Pairs
 
@@ -732,7 +875,7 @@ Future feature: Modify prompts based on system state (CPU load, etc.).
 
 ---
 
-## 5. Game Detection
+## 6. Game Detection
 
 Automatically pause generation when games are running to prevent VRAM conflicts.
 
@@ -776,7 +919,7 @@ For future GPU load method: pause if GPU utilization exceeds this percentage.
 
 ---
 
-## 6. Performance
+## 7. Performance
 
 System-wide performance tuning.
 
@@ -816,7 +959,7 @@ Use non-blocking file writes. Recommended for all cases.
 
 ---
 
-## 7. Daemon
+## 8. Daemon
 
 Process management for running as a persistent service.
 
@@ -825,7 +968,7 @@ Process management for running as a persistent service.
 The daemon manages the full stack:
 1. Starts ComfyUI backend
 2. Waits for health check
-3. Starts Dream Window controller
+3. Starts dream_gen controller
 4. Monitors both processes
 5. Auto-restarts on crashes
 6. Handles graceful shutdown
@@ -861,7 +1004,7 @@ Which Python to use for running the controller. Options:
 ##### `controller.main_script`
 **Default:** `"backend/main.py"`
 
-Entry point for the Dream Window controller.
+Entry point for the dream_gen controller.
 
 ### Auto-Restart
 
@@ -923,7 +1066,7 @@ Daemon log verbosity.
 
 ---
 
-## 8. Cloud
+## 9. Cloud
 
 Optional web deployment—push frames to a VPS for browser viewing.
 

@@ -1,6 +1,6 @@
-# RunPod Deployment Guide for Dream Window
+# RunPod Deployment Guide for dream_gen
 
-> **Complete step-by-step guide** for deploying Dream Window on RunPod Serverless with Flashboot, including VPS configuration and end-to-end testing.
+> **Complete step-by-step guide** for deploying dream_gen on RunPod Serverless with Flashboot, including VPS configuration and end-to-end testing.
 
 ---
 
@@ -448,7 +448,7 @@ Using RunPod's test feature:
    ```json
    {
      "status": "healthy",
-     "message": "Dream Window handler ready"
+     "message": "dream_gen handler ready"
    }
    ```
 
@@ -609,7 +609,7 @@ curl https://api.runpod.ai/v2/YOUR_ENDPOINT_ID/health \
 ### Support
 
 - **RunPod Discord:** [discord.gg/runpod](https://discord.gg/runpod)
-- **Dream Window Issues:** GitHub Issues
+- **dream_gen Issues:** GitHub Issues
 - **Author:** @luxia on Discord
 
 ---
