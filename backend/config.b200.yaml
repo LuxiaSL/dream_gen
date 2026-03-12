@@ -136,7 +136,7 @@ game_detection:
 performance:
   max_queue_size: 100
   generation_timeout: 60
-  enable_torch_compile: true      # B200 + PyTorch 2.8 — free ~30% UNet speedup
+  enable_torch_compile: false     # Disabled: dynamo tracing overhead > benefit at 2-3 UNet steps
   max_generation_fps: null         # No throttle for now — benchmark first, tune later
   async_file_operations: true
 
