@@ -25,7 +25,7 @@ generation:
 
   hybrid:
     interpolation_frames: 20
-    target_interpolation_fps: 30.0
+    target_interpolation_fps: 10.0
     keyframe_denoise: 0.2
     interpolation_decoder: "vae"       # "vae" (full quality) or "taesd" (~2x faster, slightly softer)
     interpolation_resolution_divisor: 1
