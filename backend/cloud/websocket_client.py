@@ -117,7 +117,10 @@ class VPSWebSocketClient:
     HEALTH_CHECK_INTERVAL = 15.0  # Seconds between health checks
     # Only trigger reconnect after this many seconds of silence.
     # Set high to avoid false positives during warmup/idle periods.
-    HEALTH_DEAD_THRESHOLD = 90.0  # Seconds - must be > warmup time (~45s)
+    HEALTH_DEAD_THRESHOLD = 0  # Disabled — websockets library handles ping/pong natively.
+    # The old 90s threshold killed the connection every 90s because the VPS
+    # never sends application-level messages back (one-way frame stream).
+    # Set to 0 to disable; set to e.g. 300 to re-enable with a safe margin.
     
     # Message queue settings
     MAX_QUEUE_SIZE = 100  # Max messages to buffer during disconnect
@@ -851,9 +854,9 @@ class VPSWebSocketClient:
                 
                 # Check if we've received any message recently
                 # This tracks application-level messages, not websocket pings
-                if self.stats.last_pong_received:
+                if self.stats.last_pong_received and self.HEALTH_DEAD_THRESHOLD > 0:
                     silence_duration = time.time() - self.stats.last_pong_received
-                    
+
                     if silence_duration > self.HEALTH_DEAD_THRESHOLD:
                         logger.warning(
                             f"Connection appears dead - no activity for {silence_duration:.0f}s. "
