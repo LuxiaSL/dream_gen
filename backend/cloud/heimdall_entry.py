@@ -109,11 +109,15 @@ async def run_direct_generation(
             except Exception as e:
                 logger.warning(f"Failed to re-send FPS config: {e}")
 
+        async def on_vps_disconnected():
+            logger.warning("VPS disconnected — frames will queue")
+
+        async def on_vps_reconnecting(attempt: int, url: str):
+            logger.info(f"VPS reconnecting (attempt {attempt})")
+
         vps_client.set_lifecycle_callbacks(
-            on_disconnected=lambda: logger.warning("VPS disconnected — frames will queue"),
-            on_reconnecting=lambda attempt, url: logger.info(
-                f"VPS reconnecting (attempt {attempt})"
-            ),
+            on_disconnected=on_vps_disconnected,
+            on_reconnecting=on_vps_reconnecting,
             on_reconnected=on_vps_reconnected,
         )
 
