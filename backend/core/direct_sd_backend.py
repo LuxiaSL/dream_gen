@@ -76,6 +76,16 @@ class DirectSDBackend:
         self._img2img_pipe = None
         self._loaded = False
 
+        # CLIP embedding cache — skip re-encoding when prompt unchanged
+        self._cached_prompt: Optional[str] = None
+        self._cached_negative: Optional[str] = None
+        self._cached_prompt_embeds = None
+        self._cached_negative_embeds = None
+
+        # Latent cache — skip VAE encode when input is our own last output
+        self._last_output_path: Optional[Path] = None
+        self._last_output_latent = None  # torch.Tensor on GPU
+
         logger.info(
             f"DirectSDBackend initialized "
             f"(device={self.device}, steps={self.default_steps}, "
@@ -197,6 +207,66 @@ class DirectSDBackend:
         return temp_path
 
     # ================================================================
+    # Caching — skip redundant CLIP/VAE work between frames
+    # ================================================================
+
+    def _get_prompt_embeds(self, prompt: str, negative_prompt: str):
+        """
+        Get CLIP embeddings, using cache if prompt unchanged.
+
+        In DRIFT mode the same prompt runs for dozens of frames —
+        re-encoding it every time wastes ~50ms per frame.
+        """
+        if prompt == self._cached_prompt and negative_prompt == self._cached_negative:
+            return self._cached_prompt_embeds, self._cached_negative_embeds
+
+        # Encode new prompt
+        pipe = self._txt2img_pipe
+        prompt_embeds, negative_embeds = pipe.encode_prompt(
+            prompt=prompt,
+            device=pipe.device,
+            num_images_per_prompt=1,
+            do_classifier_free_guidance=self.default_cfg > 1.0,
+            negative_prompt=negative_prompt,
+        )
+
+        self._cached_prompt = prompt
+        self._cached_negative = negative_prompt
+        self._cached_prompt_embeds = prompt_embeds
+        self._cached_negative_embeds = negative_embeds
+
+        logger.debug("CLIP embeddings encoded (cache miss)")
+        return prompt_embeds, negative_embeds
+
+    def _get_input_latent(self, image_path: Path, image: Image.Image):
+        """
+        Get VAE-encoded latent for input image, using cache if this
+        is our own last output (the common case in the morphing loop).
+
+        Saves ~40ms VAE encode + ~20ms PNG load per frame.
+        """
+        if (
+            self._last_output_latent is not None
+            and self._last_output_path is not None
+            and image_path.resolve() == self._last_output_path.resolve()
+        ):
+            logger.debug("Using cached latent (skipping VAE encode)")
+            return self._last_output_latent
+
+        # Must encode from scratch
+        return None  # Signal caller to let pipeline handle it
+
+    def _cache_output_latent(self, output_path: Path, pipe_output) -> None:
+        """Store the latent from this generation for next frame's input."""
+        # The Img2Img pipeline doesn't expose intermediate latents by default.
+        # We need output_type="latent" for that, but then we'd lose the PIL image.
+        # Instead, we VAE-encode the output image — but that defeats the purpose.
+        #
+        # Better approach: run the pipeline with output_type="latent", then
+        # decode ourselves. This gives us both the latent (cached) and the image (saved).
+        pass  # Implemented inline in generate_from_image below
+
+    # ================================================================
     # Generation Methods
     # ================================================================
 
@@ -216,6 +286,8 @@ class DirectSDBackend:
 
         self._ensure_loaded()
 
+        prompt_embeds, negative_embeds = self._get_prompt_embeds(prompt, negative_prompt)
+
         if seed is None:
             seed = random.randint(0, 2**32 - 1)
         generator = torch.Generator(device=self.device).manual_seed(seed)
@@ -223,19 +295,37 @@ class DirectSDBackend:
         try:
             with self._pipeline_lock:
                 result = self._txt2img_pipe(
-                    prompt=prompt,
-                    negative_prompt=negative_prompt,
+                    prompt_embeds=prompt_embeds,
+                    negative_prompt_embeds=negative_embeds,
                     width=self.target_width,
                     height=self.target_height,
                     num_inference_steps=self.default_steps,
                     guidance_scale=self.default_cfg,
                     generator=generator,
+                    output_type="latent",
                 )
+
+                # Decode latent to PIL
+                output_latent = result.images
+                with torch.no_grad():
+                    decoded = self._txt2img_pipe.vae.decode(
+                        output_latent / self._txt2img_pipe.vae.config.scaling_factor,
+                        return_dict=False,
+                    )[0]
+                image = self._txt2img_pipe.image_processor.postprocess(decoded, output_type="pil")[0]
+
         except Exception as e:
             logger.error(f"txt2img generation failed: {e}", exc_info=True)
             return None
 
-        return self._save_result(result.images[0], start_time)
+        output_path = self._save_result(image, start_time)
+
+        # Cache output latent (first keyframe feeds into img2img loop)
+        if output_path is not None:
+            self._last_output_latent = output_latent.detach()
+            self._last_output_path = output_path
+
+        return output_path
 
     async def generate_from_prompt_async(
         self,
@@ -275,9 +365,12 @@ class DirectSDBackend:
 
         self._ensure_loaded()
 
-        # Load and resize input image
-        resized_path = self._resize_image_for_generation(image_path)
-        input_image = Image.open(resized_path).convert("RGB")
+        # --- Cached CLIP embeddings ---
+        prompt_embeds, negative_embeds = self._get_prompt_embeds(prompt, negative_prompt)
+
+        # --- Check latent cache (skip VAE encode if input is our last output) ---
+        cached_latent = self._get_input_latent(image_path, None)
+        use_cached = cached_latent is not None
 
         if seed is None:
             seed = random.randint(0, 2**32 - 1)
@@ -285,20 +378,69 @@ class DirectSDBackend:
 
         try:
             with self._pipeline_lock:
-                result = self._img2img_pipe(
-                    prompt=prompt,
-                    negative_prompt=negative_prompt,
-                    image=input_image,
-                    strength=denoise,
-                    num_inference_steps=self.default_steps,
-                    guidance_scale=self.default_cfg,
-                    generator=generator,
-                )
+                if use_cached:
+                    # Fast path: feed latent directly, get latent out
+                    # We need to add noise to the cached latent ourselves
+                    # since we're bypassing the image preprocessing
+                    pipe = self._img2img_pipe
+
+                    # Prepare timesteps (same as pipeline internals)
+                    pipe.scheduler.set_timesteps(self.default_steps, device=self.device)
+                    timesteps, num_steps = pipe.get_timesteps(self.default_steps, denoise, self.device)
+
+                    # Add noise to cached latent at the right strength
+                    noise = torch.randn_like(cached_latent)
+                    latent_input = pipe.scheduler.add_noise(cached_latent, noise, timesteps[:1])
+
+                    # Run UNet denoising only (skip CLIP + VAE encode)
+                    result = pipe(
+                        prompt_embeds=prompt_embeds,
+                        negative_prompt_embeds=negative_embeds,
+                        image=latent_input,  # pre-noised latent
+                        strength=denoise,
+                        num_inference_steps=self.default_steps,
+                        guidance_scale=self.default_cfg,
+                        generator=generator,
+                        output_type="latent",
+                    )
+                else:
+                    # Cold path: load image from disk, full pipeline
+                    resized_path = self._resize_image_for_generation(image_path)
+                    input_image = Image.open(resized_path).convert("RGB")
+
+                    result = self._img2img_pipe(
+                        prompt_embeds=prompt_embeds,
+                        negative_prompt_embeds=negative_embeds,
+                        image=input_image,
+                        strength=denoise,
+                        num_inference_steps=self.default_steps,
+                        guidance_scale=self.default_cfg,
+                        generator=generator,
+                        output_type="latent",
+                    )
+
+                # Decode latent to PIL (we need the image for disk save)
+                output_latent = result.images  # When output_type="latent", .images is the latent tensor
+                with torch.no_grad():
+                    decoded = self._img2img_pipe.vae.decode(
+                        output_latent / self._img2img_pipe.vae.config.scaling_factor,
+                        return_dict=False,
+                    )[0]
+                image = self._img2img_pipe.image_processor.postprocess(decoded, output_type="pil")[0]
+
         except Exception as e:
             logger.error(f"img2img generation failed: {e}", exc_info=True)
+            # Invalidate latent cache on failure
+            self._last_output_latent = None
+            self._last_output_path = None
             return None
 
-        output_path = self._save_result(result.images[0], start_time)
+        output_path = self._save_result(image, start_time)
+
+        # Cache the output latent for next frame's input
+        if output_path is not None:
+            self._last_output_latent = output_latent.detach()
+            self._last_output_path = output_path
 
         # FPS throttling: sleep if generation was too fast
         if output_path and self.max_generation_fps:
@@ -357,6 +499,10 @@ class DirectSDBackend:
         self._txt2img_pipe = None
         self._img2img_pipe = None
         self._loaded = False
+        self._last_output_latent = None
+        self._last_output_path = None
+        self._cached_prompt_embeds = None
+        self._cached_negative_embeds = None
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         logger.info("DirectSDBackend closed")
