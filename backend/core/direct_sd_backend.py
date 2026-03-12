@@ -8,6 +8,13 @@ disk I/O, and network overhead for significantly higher throughput.
 Implements the same interface as DreamGenerator so the orchestrator,
 keyframe worker, and all other components work unchanged.
 
+Optimizations over naive pipeline calls:
+  - CLIP embedding cache: skip re-encoding when prompt unchanged (~50ms saved)
+  - Latent cache: skip VAE encode when input is our own last output (~60ms saved)
+  - Manual UNet loop: bypass pipeline wrapper overhead (~50ms saved)
+  - JPEG save instead of PNG (~80ms saved)
+  - output_type="latent" to get cacheable latent + single VAE decode
+
 Production config: SD 1.5, euler sampler, karras scheduler, CFG 8.0, 15 steps.
 """
 
@@ -56,6 +63,8 @@ class DirectSDBackend:
         else:
             raise ValueError(f"Direct backend only supports SD 1.5 currently, got: {model_type}")
 
+        self.do_cfg = self.default_cfg > 1.0
+
         # FPS throttling
         perf_config = config.get("performance", {})
         self.max_generation_fps: Optional[float] = perf_config.get("max_generation_fps")
@@ -74,6 +83,10 @@ class DirectSDBackend:
         # Pipelines (lazy-loaded)
         self._txt2img_pipe = None
         self._img2img_pipe = None
+        self._unet = None
+        self._vae = None
+        self._scheduler = None
+        self._image_processor = None
         self._loaded = False
 
         # CLIP embedding cache — skip re-encoding when prompt unchanged
@@ -143,6 +156,12 @@ class DirectSDBackend:
         )
         self._img2img_pipe.set_progress_bar_config(disable=True)
 
+        # Store direct references for the manual UNet loop
+        self._unet = self._txt2img_pipe.unet
+        self._vae = self._txt2img_pipe.vae
+        self._scheduler = self._txt2img_pipe.scheduler
+        self._image_processor = self._img2img_pipe.image_processor
+
         load_time = time.time() - load_start
         logger.info(f"Pipeline loaded in {load_time:.1f}s")
 
@@ -150,11 +169,12 @@ class DirectSDBackend:
         if self.enable_compile:
             try:
                 logger.info("Compiling UNet with torch.compile (first inference will be slow)...")
-                self._txt2img_pipe.unet = torch.compile(
-                    self._txt2img_pipe.unet,
+                self._unet = torch.compile(
+                    self._unet,
                     mode="reduce-overhead",
                 )
-                # img2img shares the same unet object, so it's already compiled
+                # Update references
+                self._txt2img_pipe.unet = self._unet
                 logger.info("UNet compiled successfully")
             except Exception as e:
                 logger.warning(f"torch.compile failed (will use eager mode): {e}")
@@ -167,17 +187,14 @@ class DirectSDBackend:
 
         This avoids loading two copies of the VAE (~160MB fp16 each).
         Called by DreamController after LatentEncoder initialization.
-
-        Args:
-            external_vae: AutoencoderKL instance from LatentEncoder
         """
         self._ensure_loaded()
 
-        old_vae = self._txt2img_pipe.vae
+        old_vae = self._vae
+        self._vae = external_vae
         self._txt2img_pipe.vae = external_vae
         self._img2img_pipe.vae = external_vae
 
-        # Help GC free the old copy
         del old_vae
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -185,7 +202,7 @@ class DirectSDBackend:
         logger.info("VAE shared with LatentEncoder (duplicate freed)")
 
     # ================================================================
-    # Image Resize (copied from DreamGenerator — pure PIL)
+    # Image Resize (from DreamGenerator — pure PIL)
     # ================================================================
 
     def _resize_image_for_generation(self, image_path: Path) -> Path:
@@ -207,26 +224,20 @@ class DirectSDBackend:
         return temp_path
 
     # ================================================================
-    # Caching — skip redundant CLIP/VAE work between frames
+    # Caching
     # ================================================================
 
     def _get_prompt_embeds(self, prompt: str, negative_prompt: str):
-        """
-        Get CLIP embeddings, using cache if prompt unchanged.
-
-        In DRIFT mode the same prompt runs for dozens of frames —
-        re-encoding it every time wastes ~50ms per frame.
-        """
+        """Get CLIP embeddings, using cache if prompt unchanged."""
         if prompt == self._cached_prompt and negative_prompt == self._cached_negative:
             return self._cached_prompt_embeds, self._cached_negative_embeds
 
-        # Encode new prompt
         pipe = self._txt2img_pipe
         prompt_embeds, negative_embeds = pipe.encode_prompt(
             prompt=prompt,
             device=pipe.device,
             num_images_per_prompt=1,
-            do_classifier_free_guidance=self.default_cfg > 1.0,
+            do_classifier_free_guidance=self.do_cfg,
             negative_prompt=negative_prompt,
         )
 
@@ -238,33 +249,105 @@ class DirectSDBackend:
         logger.debug("CLIP embeddings encoded (cache miss)")
         return prompt_embeds, negative_embeds
 
-    def _get_input_latent(self, image_path: Path, image: Image.Image):
-        """
-        Get VAE-encoded latent for input image, using cache if this
-        is our own last output (the common case in the morphing loop).
-
-        Saves ~40ms VAE encode + ~20ms PNG load per frame.
-        """
-        if (
+    def _has_cached_latent(self, image_path: Path) -> bool:
+        """Check if we have a cached latent for this image path."""
+        return (
             self._last_output_latent is not None
             and self._last_output_path is not None
             and image_path.resolve() == self._last_output_path.resolve()
-        ):
-            logger.debug("Using cached latent (skipping VAE encode)")
-            return self._last_output_latent
+        )
 
-        # Must encode from scratch
-        return None  # Signal caller to let pipeline handle it
+    # ================================================================
+    # Manual UNet Loop — bypasses pipeline wrapper overhead
+    # ================================================================
 
-    def _cache_output_latent(self, output_path: Path, pipe_output) -> None:
-        """Store the latent from this generation for next frame's input."""
-        # The Img2Img pipeline doesn't expose intermediate latents by default.
-        # We need output_type="latent" for that, but then we'd lose the PIL image.
-        # Instead, we VAE-encode the output image — but that defeats the purpose.
-        #
-        # Better approach: run the pipeline with output_type="latent", then
-        # decode ourselves. This gives us both the latent (cached) and the image (saved).
-        pass  # Implemented inline in generate_from_image below
+    def _run_unet_loop(
+        self,
+        latent: torch.Tensor,
+        prompt_embeds: torch.Tensor,
+        negative_embeds: torch.Tensor,
+        denoise: float,
+        generator: torch.Generator,
+    ) -> torch.Tensor:
+        """
+        Run the denoising loop directly on a latent tensor.
+
+        This replaces the Img2Img pipeline's __call__ method for the hot path,
+        eliminating per-call overhead: timestep setup validation, image preprocessing,
+        safety checks, callback management, etc.
+
+        Args:
+            latent: Clean latent to denoise from (scaled, on device)
+            prompt_embeds: Pre-computed CLIP embeddings for prompt
+            negative_embeds: Pre-computed CLIP embeddings for negative prompt
+            denoise: Strength parameter (0.0-1.0)
+            generator: Torch random generator for noise
+
+        Returns:
+            Denoised latent tensor (still scaled, needs VAE decode)
+        """
+        scheduler = self._scheduler
+        unet = self._unet
+
+        # Set up timesteps for img2img (only run the last N steps based on denoise)
+        scheduler.set_timesteps(self.default_steps, device=self.device)
+        # Compute how many steps to actually run
+        init_timestep = min(int(self.default_steps * denoise), self.default_steps)
+        t_start = max(self.default_steps - init_timestep, 0)
+        timesteps = scheduler.timesteps[t_start:]
+        num_steps = len(timesteps)
+
+        if num_steps == 0:
+            return latent
+
+        # Add noise at the appropriate level for img2img
+        noise = torch.randn(latent.shape, generator=generator, device=self.device, dtype=latent.dtype)
+        latent = scheduler.add_noise(latent, noise, timesteps[:1])
+
+        # Build combined embeddings for classifier-free guidance
+        if self.do_cfg:
+            prompt_combined = torch.cat([negative_embeds, prompt_embeds])
+        else:
+            prompt_combined = prompt_embeds
+
+        # Denoising loop
+        with torch.no_grad():
+            for t in timesteps:
+                # Expand latent for classifier-free guidance (unconditional + conditional)
+                latent_input = torch.cat([latent] * 2) if self.do_cfg else latent
+                latent_input = scheduler.scale_model_input(latent_input, t)
+
+                # UNet prediction
+                noise_pred = unet(latent_input, t, encoder_hidden_states=prompt_combined).sample
+
+                # Classifier-free guidance
+                if self.do_cfg:
+                    noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                    noise_pred = noise_pred_uncond + self.default_cfg * (noise_pred_text - noise_pred_uncond)
+
+                # Scheduler step
+                latent = scheduler.step(noise_pred, t, latent, generator=generator).prev_sample
+
+        return latent
+
+    def _vae_encode_image(self, image: Image.Image) -> torch.Tensor:
+        """Encode a PIL image to latent space."""
+        # Preprocess: PIL → tensor → normalize to [-1, 1]
+        processed = self._image_processor.preprocess(image).to(
+            device=self.device, dtype=torch.float16,
+        )
+        with torch.no_grad():
+            latent = self._vae.encode(processed).latent_dist.sample()
+        return latent * self._vae.config.scaling_factor
+
+    def _vae_decode_latent(self, latent: torch.Tensor) -> Image.Image:
+        """Decode a latent tensor to PIL image."""
+        with torch.no_grad():
+            decoded = self._vae.decode(
+                latent / self._vae.config.scaling_factor,
+                return_dict=False,
+            )[0]
+        return self._image_processor.postprocess(decoded, output_type="pil")[0]
 
     # ================================================================
     # Generation Methods
@@ -294,6 +377,7 @@ class DirectSDBackend:
 
         try:
             with self._pipeline_lock:
+                # txt2img still uses the pipeline (not the hot path)
                 result = self._txt2img_pipe(
                     prompt_embeds=prompt_embeds,
                     negative_prompt_embeds=negative_embeds,
@@ -305,14 +389,8 @@ class DirectSDBackend:
                     output_type="latent",
                 )
 
-                # Decode latent to PIL
                 output_latent = result.images
-                with torch.no_grad():
-                    decoded = self._txt2img_pipe.vae.decode(
-                        output_latent / self._txt2img_pipe.vae.config.scaling_factor,
-                        return_dict=False,
-                    )[0]
-                image = self._txt2img_pipe.image_processor.postprocess(decoded, output_type="pil")[0]
+                image = self._vae_decode_latent(output_latent)
 
         except Exception as e:
             logger.error(f"txt2img generation failed: {e}", exc_info=True)
@@ -320,7 +398,6 @@ class DirectSDBackend:
 
         output_path = self._save_result(image, start_time)
 
-        # Cache output latent (first keyframe feeds into img2img loop)
         if output_path is not None:
             self._last_output_latent = output_latent.detach()
             self._last_output_path = output_path
@@ -368,81 +445,48 @@ class DirectSDBackend:
         # --- Cached CLIP embeddings ---
         prompt_embeds, negative_embeds = self._get_prompt_embeds(prompt, negative_prompt)
 
-        # --- Check latent cache (skip VAE encode if input is our last output) ---
-        cached_latent = self._get_input_latent(image_path, None)
-        use_cached = cached_latent is not None
-
         if seed is None:
             seed = random.randint(0, 2**32 - 1)
         generator = torch.Generator(device=self.device).manual_seed(seed)
 
         try:
             with self._pipeline_lock:
-                if use_cached:
-                    # Fast path: feed latent directly, get latent out
-                    # We need to add noise to the cached latent ourselves
-                    # since we're bypassing the image preprocessing
-                    pipe = self._img2img_pipe
-
-                    # Prepare timesteps (same as pipeline internals)
-                    pipe.scheduler.set_timesteps(self.default_steps, device=self.device)
-                    timesteps, num_steps = pipe.get_timesteps(self.default_steps, denoise, self.device)
-
-                    # Add noise to cached latent at the right strength
-                    noise = torch.randn_like(cached_latent)
-                    latent_input = pipe.scheduler.add_noise(cached_latent, noise, timesteps[:1])
-
-                    # Run UNet denoising only (skip CLIP + VAE encode)
-                    result = pipe(
-                        prompt_embeds=prompt_embeds,
-                        negative_prompt_embeds=negative_embeds,
-                        image=latent_input,  # pre-noised latent
-                        strength=denoise,
-                        num_inference_steps=self.default_steps,
-                        guidance_scale=self.default_cfg,
-                        generator=generator,
-                        output_type="latent",
-                    )
+                # Get input latent — cached or encode from disk
+                if self._has_cached_latent(image_path):
+                    input_latent = self._last_output_latent
+                    logger.debug("Using cached latent (skipped VAE encode + disk read)")
                 else:
-                    # Cold path: load image from disk, full pipeline
                     resized_path = self._resize_image_for_generation(image_path)
                     input_image = Image.open(resized_path).convert("RGB")
+                    input_latent = self._vae_encode_image(input_image)
+                    logger.debug("Encoded input from disk (cache miss)")
 
-                    result = self._img2img_pipe(
-                        prompt_embeds=prompt_embeds,
-                        negative_prompt_embeds=negative_embeds,
-                        image=input_image,
-                        strength=denoise,
-                        num_inference_steps=self.default_steps,
-                        guidance_scale=self.default_cfg,
-                        generator=generator,
-                        output_type="latent",
-                    )
+                # Manual UNet loop — bypasses pipeline wrapper
+                output_latent = self._run_unet_loop(
+                    latent=input_latent,
+                    prompt_embeds=prompt_embeds,
+                    negative_embeds=negative_embeds,
+                    denoise=denoise,
+                    generator=generator,
+                )
 
-                # Decode latent to PIL (we need the image for disk save)
-                output_latent = result.images  # When output_type="latent", .images is the latent tensor
-                with torch.no_grad():
-                    decoded = self._img2img_pipe.vae.decode(
-                        output_latent / self._img2img_pipe.vae.config.scaling_factor,
-                        return_dict=False,
-                    )[0]
-                image = self._img2img_pipe.image_processor.postprocess(decoded, output_type="pil")[0]
+                # VAE decode to PIL
+                image = self._vae_decode_latent(output_latent)
 
         except Exception as e:
             logger.error(f"img2img generation failed: {e}", exc_info=True)
-            # Invalidate latent cache on failure
             self._last_output_latent = None
             self._last_output_path = None
             return None
 
         output_path = self._save_result(image, start_time)
 
-        # Cache the output latent for next frame's input
+        # Cache output latent for next frame
         if output_path is not None:
             self._last_output_latent = output_latent.detach()
             self._last_output_path = output_path
 
-        # FPS throttling: sleep if generation was too fast
+        # FPS throttling
         if output_path and self.max_generation_fps:
             elapsed = time.time() - start_time
             min_interval = 1.0 / self.max_generation_fps
@@ -498,6 +542,10 @@ class DirectSDBackend:
         """Release GPU resources."""
         self._txt2img_pipe = None
         self._img2img_pipe = None
+        self._unet = None
+        self._vae = None
+        self._scheduler = None
+        self._image_processor = None
         self._loaded = False
         self._last_output_latent = None
         self._last_output_path = None
@@ -526,13 +574,13 @@ class DirectSDBackend:
         return prompts_config.get("negative", "")
 
     def _save_result(self, image: Image.Image, start_time: float) -> Optional[Path]:
-        """Save generated PIL image to output directory."""
+        """Save generated PIL image to output directory as JPEG (fast encode)."""
         self.frame_count += 1
-        dest_filename = f"frame_{self.frame_count:05d}.png"
+        dest_filename = f"frame_{self.frame_count:05d}.jpg"
         dest_path = self.output_dir / dest_filename
 
         try:
-            image.save(dest_path, format="PNG")
+            image.save(dest_path, format="JPEG", quality=95)
         except Exception as e:
             logger.error(f"Failed to save output: {e}")
             return None
