@@ -1,7 +1,8 @@
-# Dream Window — B200 Direct Backend Configuration
+# Dream Window — B200 Dynamic Variant
 # =================================================
-# For Heimdall always-on service on dedicated B200 GPU.
-# No ComfyUI, no RunPod. Direct diffusers pipeline.
+# Higher denoise, more steps, fewer interp frames.
+# More visible evolution, faster morphing, more dramatic mutations.
+# Closer to the original ComfyUI aesthetic.
 
 system:
   backend: "direct"               # Direct diffusers — no ComfyUI needed
@@ -18,23 +19,23 @@ generation:
   mode: "hybrid"
 
   sd:
-    steps: 10
+    steps: 15
     cfg_scale: 8.0
     sampler: "euler"
     scheduler: "karras"
 
   hybrid:
-    interpolation_frames: 20
-    target_interpolation_fps: 30.0
-    keyframe_denoise: 0.2
-    interpolation_decoder: "vae"       # "vae" (full quality) or "taesd" (~2x faster, slightly softer)
+    interpolation_frames: 12
+    target_interpolation_fps: 24.0
+    keyframe_denoise: 0.3
+    interpolation_decoder: "vae"
     interpolation_resolution_divisor: 1
     interpolation_upscale_method: "bilinear"
     interpolation_downsample_method: "bicubic"
     gpu_slerp: true
 
   img2img:
-    denoise: 0.3
+    denoise: 0.4
 
   cache:
     max_size: 100
@@ -90,9 +91,9 @@ fresh_generation:
   enabled: true
 
   denoising:
-    drift: 0.15
-    bend: 0.45
-    bend_frames: 5
+    drift: 0.25
+    bend: 0.60
+    bend_frames: 4
 
   mutation:
     base_probability: 0.12

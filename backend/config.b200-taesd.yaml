@@ -1,7 +1,8 @@
-# Dream Window — B200 Direct Backend Configuration
+# Dream Window — B200 TAESD Variant
 # =================================================
-# For Heimdall always-on service on dedicated B200 GPU.
-# No ComfyUI, no RunPod. Direct diffusers pipeline.
+# Same as b200.yaml but uses TAESD for interpolation decode.
+# TAESD: ~2x faster interp, slightly softer output.
+# Good for smooth dreamy aesthetic, less fine detail in transitions.
 
 system:
   backend: "direct"               # Direct diffusers — no ComfyUI needed
@@ -27,7 +28,7 @@ generation:
     interpolation_frames: 20
     target_interpolation_fps: 30.0
     keyframe_denoise: 0.2
-    interpolation_decoder: "vae"       # "vae" (full quality) or "taesd" (~2x faster, slightly softer)
+    interpolation_decoder: "taesd"      # "vae" (full quality) or "taesd" (~2x faster, slightly softer)
     interpolation_resolution_divisor: 1
     interpolation_upscale_method: "bilinear"
     interpolation_downsample_method: "bicubic"
