@@ -325,14 +325,33 @@ class VPSWebSocketClient:
                 import websockets
                 
                 self._state = ConnectionState.CONNECTING
-                
+
+                # Cancel old background tasks before opening new connection
+                # (prevents "cannot call recv" race with stale receive loop)
+                for task_name in ('_receive_task', '_heartbeat_task', '_health_monitor_task'):
+                    old_task = getattr(self, task_name, None)
+                    if old_task and not old_task.done():
+                        old_task.cancel()
+                        try:
+                            await old_task
+                        except (asyncio.CancelledError, Exception):
+                            pass
+
+                # Close old socket if still open
+                if self._websocket:
+                    try:
+                        await self._websocket.close()
+                    except Exception:
+                        pass
+                    self._websocket = None
+
                 # Build headers with auth if provided
                 headers = {}
                 if self.auth_token:
                     headers['Authorization'] = f'Bearer {self.auth_token}'
-                
+
                 logger.info(f"Connecting to VPS: {target_url}")
-                
+
                 self._websocket = await websockets.connect(
                     target_url,
                     extra_headers=headers,
