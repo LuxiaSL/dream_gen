@@ -171,7 +171,7 @@ class DirectSDBackend:
                 logger.info("Compiling UNet with torch.compile (first inference will be slow)...")
                 self._unet = torch.compile(
                     self._unet,
-                    mode="reduce-overhead",
+                    mode="default",  # "reduce-overhead" breaks with variable step counts
                 )
                 # Update references
                 self._txt2img_pipe.unet = self._unet
