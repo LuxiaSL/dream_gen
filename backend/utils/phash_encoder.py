@@ -65,7 +65,7 @@ class PHashEncoder:
         self.hash_size = hash_size
         logger.debug(f"PHashEncoder initialized (hash_size={hash_size})")
     
-    def encode_image(self, image_input: Union[Path, str, Image]) -> Optional[imagehash.ImageHash]:
+    def encode_image(self, image_input: Union[Path, str, "Image.Image"]) -> Optional[imagehash.ImageHash]:
         """
         Encode image to perceptual hash
         
