@@ -2,6 +2,9 @@
 # =================================================
 # For Heimdall always-on service on dedicated B200 GPU.
 # No ComfyUI, no RunPod. Direct diffusers pipeline.
+#
+# Pacing tuned for ~6-7 FPS keyframes (3x faster than RunPod).
+# All cooldowns/thresholds scaled accordingly for slow, dreamy evolution.
 
 system:
   backend: "direct"               # Direct diffusers — no ComfyUI needed
@@ -19,14 +22,14 @@ generation:
 
   sd:
     steps: 10
-    cfg_scale: 8.0
+    cfg_scale: 7.0                # was 8.0 — slightly lower for dreamier output
     sampler: "euler"
     scheduler: "karras"
 
   hybrid:
     interpolation_frames: 20
     target_interpolation_fps: 20.0
-    keyframe_denoise: 0.2
+    keyframe_denoise: 0.15
     interpolation_decoder: "vae"       # "vae" (full quality) or "taesd" (~2x faster, slightly softer)
     interpolation_resolution_divisor: 1
     interpolation_upscale_method: "bilinear"
@@ -34,7 +37,7 @@ generation:
     gpu_slerp: true
 
   img2img:
-    denoise: 0.3
+    denoise: 0.25                 # was 0.3
 
   cache:
     max_size: 100
@@ -59,29 +62,29 @@ generation:
 
     injection_logic: "any"
     injection_mode: "dissimilar"
-    injection_probability: 0.15
+    injection_probability: 0.08   # was 0.15 — less random injection at higher keyframe rate
     blend_weight: 0.75
-    injection_cooldown: 5
-    seed_injection_cooldown: 5
+    injection_cooldown: 15        # was 5 — at most every ~2.5 seconds
+    seed_injection_cooldown: 15   # was 5
     embedding_history_reset: "partial"
     embedding_history_keep_recent: 10
 
     collapse_detection: true
-    warmup_keyframes: 10
+    warmup_keyframes: 30          # was 10 — establish baseline before detecting
     convergence_mode: "absolute"
     log_convergence_stats: true
 
-    seed_injection_floor: 0.02
-    seed_injection_max: 0.15
-    seed_injection_ramp: 50
+    seed_injection_floor: 0.01    # was 0.02
+    seed_injection_max: 0.08      # was 0.15
+    seed_injection_ramp: 100      # was 50
     seed_injection_boost_threshold: 10
-    seed_injection_boost_probability: 0.20
+    seed_injection_boost_probability: 0.10  # was 0.20
     force_seed_injection_frequency: 0.30
     blend_seed_injection: true
     seed_blend_weight: 0.85
 
     log_diversity_stats: true
-    diversity_check_interval: 10
+    diversity_check_interval: 25  # was 10
 
     advanced_monitoring:
       enabled: false
@@ -90,13 +93,13 @@ fresh_generation:
   enabled: true
 
   denoising:
-    drift: 0.15
-    bend: 0.45
-    bend_frames: 5
+    drift: 0.10                   # was 0.15 — slower evolution per keyframe
+    bend: 0.35                    # was 0.45 — less dramatic mutations
+    bend_frames: 8                # was 5 — longer transition period
 
   mutation:
-    base_probability: 0.12
-    staleness_threshold: 25
+    base_probability: 0.04        # was 0.12 — ~1 mutation per 25 keyframes (~4 seconds)
+    staleness_threshold: 75       # was 25 — forced mutation every ~12 seconds
     category_weights:
       color_logic: 0.35
       atmosphere_field: 0.25
@@ -128,7 +131,7 @@ prompts:
     time_based: true
     system_based: false
 
-  rotation_interval: 40
+  rotation_interval: 100          # was 40 — longer per theme at higher keyframe rate
 
 game_detection:
   enabled: false
@@ -137,7 +140,7 @@ performance:
   max_queue_size: 100
   generation_timeout: 60
   enable_torch_compile: false     # Disabled: dynamo tracing overhead > benefit at 2-3 UNet steps
-  max_generation_fps: null         # No throttle for now — benchmark first, tune later
+  max_generation_fps: null
   async_file_operations: true
 
 daemon:
