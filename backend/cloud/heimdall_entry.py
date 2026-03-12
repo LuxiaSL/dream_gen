@@ -27,8 +27,15 @@ from pathlib import Path
 
 import yaml
 
-# Add backend to path for imports
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# Add paths for imports — the codebase uses mixed conventions:
+# some files: `from core.X` / `from utils.X` (relative to backend/)
+# some files: `from backend.core.X` (relative to repo root)
+_backend_dir = str(Path(__file__).resolve().parent.parent)
+_repo_dir = str(Path(__file__).resolve().parent.parent.parent)
+if _backend_dir not in sys.path:
+    sys.path.insert(0, _backend_dir)
+if _repo_dir not in sys.path:
+    sys.path.insert(0, _repo_dir)
 
 from core.dream_controller import DreamController
 
