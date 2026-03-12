@@ -327,18 +327,18 @@ class KeyframeWorker:
                     # === COMMON RECOVERY PATH FOR ALL FAILURES ===
                     # This handles: timeout, no output, exceptions - ALL failure types
                     if attempt < self.MAX_RETRIES - 1:
-                        logger.warning(f"Attempting ComfyUI recovery before retry {attempt + 2}...")
-                        
-                        # Interrupt and clear ComfyUI queue
+                        logger.warning(f"Attempting backend recovery before retry {attempt + 2}...")
+
+                        # Interrupt and clear queue (no-op for direct backend)
                         try:
                             self.generator.interrupt_and_clear_queue()
                         except Exception as recover_err:
-                            logger.error(f"ComfyUI recovery failed: {recover_err}")
-                        
-                        # Verify ComfyUI is still responsive
+                            logger.error(f"Backend recovery failed: {recover_err}")
+
+                        # Verify backend is still responsive
                         if not self.generator.is_comfyui_responsive():
-                            logger.error("ComfyUI not responding! Cannot retry.")
-                            last_error = "ComfyUI unresponsive"
+                            logger.error("Generation backend not responding! Cannot retry.")
+                            last_error = "Backend unresponsive"
                             break  # Don't retry if ComfyUI is down
                         
                         # Exponential backoff before retry

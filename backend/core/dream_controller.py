@@ -25,6 +25,8 @@ from PIL import Image
 import torch
 
 from core.generator import DreamGenerator
+# Direct diffusers backend — imported conditionally based on config
+# from core.direct_sd_backend import DirectSDBackend
 from core.frame_buffer import FrameBuffer
 from core.generation_coordinator import GenerationCoordinator
 from core.async_orchestrator import AsyncGenerationOrchestrator
@@ -144,9 +146,14 @@ class DreamController:
         self.output_dir = Path(self.config['system']['output_dir'])
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
-        # Initialize subsystems
-        self.logger.info("Initializing subsystems...")
-        self.generator = DreamGenerator(self.config)
+        # Initialize generation backend
+        backend_type = self.config.get("system", {}).get("backend", "comfyui")
+        self.logger.info(f"Initializing generation backend: {backend_type}")
+        if backend_type == "direct":
+            from core.direct_sd_backend import DirectSDBackend
+            self.generator = DirectSDBackend(self.config)
+        else:
+            self.generator = DreamGenerator(self.config)
         
         # Use CombinatorialPromptSystem if templates are available, else legacy PromptManager
         self.prompt_manager = self._init_prompt_system()
@@ -210,7 +217,12 @@ class DreamController:
                     self.logger.debug("CUDA synchronized after model loading")
                 
                 self.logger.info("[OK] VAE interpolation enabled")
-                
+
+                # Share VAE with direct backend to avoid duplicate VRAM usage
+                if hasattr(self.generator, "share_vae") and self.latent_encoder.vae is not None:
+                    self.generator.share_vae(self.latent_encoder.vae)
+                    self.logger.info("[OK] Shared VAE between generation backend and LatentEncoder")
+
             except Exception as e:
                 self.logger.error(f"Failed to initialize hybrid mode with VAE: {e}", exc_info=True)
                 self.logger.error("Hybrid mode requires VAE interpolation. Please check your configuration.")
@@ -825,18 +837,21 @@ class DreamController:
             self.logger.info("Pausing generation and freeing VRAM...")
             self.paused = True
             
-            # Free VRAM (unload models)
+            # Free VRAM (unload models) — only applies to ComfyUI backend
             try:
-                success = self.generator.client.free_memory(
-                    unload_models=True,
-                    free_memory=True
-                )
-                if success:
-                    self.vram_freed = True
-                    self.logger.info("[OK] VRAM freed - safe for gaming!")
+                if hasattr(self.generator, "client"):
+                    success = self.generator.client.free_memory(
+                        unload_models=True,
+                        free_memory=True
+                    )
+                    if success:
+                        self.vram_freed = True
+                        self.logger.info("[OK] VRAM freed - safe for gaming!")
+                    else:
+                        self.logger.warning("Could not free VRAM (ComfyUI might not support /free endpoint)")
+                        self.logger.info("Generation paused anyway for safety")
                 else:
-                    self.logger.warning("Could not free VRAM (ComfyUI might not support /free endpoint)")
-                    self.logger.info("Generation paused anyway for safety")
+                    self.logger.info("Generation paused (direct backend — no VRAM free needed)")
             except Exception as e:
                 self.logger.error(f"Error freeing VRAM: {e}")
             
@@ -939,17 +954,18 @@ class DreamController:
             # AsyncOrchestrator handles seed bootstrap internally
             self.logger.info("Using AsyncGenerationOrchestrator (parallelized)")
             
-            # Clear ComfyUI queue
-            self.logger.info("Clearing ComfyUI queue...")
-            queue_status = self.generator.client.get_queue()
-            if queue_status:
-                running_count = len(queue_status.get("queue_running", []))
-                pending_count = len(queue_status.get("queue_pending", []))
-                if running_count > 0 or pending_count > 0:
-                    self.logger.warning(f"Found stale jobs: {running_count} running, {pending_count} pending")
-                    self.generator.client.interrupt_execution()
-                    self.generator.client.clear_queue()
-                    self.logger.info("Queue cleared")
+            # Clear generation queue (ComfyUI only)
+            if hasattr(self.generator, "client"):
+                self.logger.info("Clearing ComfyUI queue...")
+                queue_status = self.generator.client.get_queue()
+                if queue_status:
+                    running_count = len(queue_status.get("queue_running", []))
+                    pending_count = len(queue_status.get("queue_pending", []))
+                    if running_count > 0 or pending_count > 0:
+                        self.logger.warning(f"Found stale jobs: {running_count} running, {pending_count} pending")
+                        self.generator.client.interrupt_execution()
+                        self.generator.client.clear_queue()
+                        self.logger.info("Queue cleared")
             
             # Start orchestrator and display tasks concurrently
             self.logger.info("Starting orchestrator and display tasks...")
@@ -1034,17 +1050,18 @@ class DreamController:
             self.generation_coordinator.keyframes_generated = 1
             self.logger.info("  [OK] Keyframe 1 registered (seed frame preserved)")
             
-            # Clear ComfyUI queue
-            self.logger.info("Clearing ComfyUI queue...")
-            queue_status = self.generator.client.get_queue()
-            if queue_status:
-                running_count = len(queue_status.get("queue_running", []))
-                pending_count = len(queue_status.get("queue_pending", []))
-                if running_count > 0 or pending_count > 0:
-                    self.logger.warning(f"Found stale jobs: {running_count} running, {pending_count} pending")
-                    self.generator.client.interrupt_execution()
-                    self.generator.client.clear_queue()
-                    self.logger.info("Queue cleared")
+            # Clear generation queue (ComfyUI only)
+            if hasattr(self.generator, "client"):
+                self.logger.info("Clearing ComfyUI queue...")
+                queue_status = self.generator.client.get_queue()
+                if queue_status:
+                    running_count = len(queue_status.get("queue_running", []))
+                    pending_count = len(queue_status.get("queue_pending", []))
+                    if running_count > 0 or pending_count > 0:
+                        self.logger.warning(f"Found stale jobs: {running_count} running, {pending_count} pending")
+                        self.generator.client.interrupt_execution()
+                        self.generator.client.clear_queue()
+                        self.logger.info("Queue cleared")
             
             # Start generation and display tasks concurrently
             self.logger.info("Starting generation and display tasks...")
@@ -1201,15 +1218,19 @@ class DreamController:
             self.running = False
             
             # Set generator shutdown flag to interrupt polling loops
-            self.generator._shutdown_requested = True
-            
-            # Interrupt any running ComfyUI generation
+            if hasattr(self.generator, "_shutdown_requested"):
+                self.generator._shutdown_requested = True
+
+            # Interrupt any running generation (ComfyUI only)
             try:
-                self.logger.info("Interrupting ComfyUI execution...")
-                self.generator.client.interrupt_execution()
-                self.generator.client.clear_queue()
+                if hasattr(self.generator, "client"):
+                    self.logger.info("Interrupting ComfyUI execution...")
+                    self.generator.client.interrupt_execution()
+                    self.generator.client.clear_queue()
+                else:
+                    self.logger.info("Signaling generation backend to stop...")
             except Exception as e:
-                self.logger.warning(f"Could not interrupt ComfyUI: {e}")
+                self.logger.warning(f"Could not interrupt generation: {e}")
             
             # Cancel all running asyncio tasks if we have a loop
             if self.asyncio_loop and self.running_tasks:
