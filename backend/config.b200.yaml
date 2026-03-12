@@ -86,6 +86,15 @@ generation:
     log_diversity_stats: true
     diversity_check_interval: 25  # was 10
 
+    # Simple frame-counting bypass — replaces adaptive detection
+    # Modulo operates on KEYFRAME count (~1.6 FPS keyframes currently).
+    # Each keyframe produces 20 interp frames → ~10 FPS total display.
+    manual_bypass:
+      enabled: true
+      mutation_interval: 8          # every ~5 seconds (8 keyframes × 0.6s)
+      cache_injection_interval: 24  # every ~15 seconds
+      template_swap_interval: 72    # every ~45 seconds
+
     advanced_monitoring:
       enabled: false
 
