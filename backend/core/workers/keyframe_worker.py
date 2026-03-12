@@ -268,10 +268,17 @@ class KeyframeWorker:
                         
                         if keyframe_path and keyframe_path.exists():
                             # Move to keyframe directory with proper naming
-                            target_path = self.frame_buffer.keyframe_dir / f"keyframe_{keyframe_num:03d}.png"
+                            suffix = keyframe_path.suffix  # preserve .jpg or .png
+                            target_path = self.frame_buffer.keyframe_dir / f"keyframe_{keyframe_num:03d}{suffix}"
                             shutil.move(str(keyframe_path), str(target_path))
-                            
+
                             logger.debug(f"Moved keyframe: {keyframe_path.name} -> {target_path}")
+
+                            # Update backend's latent cache path so next generation
+                            # can skip VAE encode (the cached latent is still valid,
+                            # just the file moved)
+                            if hasattr(self.generator, '_last_output_path'):
+                                self.generator._last_output_path = target_path
                             
                             # === SUCCESS - Clear retry state ===
                             self.in_retry_mode = False
