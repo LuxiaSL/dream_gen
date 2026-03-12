@@ -369,11 +369,18 @@ class VPSWebSocketClient:
                 
                 logger.info("Connected to VPS successfully")
                 
-                # Start background tasks
+                # Start background tasks (only if not already running from a previous connect)
                 self._should_run = True
-                self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
-                self._receive_task = asyncio.create_task(self._receive_loop())
-                self._health_monitor_task = asyncio.create_task(self._health_monitor_loop())
+
+                def _task_alive(t):
+                    return t is not None and not t.done()
+
+                if not _task_alive(self._heartbeat_task):
+                    self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+                if not _task_alive(self._receive_task):
+                    self._receive_task = asyncio.create_task(self._receive_loop())
+                if not _task_alive(self._health_monitor_task):
+                    self._health_monitor_task = asyncio.create_task(self._health_monitor_loop())
                 
                 # Start queue processor if we have queued messages
                 if self._message_queue and self.queue_on_disconnect:
@@ -791,26 +798,35 @@ class VPSWebSocketClient:
         """Receive and handle control messages from VPS"""
         while self._should_run:
             try:
-                if not self.connected:
+                if not self.connected or not self._websocket:
                     await asyncio.sleep(1)
                     continue
-                
-                message = await self._websocket.recv()
+
+                # Capture the socket we're receiving on — if it changes
+                # (reconnect swapped it), exit and let a new loop take over
+                current_ws = self._websocket
+
+                message = await current_ws.recv()
+
+                # Check we're still the active socket after await
+                if self._websocket is not current_ws:
+                    logger.debug("Receive loop: socket was replaced during recv, exiting")
+                    break
+
                 self.stats.messages_received += 1
-                
-                # Update pong tracking (websockets library handles pong internally,
-                # but receiving any message indicates the connection is alive)
                 self.stats.last_pong_received = time.time()
-                
+
                 if isinstance(message, bytes) and len(message) > 0:
                     await self._handle_control_message(message)
-            
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Receive error: {e}")
-                await self._handle_connection_lost()
-                await asyncio.sleep(1)
+                # Only handle if we're still the active connection
+                if self._websocket is not None:
+                    logger.error(f"Receive error: {e}")
+                    await self._handle_connection_lost()
+                break  # Exit loop — reconnect will start a fresh one
     
     async def _health_monitor_loop(self) -> None:
         """
