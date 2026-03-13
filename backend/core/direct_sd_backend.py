@@ -189,13 +189,15 @@ class DirectSDBackend:
             except Exception as e:
                 logger.warning(f"torch.compile failed (will use eager mode): {e}")
 
-        # Multi-GPU: move VAE to dedicated device after pipeline load
+        # Multi-GPU note: the pipeline's internal VAE stays on the UNet device
+        # (cuda:0) because txt2img/img2img need all components on the same device.
+        # The SEPARATE LatentEncoder VAE for interpolation lives on cuda:1.
+        # This is handled by DreamController skipping share_vae() in multi-GPU mode.
         if self.multi_gpu:
-            logger.info(f"Moving pipeline VAE to {self.vae_device}...")
-            self._vae = self._vae.to(self.vae_device)
-            self._txt2img_pipe.vae = self._vae
-            self._img2img_pipe.vae = self._vae
-            logger.info(f"[OK] VAE on {self.vae_device}, UNet on {self.unet_device}")
+            logger.info(
+                f"[MULTI-GPU] Pipeline stays on {self.unet_device}. "
+                f"Interpolation VAE will be loaded separately on {self.vae_device}."
+            )
 
         self._loaded = True
 
