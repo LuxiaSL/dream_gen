@@ -181,9 +181,13 @@ class DreamController:
                 resolution_divisor = self.config['generation']['hybrid'].get('interpolation_resolution_divisor', 1)
                 upscale_method = self.config['generation']['hybrid'].get('interpolation_upscale_method', 'bilinear')
                 
-                gpu_id = self.config.get('system', {}).get('gpu_id', 0)
-                device = f"cuda:{gpu_id}" if torch.cuda.is_available() else "cuda"
-                self.logger.info(f"Using device: {device}")
+                # Device assignment — supports multi-GPU via gpu_devices config
+                default_gpu = self.config.get('system', {}).get('gpu_id', 0)
+                gpu_devices = self.config.get('system', {}).get('gpu_devices', {})
+                vae_gpu = gpu_devices.get('vae', default_gpu)
+                device = f"cuda:{vae_gpu}" if torch.cuda.is_available() else "cuda"
+                multi_gpu = gpu_devices.get('unet', default_gpu) != vae_gpu
+                self.logger.info(f"VAE device: {device}" + (f" (multi-GPU mode)" if multi_gpu else ""))
 
                 # Get target resolution from config to force resize
                 target_resolution = tuple(self.config['generation']['resolution'])  # [width, height]
@@ -219,7 +223,10 @@ class DreamController:
                 self.logger.info("[OK] VAE interpolation enabled")
 
                 # Share VAE with direct backend to avoid duplicate VRAM usage
-                if hasattr(self.generator, "share_vae") and self.latent_encoder.vae is not None:
+                # Skip on multi-GPU — each device needs its own VAE copy
+                if multi_gpu:
+                    self.logger.info("[MULTI-GPU] Separate VAE instances (UNet and VAE on different GPUs)")
+                elif hasattr(self.generator, "share_vae") and self.latent_encoder.vae is not None:
                     self.generator.share_vae(self.latent_encoder.vae)
                     self.logger.info("[OK] Shared VAE between generation backend and LatentEncoder")
 

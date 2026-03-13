@@ -11,7 +11,10 @@ system:
   output_dir: "./output"
   cache_dir: "./cache"
   log_dir: "./logs"
-  gpu_id: 0                       # Heimdall sets CUDA_VISIBLE_DEVICES
+  gpu_id: 0                       # Default device (backward compat)
+  gpu_devices:                    # Multi-GPU: pipeline overlap
+    unet: 0                       # Keyframe generation (UNet + scheduler)
+    vae: 1                        # VAE encode/decode (interpolation)
   log_level: "INFO"
 
 generation:

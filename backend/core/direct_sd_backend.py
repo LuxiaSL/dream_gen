@@ -76,9 +76,19 @@ class DirectSDBackend:
         self._shutdown_requested = False
         self._pipeline_lock = threading.Lock()
 
-        # Device
-        gpu_id = config.get("system", {}).get("gpu_id", 0)
-        self.device = f"cuda:{gpu_id}" if torch.cuda.is_available() else "cpu"
+        # Device — supports multi-GPU via gpu_devices config
+        default_gpu = config.get("system", {}).get("gpu_id", 0)
+        gpu_devices = config.get("system", {}).get("gpu_devices", {})
+        unet_gpu = gpu_devices.get("unet", default_gpu)
+        vae_gpu = gpu_devices.get("vae", default_gpu)
+
+        self.unet_device = f"cuda:{unet_gpu}" if torch.cuda.is_available() else "cpu"
+        self.vae_device = f"cuda:{vae_gpu}" if torch.cuda.is_available() else "cpu"
+        self.device = self.unet_device  # Default device (backward compat)
+        self.multi_gpu = self.unet_device != self.vae_device
+
+        if self.multi_gpu:
+            logger.info(f"Multi-GPU: UNet on {self.unet_device}, VAE on {self.vae_device}")
 
         # Pipelines (lazy-loaded)
         self._txt2img_pipe = None
@@ -178,6 +188,14 @@ class DirectSDBackend:
                 logger.info("UNet compiled successfully")
             except Exception as e:
                 logger.warning(f"torch.compile failed (will use eager mode): {e}")
+
+        # Multi-GPU: move VAE to dedicated device after pipeline load
+        if self.multi_gpu:
+            logger.info(f"Moving pipeline VAE to {self.vae_device}...")
+            self._vae = self._vae.to(self.vae_device)
+            self._txt2img_pipe.vae = self._vae
+            self._img2img_pipe.vae = self._vae
+            logger.info(f"[OK] VAE on {self.vae_device}, UNet on {self.unet_device}")
 
         self._loaded = True
 
