@@ -148,7 +148,7 @@ game_detection:
 performance:
   max_queue_size: 100
   generation_timeout: 60
-  enable_torch_compile: false     # Disabled: dynamo tracing overhead > benefit at 2-3 UNet steps
+  enable_torch_compile: true      # B200 + 10 UNet steps: ~30% speedup expected
   max_generation_fps: null
   async_file_operations: true
 
