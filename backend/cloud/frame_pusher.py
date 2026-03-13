@@ -25,6 +25,7 @@ Self-healing features:
 - Keyframe priority for queue ordering during reconnection
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -190,8 +191,13 @@ class CloudFramePusher:
         start_time = time.time()
 
         try:
-            # H.264 encode
-            nal_data, is_video_keyframe = self._encoder.encode_frame(image)
+            # H.264 encode — run in executor to avoid blocking the display loop.
+            # x264 occasionally spikes to 150-300ms on complex frames; without
+            # the executor, this blocks the entire display pipeline.
+            loop = asyncio.get_event_loop()
+            nal_data, is_video_keyframe = await loop.run_in_executor(
+                None, self._encoder.encode_frame, image
+            )
             encode_time = time.time() - start_time
 
             if not nal_data:
