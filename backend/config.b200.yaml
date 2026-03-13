@@ -148,7 +148,7 @@ game_detection:
 performance:
   max_queue_size: 100
   generation_timeout: 60
-  enable_torch_compile: true      # B200 + 10 UNet steps: ~30% speedup expected
+  enable_torch_compile: false     # Tested: dynamo overhead > benefit at 10 UNet steps on B200
   max_generation_fps: null
   async_file_operations: true
 
