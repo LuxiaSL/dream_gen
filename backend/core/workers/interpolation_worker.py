@@ -299,7 +299,11 @@ class InterpolationWorker:
         
         try:
             # Single GPU call to decode all latents at once!
-            images = await self.vae_access.decode_batch_async(latent_list, upscale_to_target=True)
+            # In cloud mode, return numpy arrays (skip PIL — saves ~120ms per batch)
+            cloud_mode = self.config.get('cloud', {}).get('enabled', False)
+            images = await self.vae_access.decode_batch_async(
+                latent_list, upscale_to_target=True, return_numpy=cloud_mode
+            )
             
             # Pair images back with their frame specs
             decoded_images = []

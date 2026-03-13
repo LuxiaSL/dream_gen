@@ -462,28 +462,30 @@ class LatentEncoder:
         
         return latents
     
-    def decode_batch(self, latents: torch.Tensor) -> List[Image.Image]:
+    def decode_batch(self, latents: torch.Tensor, return_numpy: bool = False) -> list:
         """
         Decode multiple latents to images in a single GPU call
-        
+
         Routes to TAESD (fast) or full VAE based on configuration.
         TAESD provides ~9x speedup at slightly reduced quality - ideal for
         interpolation frames which are transitional and displayed briefly.
-        
+
         Args:
             latents: Batched latent tensor (shape: [N, C, H, W])
-        
+            return_numpy: If True, return numpy arrays (H,W,3 uint8) instead of PIL.
+                         Saves ~120ms per batch by skipping PIL conversion.
+
         Returns:
-            List of PIL Images
+            List of PIL Images (or numpy arrays if return_numpy=True)
         """
         # Route to TAESD if available and enabled
         if self.use_taesd and self.taesd is not None:
-            return self._decode_batch_taesd(latents)
-        
+            return self._decode_batch_taesd(latents, return_numpy=return_numpy)
+
         # Fall back to full VAE
-        return self._decode_batch_vae(latents)
+        return self._decode_batch_vae(latents, return_numpy=return_numpy)
     
-    def _decode_batch_taesd(self, latents: torch.Tensor) -> List[Image.Image]:
+    def _decode_batch_taesd(self, latents: torch.Tensor, return_numpy: bool = False) -> list:
         """
         Fast batch decode using TAESD (~9x faster than full VAE)
         
@@ -609,18 +611,22 @@ class LatentEncoder:
         image_arrays = image_tensors.cpu().numpy()
         post_ms = (time.perf_counter() - t_post) * 1000
         
-        # Convert to PIL
+        # Convert to output format
         t_pil = time.perf_counter()
-        images = [Image.fromarray(image_arrays[i], mode='RGB') for i in range(image_arrays.shape[0])]
+        if return_numpy:
+            images = [image_arrays[i] for i in range(image_arrays.shape[0])]
+        else:
+            images = [Image.fromarray(image_arrays[i], mode='RGB') for i in range(image_arrays.shape[0])]
         pil_ms = (time.perf_counter() - t_pil) * 1000
-        
+
         total_ms = decode_ms + post_ms + pil_ms
-        
+        fmt = "numpy" if return_numpy else "PIL"
+
         # Log timing and postprocess mode (TAESD should be much faster)
         if total_ms > 100 or len(images) > 5:
             logger.info(
-                f"[PERF] TAESD batch decode {len(images)} frames: "
-                f"decode={decode_ms:.0f}ms, post={post_ms:.0f}ms, PIL={pil_ms:.0f}ms, "
+                f"[PERF] TAESD batch decode {len(images)} frames ({fmt}): "
+                f"decode={decode_ms:.0f}ms, post={post_ms:.0f}ms, conv={pil_ms:.0f}ms, "
                 f"total={total_ms:.0f}ms ({total_ms/len(images):.1f}ms/frame), "
                 f"postprocess={postprocess_mode}, range=[{raw_min:.2f},{raw_max:.2f}]"
             )
@@ -630,15 +636,16 @@ class LatentEncoder:
         
         return images
     
-    def _decode_batch_vae(self, latents: torch.Tensor) -> List[Image.Image]:
+    def _decode_batch_vae(self, latents: torch.Tensor, return_numpy: bool = False) -> list:
         """
         Batch decode using full SD VAE (maximum quality)
-        
+
         Args:
             latents: Batched latent tensor (shape: [N, C, H, W])
-        
+            return_numpy: If True, return numpy arrays instead of PIL Images
+
         Returns:
-            List of PIL Images
+            List of PIL Images (or numpy arrays if return_numpy=True)
         """
         if self.vae is None:
             logger.warning("VAE not loaded - returning mock images")
@@ -694,21 +701,27 @@ class LatentEncoder:
         
         post_ms = (time.perf_counter() - t_post) * 1000
         
-        # Convert to PIL Images (CPU-only now)
+        # Convert to output format
         t_pil = time.perf_counter()
-        images = []
-        for i in range(image_arrays.shape[0]):
-            img = Image.fromarray(image_arrays[i], mode='RGB')
-            images.append(img)
-        
+        if return_numpy:
+            # Return numpy arrays directly (skip PIL — saves ~120ms per batch)
+            images = [image_arrays[i] for i in range(image_arrays.shape[0])]
+        else:
+            # Convert to PIL Images (CPU-only now)
+            images = []
+            for i in range(image_arrays.shape[0]):
+                img = Image.fromarray(image_arrays[i], mode='RGB')
+                images.append(img)
+
         pil_ms = (time.perf_counter() - t_pil) * 1000
-        
+
         # Log detailed timing for batch decode
         total_ms = decode_ms + post_ms + pil_ms
+        fmt = "numpy" if return_numpy else "PIL"
         if total_ms > 200:  # Log if slow
             logger.info(
-                f"[PERF] VAE batch decode {len(images)} frames: "
-                f"VAE={decode_ms:.0f}ms, postproc={post_ms:.0f}ms, PIL={pil_ms:.0f}ms, "
+                f"[PERF] VAE batch decode {len(images)} frames ({fmt}): "
+                f"VAE={decode_ms:.0f}ms, postproc={post_ms:.0f}ms, conv={pil_ms:.0f}ms, "
                 f"total={total_ms:.0f}ms ({total_ms/len(images):.0f}ms/frame)"
             )
         

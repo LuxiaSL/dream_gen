@@ -28,7 +28,9 @@ Self-healing features:
 import json
 import logging
 import time
-from typing import Optional, Callable
+from typing import Optional, Callable, Union
+
+import numpy as np
 from PIL import Image
 
 from .websocket_client import VPSWebSocketClient, ConnectionState
@@ -148,7 +150,7 @@ class CloudFramePusher:
 
     async def push_frame(
         self,
-        image: Image.Image,
+        image: Union[Image.Image, np.ndarray],
         is_keyframe: bool = False,
         frame_number: int = 0,
         keyframe_number: int = 0,

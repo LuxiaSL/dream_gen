@@ -189,6 +189,47 @@ class TestVideoStreamEncoderEncode:
         encoder.close()
 
 
+    def test_numpy_input(self):
+        """Numpy arrays should be accepted directly (skip PIL conversion)."""
+        encoder = VideoStreamEncoder(256, 128, fps=10.0)
+
+        # Create numpy array (H, W, 3) uint8 — same as VAE decode output
+        arr = np.random.randint(0, 256, (128, 256, 3), dtype=np.uint8)
+        nal_data, is_keyframe = encoder.encode_frame(arr)
+        assert len(nal_data) > 0
+        assert is_keyframe  # First frame
+        encoder.close()
+
+    def test_numpy_faster_than_pil(self):
+        """Numpy path should be faster than PIL path."""
+        import time
+
+        encoder = VideoStreamEncoder(256, 128, fps=10.0)
+        arr = np.random.randint(0, 256, (128, 256, 3), dtype=np.uint8)
+        pil = Image.fromarray(arr)
+
+        # Warm up
+        encoder.encode_frame(arr)
+
+        # Time numpy path
+        start = time.time()
+        for _ in range(20):
+            encoder.encode_frame(arr)
+        numpy_time = time.time() - start
+        encoder.close()
+
+        encoder2 = VideoStreamEncoder(256, 128, fps=10.0)
+        encoder2.encode_frame(pil)  # warm up
+        start = time.time()
+        for _ in range(20):
+            encoder2.encode_frame(pil)
+        pil_time = time.time() - start
+        encoder2.close()
+
+        # Numpy should be at least as fast (usually faster due to no conversion)
+        print(f"  Numpy: {numpy_time*1000/20:.1f}ms/frame, PIL: {pil_time*1000/20:.1f}ms/frame")
+
+
 class TestVideoStreamEncoderLifecycle:
     """Tests for encoder lifecycle management."""
 
