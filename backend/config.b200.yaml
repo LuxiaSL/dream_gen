@@ -31,7 +31,7 @@ generation:
 
   hybrid:
     interpolation_frames: 20
-    target_interpolation_fps: 17.0
+    target_interpolation_fps: 30.0
     keyframe_denoise: 0.15
     interpolation_decoder: "vae"       # "vae" (full quality) or "taesd" (~2x faster, slightly softer)
     interpolation_resolution_divisor: 1
@@ -169,7 +169,7 @@ cloud:
 
     # H.264 encoding options
     h264:
-      keyframe_interval: 34   # I-frame every ~2s (17fps * 2)
+      keyframe_interval: 60   # I-frame every ~2s (30fps * 2)
       crf: 23                 # Quality: 18=high, 23=medium, 28=low
       max_bitrate: "2M"       # Bandwidth cap for spikes during mutations
       preset: "ultrafast"     # CPU usage — ultrafast is fine for 1024x512

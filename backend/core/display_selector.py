@@ -389,7 +389,7 @@ class DisplayFrameSelector:
             # File might be locked temporarily or already deleted
             logger.debug(f"Could not delete {frame_path.name}: {e}")
     
-    async def run(self, check_interval: float = 0.01) -> None:
+    async def run(self, check_interval: float = 0.001) -> None:
         """
         Main display loop
         
