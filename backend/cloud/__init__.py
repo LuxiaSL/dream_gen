@@ -26,6 +26,7 @@ Usage:
 from .websocket_client import VPSWebSocketClient, ConnectionState, MessageType, ControlType
 from .frame_pusher import CloudFramePusher
 from .state_sync import CloudStateSync
+from .video_encoder import VideoStreamEncoder
 
 __all__ = [
     "VPSWebSocketClient",
@@ -34,5 +35,6 @@ __all__ = [
     "ControlType",
     "CloudFramePusher",
     "CloudStateSync",
+    "VideoStreamEncoder",
 ]
 

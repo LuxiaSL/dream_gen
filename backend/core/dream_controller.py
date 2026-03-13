@@ -480,8 +480,8 @@ class DreamController:
                 on_load_state=self._on_cloud_load_state,
             )
             
-            # Create frame pusher
-            self.frame_pusher = CloudFramePusher(self.vps_client, cloud_config)
+            # Create frame pusher (needs full config for resolution + FPS for H.264 encoder)
+            self.frame_pusher = CloudFramePusher(self.vps_client, self.config)
             
             # Create state sync
             self.state_sync = CloudStateSync(self.vps_client, cloud_config)
@@ -493,7 +493,7 @@ class DreamController:
             
             self.logger.info("[OK] Cloud mode initialized")
             self.logger.info(f"  VPS URL: {cloud_config.get('vps_websocket_url')}")
-            self.logger.info(f"  Frame format: {cloud_config.get('frame_push', {}).get('format', 'webp')}")
+            self.logger.info("  Frame format: H.264")
             self.logger.info(f"  State sync interval: {cloud_config.get('state_sync', {}).get('interval_keyframes', 10)} keyframes")
         
         except ImportError as e:
