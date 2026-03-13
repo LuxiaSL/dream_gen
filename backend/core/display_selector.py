@@ -196,17 +196,22 @@ class DisplayFrameSelector:
                 )
             return False
         
-        if not frame_spec.file_path or not frame_spec.file_path.exists():
-            logger.error(f"Frame file missing: {frame_spec.file_path}")
-            return False
-        
         try:
-            # Load image once (for both display and callback)
-            loop = asyncio.get_event_loop()
-            image = await loop.run_in_executor(
-                None,
-                lambda: Image.open(frame_spec.file_path)
-            )
+            # Load image: prefer in-memory (cloud mode), fall back to disk
+            if frame_spec.image is not None:
+                image = frame_spec.image
+            elif frame_spec.file_path and frame_spec.file_path.exists():
+                loop = asyncio.get_event_loop()
+                image = await loop.run_in_executor(
+                    None,
+                    lambda: Image.open(frame_spec.file_path)
+                )
+            else:
+                logger.error(
+                    f"Frame {frame_spec.sequence_num}: no image in memory "
+                    f"and no file on disk ({frame_spec.file_path})"
+                )
+                return False
             
             # Write to current_frame.png ASYNC (skip in cloud mode for performance)
             if not self.skip_disk_write:
@@ -244,9 +249,10 @@ class DisplayFrameSelector:
             # Record to perf stats (tracks actual display rate)
             get_perf_stats().record_display_frame()
             
-            # Delete the source frame immediately after successful display (if cleanup enabled)
-            # This is safe because we've already copied it to current_frame.png
-            if self.cleanup_enabled:
+            # Cleanup: free in-memory image and delete disk file if present
+            if frame_spec.image is not None:
+                frame_spec.image = None  # Free PIL image memory
+            if self.cleanup_enabled and frame_spec.file_path:
                 await self._delete_frame_async(frame_spec.file_path)
             
             # Log every 10th frame

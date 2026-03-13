@@ -345,47 +345,54 @@ class InterpolationWorker:
         
         timings['decode_all'] = time.perf_counter() - t_decode_start
         
-        # === PHASE 3: Save ALL images ASYNC (no blocking) ===
-        logger.info(f"  Phase 3: Saving {len(decoded_images)} frames to disk...")
+        # === PHASE 3: Store frames (in-memory for cloud, disk for desktop) ===
+        cloud_mode = self.config.get('cloud', {}).get('enabled', False)
         t_save_start = time.perf_counter()
-        
-        save_tasks = []
-        for image, frame_spec, sequence_num in decoded_images:
-            # Save async to avoid blocking
-            save_task = loop.run_in_executor(
-                None,
-                lambda img=image, path=frame_spec.file_path: img.save(
-                    str(path), "PNG", optimize=False, compress_level=1
-                )
-            )
-            save_tasks.append((save_task, frame_spec, sequence_num))
-        
-        # Wait for all saves to complete (with timeout protection)
         success_count = 0
-        save_timeout = 30.0  # Max 30s per frame save - disk issues should fail fast
-        
-        for i, (save_task, frame_spec, sequence_num) in enumerate(save_tasks):
-            try:
-                # Use asyncio.wait_for to prevent infinite hangs on disk I/O
-                await asyncio.wait_for(save_task, timeout=save_timeout)
-                self.frame_buffer.mark_ready(sequence_num, frame_spec.file_path)
-                success_count += 1
-                self.frames_generated += 1
-                
-                # Log progress for debugging hung saves
-                if (i + 1) % 5 == 0 or i == len(save_tasks) - 1:
-                    logger.debug(f"  Saved {i + 1}/{len(save_tasks)} frames")
-                    
-            except asyncio.TimeoutError:
-                logger.error(
-                    f"[SAVE TIMEOUT] Frame {sequence_num} ({frame_spec.file_path.name}) "
-                    f"took >{save_timeout}s - disk I/O stall?"
+
+        if cloud_mode:
+            # Cloud mode: store PIL images directly in FrameBuffer (zero disk I/O)
+            logger.info(f"  Phase 3: Storing {len(decoded_images)} frames in memory...")
+            for image, frame_spec, sequence_num in decoded_images:
+                try:
+                    self.frame_buffer.mark_ready(sequence_num, image=image)
+                    success_count += 1
+                    self.frames_generated += 1
+                except Exception as e:
+                    logger.error(f"Failed to store frame {sequence_num}: {e}", exc_info=True)
+                    self.frame_buffer.mark_failed(sequence_num)
+        else:
+            # Desktop mode: save PNGs to disk (for Rainmeter, local viewer)
+            logger.info(f"  Phase 3: Saving {len(decoded_images)} frames to disk...")
+            save_tasks = []
+            for image, frame_spec, sequence_num in decoded_images:
+                save_task = loop.run_in_executor(
+                    None,
+                    lambda img=image, path=frame_spec.file_path: img.save(
+                        str(path), "PNG", optimize=False, compress_level=1
+                    )
                 )
-                self.frame_buffer.mark_failed(sequence_num)
-            except Exception as e:
-                logger.error(f"Failed to save frame {sequence_num}: {e}", exc_info=True)
-                self.frame_buffer.mark_failed(sequence_num)
-        
+                save_tasks.append((save_task, frame_spec, sequence_num))
+
+            save_timeout = 30.0
+            for i, (save_task, frame_spec, sequence_num) in enumerate(save_tasks):
+                try:
+                    await asyncio.wait_for(save_task, timeout=save_timeout)
+                    self.frame_buffer.mark_ready(sequence_num, frame_spec.file_path)
+                    success_count += 1
+                    self.frames_generated += 1
+                    if (i + 1) % 5 == 0 or i == len(save_tasks) - 1:
+                        logger.debug(f"  Saved {i + 1}/{len(save_tasks)} frames")
+                except asyncio.TimeoutError:
+                    logger.error(
+                        f"[SAVE TIMEOUT] Frame {sequence_num} ({frame_spec.file_path.name}) "
+                        f"took >{save_timeout}s - disk I/O stall?"
+                    )
+                    self.frame_buffer.mark_failed(sequence_num)
+                except Exception as e:
+                    logger.error(f"Failed to save frame {sequence_num}: {e}", exc_info=True)
+                    self.frame_buffer.mark_failed(sequence_num)
+
         timings['save_all'] = time.perf_counter() - t_save_start
         timings['total'] = time.perf_counter() - cycle_start
         
@@ -451,7 +458,8 @@ class InterpolationWorker:
                 )
                 
                 # Submit to cache worker (will handle encoding & selective caching)
-                if self.cache_worker:
+                # In cloud mode, midpoint may not have a file_path (in-memory only)
+                if self.cache_worker and midpoint_frame.file_path:
                     await self.cache_worker.submit_frame(
                         frame_path=midpoint_frame.file_path,
                         prompt=f"interpolation_{start_kf_num}_{end_kf_num}_t0.5",

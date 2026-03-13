@@ -70,6 +70,10 @@ class FrameSpec:
     # Metadata
     generated_at: Optional[float] = None
     prompt: Optional[str] = None  # Prompt text for this frame's keyframe
+
+    # In-memory image (cloud mode — skip disk round-trip for interpolation frames)
+    # When set, display selector reads this directly instead of Image.open(file_path)
+    image: object = None  # PIL Image.Image (typed as object to avoid import)
     
     def is_keyframe(self) -> bool:
         """Check if this is a keyframe"""
@@ -251,18 +255,20 @@ class FrameBuffer:
             logger.debug(f"Marked generating: {self.frames[sequence_num]}")
     
     def mark_ready(
-        self, 
-        sequence_num: int, 
+        self,
+        sequence_num: int,
         file_path: Optional[Path] = None,
-        prompt: Optional[str] = None
+        prompt: Optional[str] = None,
+        image: object = None,
     ) -> None:
         """
         Mark a frame as ready (generation complete)
-        
+
         Args:
             sequence_num: Sequence number of the frame
             file_path: Path where frame was saved (optional, uses registered path if None)
             prompt: Prompt text for this keyframe (optional, for debugging/display)
+            image: PIL Image in memory (cloud mode — skip disk I/O for display)
         """
         if sequence_num in self.frames:
             self.frames[sequence_num].state = FrameState.READY
@@ -270,6 +276,8 @@ class FrameBuffer:
                 self.frames[sequence_num].file_path = file_path
             if prompt:
                 self.frames[sequence_num].prompt = prompt
+            if image is not None:
+                self.frames[sequence_num].image = image
             self.frames[sequence_num].generated_at = time.time()
             logger.debug(f"Marked ready: {self.frames[sequence_num]}")
     
