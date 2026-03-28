@@ -137,9 +137,15 @@ class CacheManager:
         # Archive index: maps template_id -> archive directory path
         self._archive_index: Dict[str, str] = {}
 
+        # Maximum archived sessions to keep (oldest pruned first)
+        self.max_archived_sessions = config.get("generation", {}).get("cache", {}).get(
+            "max_archived_sessions", 10
+        )
+
         # Load existing cache and archive index
         self.load_cache()
         self._load_archive_index()
+        self._prune_stale_archives()
 
         logger.info(
             f"CacheManager initialized: {len(self.entries)}/{self.max_size} entries, "
@@ -255,6 +261,58 @@ class CacheManager:
             
         except Exception as e:
             logger.error(f"Failed to save archive index: {e}", exc_info=True)
+
+    def _prune_stale_archives(self) -> None:
+        """
+        Remove oldest archived sessions when total exceeds max_archived_sessions.
+
+        Also cleans up orphaned archive directories that exist on disk but are
+        not tracked in the archive index (e.g. from interrupted archival).
+        """
+        try:
+            # Clean orphaned dirs not in the index
+            if self.archive_dir.exists():
+                indexed_paths = set(Path(p) for p in self._archive_index.values())
+                for child in self.archive_dir.iterdir():
+                    if child.is_dir() and child not in indexed_paths:
+                        logger.info(f"Removing orphaned archive: {child.name}")
+                        shutil.rmtree(child)
+
+            # Prune excess indexed archives (keep most recent by timestamp in dir name)
+            if len(self._archive_index) <= self.max_archived_sessions:
+                return
+
+            # Sort by the timestamp suffix in archive path names (template_{id}_{timestamp})
+            def _archive_timestamp(item: tuple) -> int:
+                path_str = item[1]
+                name = Path(path_str).name
+                # Extract trailing timestamp: template_{id}_{timestamp}
+                parts = name.rsplit("_", 1)
+                try:
+                    return int(parts[-1])
+                except (ValueError, IndexError):
+                    return 0
+
+            sorted_archives = sorted(self._archive_index.items(), key=_archive_timestamp)
+            n_to_remove = len(sorted_archives) - self.max_archived_sessions
+            removed = 0
+
+            for template_id, archive_path in sorted_archives[:n_to_remove]:
+                archive_dir = Path(archive_path)
+                if archive_dir.exists():
+                    shutil.rmtree(archive_dir)
+                del self._archive_index[template_id]
+                removed += 1
+
+            if removed > 0:
+                self._save_archive_index()
+                logger.info(
+                    f"Archive pruning: removed {removed} old session(s), "
+                    f"{len(self._archive_index)} remaining"
+                )
+
+        except Exception as e:
+            logger.warning(f"Archive pruning failed (non-fatal): {e}")
 
     def add(
         self,

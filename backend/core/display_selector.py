@@ -123,12 +123,40 @@ class DisplayFrameSelector:
         
         if self.cleanup_enabled:
             logger.info(f"  Auto-cleanup: ENABLED (delete after display)")
+            # Sweep stale frames from previous runs that didn't exit cleanly
+            self._cleanup_stale_frames()
         else:
             logger.info(f"  Auto-cleanup: DISABLED")
-        
+
         if self.on_frame_callback:
             logger.info(f"  Frame callback: ENABLED")
     
+    def _cleanup_stale_frames(self) -> None:
+        """
+        Remove leftover frame_*.png files from previous runs.
+
+        When a run exits uncleanly (crash, kill, etc.), displayed-frame cleanup
+        never fires for frames already written to disk. This sweep runs once at
+        startup to clear those orphans before the new run begins.
+        """
+        try:
+            stale_frames = list(self.output_dir.glob("frame_*.png"))
+            if not stale_frames:
+                return
+
+            deleted = 0
+            for frame_path in stale_frames:
+                try:
+                    frame_path.unlink()
+                    deleted += 1
+                except OSError as e:
+                    logger.debug(f"Could not delete stale frame {frame_path.name}: {e}")
+
+            if deleted > 0:
+                logger.info(f"  Startup sweep: removed {deleted} stale frame(s) from previous run")
+        except Exception as e:
+            logger.warning(f"Stale frame cleanup failed (non-fatal): {e}")
+
     async def wait_for_initial_buffer(self, check_interval: float = 1.0) -> bool:
         """
         Wait for buffer to fill before starting playback
