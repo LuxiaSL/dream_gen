@@ -357,7 +357,7 @@ class VPSWebSocketClient:
 
                 self._websocket = await websockets.connect(
                     target_url,
-                    extra_headers=headers,
+                    additional_headers=headers,
                     ping_interval=20,
                     ping_timeout=self.PING_TIMEOUT,
                     close_timeout=5,
