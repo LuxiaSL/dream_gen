@@ -170,9 +170,9 @@ cloud:
     # H.264 encoding options
     h264:
       keyframe_interval: 60   # I-frame every ~2s (30fps * 2)
-      crf: 23                 # Quality: 18=high, 23=medium, 28=low
-      max_bitrate: "2M"       # Bandwidth cap for spikes during mutations
-      preset: "ultrafast"     # CPU usage — ultrafast is fine for 1024x512
+      crf: 18                 # Quality: 18=high, 23=medium, 28=low
+      max_bitrate: "4M"       # Bandwidth cap for spikes during mutations
+      preset: "veryfast"      # Good quality/speed tradeoff — 128 cores at 7% util
 
   state_sync:
     enabled: true
