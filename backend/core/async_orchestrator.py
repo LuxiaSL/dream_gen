@@ -675,11 +675,15 @@ class AsyncGenerationOrchestrator:
                     )
                     
                     if not has_interp:
-                        interp_seqs = self.buffer.register_interpolations(
-                            kf_num, next_kf,
+                        injection_interp_count = self.config['generation']['hybrid'].get(
+                            'injection_interpolation_frames',
                             self.config['generation']['hybrid']['interpolation_frames']
                         )
-                        logger.info(f"  Pre-registered interpolations {kf_num}->{next_kf}: seq {interp_seqs[0]}-{interp_seqs[-1]}")
+                        interp_seqs = self.buffer.register_interpolations(
+                            kf_num, next_kf,
+                            injection_interp_count
+                        )
+                        logger.info(f"  Pre-registered injection interpolations {kf_num}->{next_kf}: {injection_interp_count} frames, seq {interp_seqs[0]}-{interp_seqs[-1]}")
                     
                     # Check if next keyframe already registered
                     if next_kf in self.keyframe_sequences:

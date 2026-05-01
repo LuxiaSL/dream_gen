@@ -31,6 +31,7 @@ generation:
 
   hybrid:
     interpolation_frames: 20
+    injection_interpolation_frames: 150  # ~5s at 30fps �� smooth transitions for cache/seed/template swaps
     target_interpolation_fps: 30.0
     keyframe_denoise: 0.15
     interpolation_decoder: "vae"       # "vae" (full quality) or "taesd" (~2x faster, slightly softer)
