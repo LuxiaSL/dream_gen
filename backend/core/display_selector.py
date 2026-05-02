@@ -1,15 +1,8 @@
 """
-Display Frame Selector - Sequential frame consumption for display
+Display Frame Selector - Sequential frame consumption for streaming
 
-This module handles selecting frames from the buffer and updating the
-display (current_frame.png) with proper timing for smooth playback.
-
-Key responsibilities:
-- Wait for initial buffer to fill
-- Select next frame in sequence from buffer
-- Copy frame to current_frame.png for Rainmeter display
-- Time frame display based on target FPS
-- Update status with current frame info
+Consumes frames from the FrameBuffer at target FPS and passes them
+to a callback (frame pusher) for H.264 encoding and WebSocket push.
 """
 
 import logging
@@ -19,7 +12,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, Callable, Awaitable
 from PIL import Image
 
-from .frame_buffer import FrameBuffer
+from .frame_buffer import FrameBuffer, FrameState
 from utils.perf_stats import get_perf_stats
 
 logger = logging.getLogger(__name__)
@@ -27,24 +20,13 @@ logger = logging.getLogger(__name__)
 
 class DisplayFrameSelector:
     """
-    Selects and displays frames from the buffer
-    
-    Consumes frames from the buffer in sequential order, copies them
-    to current_frame.png for Rainmeter display, and times playback
-    according to target FPS.
-    
-    Usage:
-        selector = DisplayFrameSelector(
-            frame_buffer=buffer,
-            output_dir=Path("output"),
-            target_fps=4.0,
-            min_buffer_seconds=30.0
-        )
-        
-        # Run display loop
-        await selector.run()
+    Rate-governed frame consumer for the generation pipeline.
+
+    Pulls frames from FrameBuffer in sequence order at target FPS,
+    invokes the on_frame_callback (typically CloudFramePusher), and
+    frees in-memory images after display.
     """
-    
+
     def __init__(
         self,
         frame_buffer: FrameBuffer,
@@ -54,108 +36,32 @@ class DisplayFrameSelector:
         cleanup_displayed_frames: bool = False,
         on_frame_callback: Optional[Callable[[Image.Image, int, bool, int, Optional[str]], Awaitable[None]]] = None,
         skip_disk_write: bool = False,
-        keyframe_worker=None,  # Optional: KeyframeWorker for source image protection
-        interpolation_worker=None  # Optional: InterpolationWorker for pending interpolation protection
+        **_kwargs,
     ):
-        """
-        Initialize display frame selector
-        
-        Args:
-            frame_buffer: FrameBuffer instance
-            output_dir: Output directory for current_frame.png
-            target_fps: Target frame rate for display
-            min_buffer_seconds: Minimum buffer before starting playback
-            cleanup_displayed_frames: Whether to delete frames immediately after display
-            on_frame_callback: Optional async callback(image, frame_num, is_keyframe, keyframe_num, prompt) 
-                               called for each displayed frame (e.g., for cloud push)
-            skip_disk_write: If True, skip writing current_frame.png (cloud mode optimization)
-            keyframe_worker: Optional KeyframeWorker instance - if provided, will check
-                            before deleting keyframes to protect source images during retry
-            interpolation_worker: Optional InterpolationWorker instance - if provided, will check
-                            before deleting keyframes to protect those needed for pending interpolations
-        """
         self.buffer = frame_buffer
         self.output_dir = Path(output_dir)
         self.target_fps = target_fps
         self.min_buffer_seconds = min_buffer_seconds
-        
-        # Storage management
-        self.cleanup_enabled = cleanup_displayed_frames
-        self.frames_deleted = 0
-        
-        # Cloud mode optimization - skip disk write for current_frame.png
-        self.skip_disk_write = skip_disk_write
-        
-        # Keyframe worker reference for source image protection during retries
-        self.keyframe_worker = keyframe_worker
-        
-        # Interpolation worker reference for pending interpolation protection
-        self.interpolation_worker = interpolation_worker
-        
-        # Timing
         self.frame_interval = 1.0 / target_fps if target_fps > 0 else 0.25
-        
-        # State
+
         self.running = False
         self.paused = False
         self.frames_displayed = 0
         self.skipped_frames = 0
         self.last_frame_time = 0
         self._depletion_count = 0
-        
-        # Track current prompt (updated on keyframe display)
-        # Interpolated frames inherit the prompt from their start keyframe
+
         self._current_prompt: Optional[str] = None
         self._current_keyframe_num: int = 0
-        
-        # Output path
-        self.current_frame_path = self.output_dir / "current_frame.png"
-        
-        # Optional callback for cloud push or other processing
+
         self.on_frame_callback = on_frame_callback
-        
+
         logger.info("DisplayFrameSelector initialized")
         logger.info(f"  Target FPS: {target_fps}")
         logger.info(f"  Frame interval: {self.frame_interval:.3f}s")
         logger.info(f"  Min buffer: {min_buffer_seconds}s")
-        logger.info(f"  Output: {self.current_frame_path}")
-        logger.info(f"  Skip disk write: {skip_disk_write}")
-        
-        if self.cleanup_enabled:
-            logger.info(f"  Auto-cleanup: ENABLED (delete after display)")
-            # Sweep stale frames from previous runs that didn't exit cleanly
-            self._cleanup_stale_frames()
-        else:
-            logger.info(f"  Auto-cleanup: DISABLED")
-
-        if self.on_frame_callback:
-            logger.info(f"  Frame callback: ENABLED")
     
-    def _cleanup_stale_frames(self) -> None:
-        """
-        Remove leftover frame_*.png files from previous runs.
 
-        When a run exits uncleanly (crash, kill, etc.), displayed-frame cleanup
-        never fires for frames already written to disk. This sweep runs once at
-        startup to clear those orphans before the new run begins.
-        """
-        try:
-            stale_frames = list(self.output_dir.glob("frame_*.png"))
-            if not stale_frames:
-                return
-
-            deleted = 0
-            for frame_path in stale_frames:
-                try:
-                    frame_path.unlink()
-                    deleted += 1
-                except OSError as e:
-                    logger.debug(f"Could not delete stale frame {frame_path.name}: {e}")
-
-            if deleted > 0:
-                logger.info(f"  Startup sweep: removed {deleted} stale frame(s) from previous run")
-        except Exception as e:
-            logger.warning(f"Stale frame cleanup failed (non-fatal): {e}")
 
     async def wait_for_initial_buffer(self, check_interval: float = 1.0) -> bool:
         """
@@ -225,26 +131,11 @@ class DisplayFrameSelector:
             return False
         
         try:
-            # Load image: prefer in-memory (cloud mode), fall back to disk
-            if frame_spec.image is not None:
-                image = frame_spec.image
-            elif frame_spec.file_path and frame_spec.file_path.exists():
-                loop = asyncio.get_event_loop()
-                image = await loop.run_in_executor(
-                    None,
-                    lambda: Image.open(frame_spec.file_path)
-                )
-            else:
-                logger.error(
-                    f"Frame {frame_spec.sequence_num}: no image in memory "
-                    f"and no file on disk ({frame_spec.file_path})"
-                )
+            image = frame_spec.image
+            if image is None:
+                logger.error(f"Frame {frame_spec.sequence_num}: no image in memory")
                 return False
-            
-            # Write to current_frame.png ASYNC (skip in cloud mode for performance)
-            if not self.skip_disk_write:
-                await self._write_current_frame_async(image)
-            
+
             # Update current prompt and keyframe number on keyframe display
             is_keyframe = frame_spec.frame_type.value == 'keyframe'
             if is_keyframe:
@@ -277,145 +168,22 @@ class DisplayFrameSelector:
             # Record to perf stats (tracks actual display rate)
             get_perf_stats().record_display_frame()
             
-            # Cleanup: free in-memory image and delete disk file if present
+            # Free in-memory image
             if frame_spec.image is not None:
-                frame_spec.image = None  # Free PIL image memory
-            if self.cleanup_enabled and frame_spec.file_path:
-                await self._delete_frame_async(frame_spec.file_path)
-            
-            # Log every 10th frame
+                frame_spec.image = None
+
             if self.frames_displayed % 10 == 0:
                 logger.info(f"Displayed frame: {frame_spec}")
                 status = self.buffer.get_buffer_status()
                 logger.info(f"  Buffer: {status['seconds_buffered']:.1f}s ({status['frames_ready']} frames)")
-                
-                if self.cleanup_enabled and self.frames_deleted > 0:
-                    logger.info(f"  Cleanup: {self.frames_deleted} frames deleted total")
             else:
                 logger.debug(f"Displayed: {frame_spec}")
-            
+
             return True
-            
+
         except Exception as e:
             logger.error(f"Error displaying frame: {e}", exc_info=True)
             return False
-    
-    async def _write_current_frame_async(self, image: Image.Image) -> None:
-        """
-        Write frame to current_frame.png using async I/O (optimized)
-        
-        Moves image saving to executor to avoid blocking event loop.
-        
-        Args:
-            image: PIL Image to save
-        """
-        loop = asyncio.get_event_loop()
-        
-        # Run sync I/O in executor (don't block event loop!)
-        await loop.run_in_executor(
-            None,
-            self._write_current_frame_sync,
-            image
-        )
-    
-    def _write_current_frame_sync(self, image: Image.Image) -> None:
-        """
-        Sync I/O operations (runs in executor)
-        
-        Args:
-            image: PIL Image to save
-        """
-        try:
-            # Use atomic write with temp file
-            import tempfile
-            import shutil
-            
-            # Write to temp file in same directory
-            with tempfile.NamedTemporaryFile(
-                mode='wb',
-                dir=self.output_dir,
-                delete=False,
-                suffix='.tmp',
-                prefix='.current_frame_'
-            ) as tmp_file:
-                image.save(tmp_file, format='PNG', optimize=False)
-                tmp_path = Path(tmp_file.name)
-            
-            # Atomic rename
-            shutil.move(str(tmp_path), str(self.current_frame_path))
-            
-            logger.debug(f"Updated current_frame.png")
-            
-        except Exception as e:
-            logger.error(f"Failed to write current frame: {e}")
-            # Clean up temp file if it exists
-            try:
-                if 'tmp_path' in locals():
-                    tmp_path.unlink()
-            except:
-                pass
-    
-    async def _delete_frame_async(self, frame_path: Path) -> None:
-        """
-        Delete a single frame file after it's been displayed (async version)
-        
-        This is safe because the frame has already been copied to current_frame.png.
-        We delete immediately to prevent disk space buildup.
-        
-        Args:
-            frame_path: Path to frame file to delete
-        """
-        # Run deletion in executor (don't block event loop)
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, self._delete_frame_sync, frame_path)
-    
-    def _delete_frame_sync(self, frame_path: Path) -> None:
-        """
-        Sync file deletion (runs in executor)
-        
-        Args:
-            frame_path: Path to frame file to delete
-        """
-        try:
-            # Safety check - file must exist and be in output directory
-            if not frame_path.exists():
-                logger.debug(f"Frame already deleted: {frame_path.name}")
-                return
-            
-            # Verify it's in our output directory (safety check)
-            if not str(frame_path).startswith(str(self.output_dir)):
-                logger.warning(f"Refusing to delete file outside output dir: {frame_path}")
-                return
-            
-            # Check if keyframe_worker is protecting this image (for retry)
-            if self.keyframe_worker is not None:
-                try:
-                    if self.keyframe_worker.is_source_image_protected(frame_path):
-                        logger.info(f"Skipping delete of protected source image: {frame_path.name}")
-                        return
-                except Exception as e:
-                    # Don't fail on protection check - just log and continue
-                    logger.debug(f"Keyframe protection check failed: {e}")
-            
-            # Check if interpolation_worker needs this keyframe for pending interpolations
-            if self.interpolation_worker is not None:
-                try:
-                    if self.interpolation_worker.is_keyframe_protected(frame_path):
-                        logger.info(f"Skipping delete of keyframe needed for interpolation: {frame_path.name}")
-                        return
-                except Exception as e:
-                    # Don't fail on protection check - just log and continue
-                    logger.debug(f"Interpolation protection check failed: {e}")
-            
-            # Delete the file
-            frame_path.unlink()
-            self.frames_deleted += 1
-            logger.debug(f"Deleted displayed frame: {frame_path.name}")
-            
-        except Exception as e:
-            # Non-fatal - just log and continue
-            # File might be locked temporarily or already deleted
-            logger.debug(f"Could not delete {frame_path.name}: {e}")
     
     async def run(self, check_interval: float = 0.001) -> None:
         """
@@ -546,7 +314,7 @@ class DisplayFrameSelector:
         # Find the last ready keyframe
         ready_keyframes = [
             (seq, spec) for seq, spec in self.buffer.frames.items()
-            if spec.is_keyframe and spec.state.value == "ready"
+            if spec.is_keyframe() and spec.state == FrameState.READY
         ]
         
         if ready_keyframes:
@@ -589,21 +357,4 @@ class DisplayFrameSelector:
             stats["cleanup_enabled"] = False
         
         return stats
-
-
-# Unit tests
-if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(levelname)s - %(message)s'
-    )
-    
-    print("🧪 Testing DisplayFrameSelector...")
-    print()
-    
-    print("Note: This requires a filled buffer for full testing")
-    print("Run with full DreamController for integration testing")
-    print()
-    
-    print("✓ Module structure validated")
 
