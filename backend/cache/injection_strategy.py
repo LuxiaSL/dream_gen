@@ -1,41 +1,37 @@
 """
 Cache Injection Strategy
 
-Handles all cache and seed injection logic for mode collapse prevention.
-This separates the complex injection logic from the generation coordinator,
+Handles cache injection logic for mode collapse prevention.
+This separates the injection logic from the generation coordinator,
 keeping the codebase modular and maintainable.
 
 Key Features:
 - Dissimilar cache injection with VAE blending
-- Adaptive seed injection based on collapse frequency
-- Emergency seed injection triggers
+- Anti-loop tracking to avoid re-injecting recent frames
 - Performance: ~150ms for VAE blending operations
 """
 
 import logging
-import random
 from collections import deque
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple
 
 import numpy as np
-import torch
 
 logger = logging.getLogger(__name__)
 
 
 class CacheInjectionStrategy:
     """
-    Manages cache and seed injection strategies for mode collapse prevention
-    
-    This class encapsulates all the complex logic for:
-    1. Dissimilar cache injection (Component 3)
-    2. Adaptive seed injection (Component 4)
-    3. VAE latent blending
-    4. Emergency triggers
-    
+    Manages cache injection strategies for mode collapse prevention
+
+    This class encapsulates the logic for:
+    1. Dissimilar cache injection with dual-metric selection
+    2. VAE latent blending
+    3. Anti-loop tracking
+
     The generation coordinator delegates to this class to keep itself lean.
-    
+
     Usage:
         strategy = CacheInjectionStrategy(
             config=config,
@@ -44,19 +40,12 @@ class CacheInjectionStrategy:
             latent_encoder=latent_encoder,
             buffer=buffer
         )
-        
+
         # Dissimilar cache injection
         result = strategy.inject_dissimilar_keyframe(
             current_image_path=path,
             target_keyframe_num=42
         )
-        
-        # Adaptive seed injection
-        if strategy.should_inject_seed(collapse_history):
-            result = strategy.inject_seed_frame(
-                current_image_path=path,
-                target_keyframe_num=42
-            )
     """
     
     def __init__(
@@ -111,8 +100,6 @@ class CacheInjectionStrategy:
         
         # Injection tracking
         self.total_cache_injections = 0
-        self.total_seed_injections = 0
-        self.collapse_detection_history: deque = deque(maxlen=20)
         self.recent_cache_injections: deque = deque(maxlen=5)  # Track last 5 injected cache IDs
         
         logger.info("CacheInjectionStrategy initialized")
@@ -126,21 +113,18 @@ class CacheInjectionStrategy:
         self,
         current_image_path: Path,
         target_keyframe_num: int,
-        collapse_trigger: Optional[str] = None
     ) -> Optional[Tuple[Path, Dict[str, Any]]]:
         """
         Inject DISSIMILAR cached frame with VAE latent blending
-        
+
         This actively breaks mode collapse by introducing different aesthetics.
-        Uses dissimilarity-based selection and intelligently prioritizes the
-        metric that triggered the collapse.
-        
+        Uses dissimilarity-based selection with weighted random sampling that
+        favors maximally dissimilar frames.
+
         Args:
             current_image_path: Path to current frame
             target_keyframe_num: Target keyframe number for saving
-            collapse_trigger: Which metric(s) triggered (e.g., "COLOR", "STRUCTURAL", "BOTH")
-                             Used for smart selection prioritization
-            
+
         Returns:
             Tuple of (blended_frame_path, metadata) or None if injection fails
         """
@@ -167,19 +151,9 @@ class CacheInjectionStrategy:
             
             if is_dual_metric:
                 # Dual-metric OR logic: Select frames dissimilar in EITHER color OR structure
-                # Smart prioritization: if collapse_trigger specified, prioritize that metric
                 color_range = self.cache_config.get('color_histogram', {}).get('dissimilarity_range', [0.90, 1.70])
                 struct_range = self.cache_config.get('phash', {}).get('dissimilarity_range', [0.42, 0.62])
-                
-                # Log smart prioritization if active
-                if collapse_trigger:
-                    if "COLOR" in collapse_trigger and "STRUCTURAL" not in collapse_trigger:
-                        logger.info(f"  Smart selection: Prioritizing COLOR dissimilarity (color collapse detected)")
-                    elif "STRUCTURAL" in collapse_trigger and "COLOR" not in collapse_trigger:
-                        logger.info(f"  Smart selection: Prioritizing STRUCTURAL dissimilarity (structural collapse detected)")
-                    elif "BOTH" in collapse_trigger:
-                        logger.info(f"  Smart selection: Using max dissimilarity (both metrics triggered)")
-                
+
                 candidates = []
                 for entry in cache_entries:
                     if entry.embedding is None:
@@ -205,18 +179,10 @@ class CacheInjectionStrategy:
                         # For pHash: lower sim in range = more dissimilar
                         struct_dissim = 1.0 - ((struct_sim - struct_range[0]) / (struct_range[1] - struct_range[0]))
                         
-                        # Smart selection: prioritize metric that triggered collapse
-                        if collapse_trigger and "COLOR" in collapse_trigger and "STRUCTURAL" not in collapse_trigger:
-                            # Color collapse detected → prioritize COLOR dissimilarity
-                            combined_dissimilarity = color_dissim
-                        elif collapse_trigger and "STRUCTURAL" in collapse_trigger and "COLOR" not in collapse_trigger:
-                            # Structural collapse detected → prioritize STRUCTURAL dissimilarity
-                            combined_dissimilarity = struct_dissim
-                        else:
-                            # Both triggered or baseline injection → use max (most dissimilar dimension)
-                            combined_dissimilarity = max(color_dissim, struct_dissim)
-                        
-                        candidates.append((entry, combined_dissimilarity, color_sim, struct_sim, color_dissim, struct_dissim))
+                        # Use max dissimilarity across both dimensions
+                        combined_dissimilarity = max(color_dissim, struct_dissim)
+
+                        candidates.append((entry, combined_dissimilarity, color_sim, struct_sim))
                 
                 if not candidates:
                     logger.debug(
@@ -231,32 +197,24 @@ class CacheInjectionStrategy:
                 weights = np.exp(dissimilarities * 2)
                 
                 # Anti-loop: Penalize recently injected frames
-                for i, (entry, _, _, _, _, _) in enumerate(candidates):
+                for i, (entry, _, _, _) in enumerate(candidates):
                     if entry.cache_id in self.recent_cache_injections:
                         weights[i] *= 0.1  # 90% penalty for recently used
                         logger.debug(f"  Penalizing recently used {entry.cache_id} (weight *= 0.1)")
-                
+
                 # Normalize weights
                 weights = weights / weights.sum()
-                
+
                 selected_idx = np.random.choice(len(candidates), p=weights)
-                selected_entry, selected_dissimilarity, selected_color_sim, selected_struct_sim, color_dissim, struct_dissim = candidates[selected_idx]
-                
+                selected_entry, selected_dissimilarity, selected_color_sim, selected_struct_sim = candidates[selected_idx]
+
                 # Track this injection
                 self.recent_cache_injections.append(selected_entry.cache_id)
-                
-                # Log selection with smart prioritization info
-                priority_info = ""
-                if collapse_trigger:
-                    if "COLOR" in collapse_trigger and "STRUCTURAL" not in collapse_trigger:
-                        priority_info = f", prioritized COLOR (dissim:{color_dissim:.3f})"
-                    elif "STRUCTURAL" in collapse_trigger and "COLOR" not in collapse_trigger:
-                        priority_info = f", prioritized STRUCT (dissim:{struct_dissim:.3f})"
-                
+
                 logger.info(
                     f"[DISSIMILAR] Selected {selected_entry.cache_id} "
                     f"(color:{selected_color_sim:.3f}, struct:{selected_struct_sim:.3f}, "
-                    f"dissim:{selected_dissimilarity:.3f}{priority_info})"
+                    f"dissim:{selected_dissimilarity:.3f})"
                 )
             
             # VAE latent blending (not direct copy!)
@@ -319,25 +277,14 @@ class CacheInjectionStrategy:
                     f"({blend_weight*100:.0f}% cached, {(1-blend_weight)*100:.0f}% current)"
                 )
                 
-                # Create metadata based on which metric was used
-                if is_dual_metric:
-                    metadata = {
-                        "type": "dissimilar_cache_injection",
-                        "cache_id": selected_entry.cache_id,
-                        "color_similarity": selected_color_sim,
-                        "struct_similarity": selected_struct_sim,
-                        "dissimilarity": selected_dissimilarity,
-                        "blend_weight": blend_weight
-                    }
-                else:
-                    metadata = {
-                        "type": "dissimilar_cache_injection",
-                        "cache_id": selected_entry.cache_id,
-                        "color_similarity": selected_color_sim,
-                        "struct_similarity": selected_struct_sim,
-                        "dissimilarity": selected_dissimilarity,
-                        "blend_weight": blend_weight
-                    }
+                metadata = {
+                    "type": "dissimilar_cache_injection",
+                    "cache_id": selected_entry.cache_id,
+                    "color_similarity": selected_color_sim,
+                    "struct_similarity": selected_struct_sim,
+                    "dissimilarity": selected_dissimilarity,
+                    "blend_weight": blend_weight
+                }
                 
                 return target_path, metadata
                 
@@ -381,120 +328,14 @@ class CacheInjectionStrategy:
             logger.error(f"Direct copy fallback failed: {e}")
             return None
     
-    def should_inject_seed(self, collapse_history: Optional[deque] = None) -> bool:
-        """
-        Adaptive seed injection based on cache injection frequency
-        
-        Logic:
-        - BOOST probability when cache is small (bootstrap phase)
-        - Probability increases with cache injection count (floor -> max)
-        - Forced injection if frequent collapse detected
-        
-        Args:
-            collapse_history: Deque of recent collapse detections (True/False)
-                             If None, uses internal tracking
-        
-        Returns:
-            True if should inject seed
-        """
-        # Use provided history or internal tracking
-        if collapse_history is None:
-            collapse_history = self.collapse_detection_history
-        
-        # Check for forced seed injection (emergency)
-        if len(collapse_history) > 0:
-            recent_collapses = sum(1 for x in collapse_history if x)
-            collapse_frequency = recent_collapses / len(collapse_history)
-            
-            force_seed_threshold = self.cache_config.get('force_seed_collapse_frequency', 0.3)
-            
-            if collapse_frequency > force_seed_threshold:
-                logger.warning(
-                    f"[EMERGENCY] High collapse frequency "
-                    f"({collapse_frequency:.1%}) - forcing seed injection"
-                )
-                return True
-        
-        # NOTE: Seed injection boost removed - mutations via BEND mode now handle
-        # early-stage variety. Cache populates naturally through mutation-driven frames.
-        # See CACHE_SYSTEM_REFACTOR.md for details.
-        
-        # Adaptive probability based on cache injection count
-        floor_probability = self.cache_config.get('seed_injection_floor', 0.02)
-        max_probability = self.cache_config.get('seed_injection_max', 0.15)
-        ramp_injections = self.cache_config.get('seed_injection_ramp', 50)
-        
-        # Linear ramp from floor to max over ramp_injections
-        progress = min(self.total_cache_injections / ramp_injections, 1.0)
-        current_probability = (
-            floor_probability + 
-            (max_probability - floor_probability) * progress
-        )
-        
-        should_inject = random.random() < current_probability
-        
-        if should_inject:
-            logger.info(
-                f"[SEED] Adaptive seed injection "
-                f"(probability: {current_probability:.1%}, "
-                f"cache injections: {self.total_cache_injections})"
-            )
-        
-        return should_inject
-    
-    async def inject_seed_frame(
-        self,
-        target_keyframe_num: int,
-        current_image_path: Optional[Path] = None
-    ) -> Optional[Tuple[Path, Dict[str, Any]]]:
-        """
-        DEPRECATED: Seed injection removed in favor of FreshFrameBuffer.
-        
-        This method exists only for API compatibility. All seed injection
-        should now go through FreshFrameBuffer.select_and_consume() in the
-        orchestrator.
-        
-        Args:
-            target_keyframe_num: Target keyframe number for saving
-            current_image_path: Current image path (unused)
-        
-        Returns:
-            None always - seed injection disabled
-            
-        Raises:
-            NotImplementedError: Always, to surface any remaining callers
-        """
-        raise NotImplementedError(
-            "Seed injection via injection_strategy is REMOVED. "
-            "Use FreshFrameBuffer.select_and_consume() in the orchestrator instead. "
-            "If you're seeing this error, the orchestrator needs to be updated "
-            "to use the new fresh frame system."
-        )
-    
-    def record_collapse_detection(self, is_collapsed: bool) -> None:
-        """
-        Record collapse detection result for adaptive seed injection
-        
-        Args:
-            is_collapsed: True if collapse detected
-        """
-        self.collapse_detection_history.append(is_collapsed)
-    
     def get_stats(self) -> Dict[str, Any]:
         """
         Get injection statistics
-        
+
         Returns:
             Dictionary with statistics
         """
-        collapse_count = sum(1 for x in self.collapse_detection_history if x)
-        collapse_frequency = collapse_count / len(self.collapse_detection_history) if self.collapse_detection_history else 0.0
-        
         return {
             "total_cache_injections": self.total_cache_injections,
-            "total_seed_injections": self.total_seed_injections,
-            "recent_collapse_frequency": collapse_frequency,
-            "recent_collapse_count": collapse_count,
-            "history_size": len(self.collapse_detection_history)
         }
 

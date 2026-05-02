@@ -20,7 +20,7 @@ Architecture:
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, Any, List, Tuple, Optional, Union
+from typing import Dict, Any, Optional, Union
 
 import numpy as np
 from PIL import Image
@@ -44,16 +44,10 @@ class DualMetricSimilarityManager:
     
     Usage:
         manager = DualMetricSimilarityManager(config)
-        
+
         # Encode image with both metrics
         embedding = manager.encode_image(image_path)
         # Returns: {'color': hist[96], 'struct': hash_hex}
-        
-        # Check for collapse
-        should_inject, reason = manager.check_collapse(
-            current_embedding,
-            recent_embeddings
-        )
     """
     
     def __init__(self, config: Dict[str, Any]):
@@ -130,87 +124,6 @@ class DualMetricSimilarityManager:
             logger.error(f"Failed to encode image {image_input}: {e}", exc_info=True)
             return None
     
-    def check_collapse(
-        self,
-        current_embedding: Dict[str, Any],
-        recent_embeddings: List[Dict[str, Any]]
-    ) -> Tuple[bool, str]:
-        """
-        Check for mode collapse using OR logic
-        
-        Computes average similarity for BOTH metrics independently,
-        then applies OR logic: if EITHER metric exceeds its threshold,
-        collapse is detected.
-        
-        Args:
-            current_embedding: Latest frame embedding
-            recent_embeddings: Last N frames for comparison
-        
-        Returns:
-            Tuple of (should_inject: bool, reason: str)
-            
-        Reasons:
-            "BOTH color and structural collapse"
-            "COLOR collapse detected"
-            "STRUCTURAL collapse detected"
-            "No collapse"
-        """
-        if not recent_embeddings:
-            return False, "No history to compare"
-        
-        try:
-            # === COLOR SIMILARITY ===
-            color_sims = []
-            for past in recent_embeddings:
-                if 'color' in past:
-                    sim = self.color_encoder.similarity(
-                        current_embedding['color'],
-                        past['color']
-                    )
-                    color_sims.append(sim)
-            
-            avg_color_sim = float(np.mean(color_sims)) if color_sims else 0.0
-            
-            # === STRUCTURAL SIMILARITY ===
-            struct_sims = []
-            for past in recent_embeddings:
-                if 'struct' in past:
-                    # Reconstruct hash objects from hex strings
-                    current_hash = self.phash_encoder.from_serializable(current_embedding['struct'])
-                    past_hash = self.phash_encoder.from_serializable(past['struct'])
-                    
-                    sim = self.phash_encoder.similarity(current_hash, past_hash)
-                    struct_sims.append(sim)
-            
-            avg_struct_sim = float(np.mean(struct_sims)) if struct_sims else 0.0
-            
-            # === OR/AND LOGIC ===
-            # Higher similarity = less diverse = should inject
-            color_collapse = avg_color_sim > self.color_threshold
-            struct_collapse = avg_struct_sim > self.struct_threshold
-            
-            # Apply logic (OR by default)
-            if self.injection_logic == 'all':  # AND logic
-                should_inject = color_collapse and struct_collapse
-            else:  # 'any' or default = OR logic
-                should_inject = color_collapse or struct_collapse
-            
-            # Determine reason for logging
-            if color_collapse and struct_collapse:
-                reason = f"BOTH color ({avg_color_sim:.3f}>{self.color_threshold:.3f}) and structural ({avg_struct_sim:.3f}>{self.struct_threshold:.3f}) collapse"
-            elif color_collapse:
-                reason = f"COLOR collapse detected ({avg_color_sim:.3f}>{self.color_threshold:.3f})"
-            elif struct_collapse:
-                reason = f"STRUCTURAL collapse detected ({avg_struct_sim:.3f}>{self.struct_threshold:.3f})"
-            else:
-                reason = f"No collapse (color:{avg_color_sim:.3f}, struct:{avg_struct_sim:.3f})"
-            
-            return should_inject, reason
-            
-        except Exception as e:
-            logger.error(f"Collapse check failed: {e}", exc_info=True)
-            return False, f"Error: {e}"
-    
     def get_color_similarity(
         self,
         embedding1: Dict[str, Any],
@@ -280,181 +193,4 @@ class DualMetricSimilarityManager:
             'color': self.color_encoder.from_serializable(serialized['color']),
             'struct': serialized['struct']  # Already a string
         }
-    
-    def serialize(self) -> bytes:
-        """
-        Serialize all cached embeddings for state persistence
-        
-        This is a no-op for now since embeddings are stored per-entry
-        in the CacheManager. The similarity manager itself is stateless.
-        
-        Returns:
-            Empty bytes (placeholder for future use)
-        """
-        # Currently stateless - embeddings are in cache entries
-        return b''
-    
-    def deserialize(self, data: bytes) -> None:
-        """
-        Restore serialized embeddings
-        
-        This is a no-op for now since embeddings are stored per-entry
-        in the CacheManager. The similarity manager itself is stateless.
-        
-        Args:
-            data: Serialized embeddings (currently ignored)
-        """
-        # Currently stateless - embeddings are in cache entries
-        pass
-
-
-# Test function
-def test_dual_similarity() -> bool:
-    """Test dual-metric similarity manager"""
-    print("=" * 60)
-    print("Testing DualMetricSimilarityManager...")
-    print("=" * 60)
-    
-    try:
-        # Create mock config
-        print("\n1. Creating manager...")
-        config = {
-            'generation': {
-                'cache': {
-                    'color_histogram': {
-                        'bins_per_channel': 32,
-                        'diversity_threshold': 1.80
-                    },
-                    'phash': {
-                        'hash_size': 8,
-                        'diversity_threshold': 0.65
-                    },
-                    'injection_logic': 'any'  # OR logic
-                }
-            }
-        }
-        
-        manager = DualMetricSimilarityManager(config)
-        print("[OK] Manager created")
-        
-        # Create test images
-        print("\n2. Creating test images...")
-        from PIL import Image, ImageDraw
-        import tempfile
-        
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmpdir = Path(tmpdir)
-            
-            # Image 1: Blue circle
-            img1 = Image.new('RGB', (256, 256), color=(255, 255, 255))
-            draw1 = ImageDraw.Draw(img1)
-            draw1.ellipse([64, 64, 192, 192], fill=(0, 0, 255))
-            img1_path = tmpdir / "blue_circle.png"
-            img1.save(img1_path)
-            
-            # Image 2: Blue circle (similar both metrics)
-            img2 = Image.new('RGB', (256, 256), color=(255, 255, 255))
-            draw2 = ImageDraw.Draw(img2)
-            draw2.ellipse([64, 64, 192, 192], fill=(50, 50, 255))
-            img2_path = tmpdir / "blue_circle2.png"
-            img2.save(img2_path)
-            
-            # Image 3: Red circle (different color, same structure)
-            img3 = Image.new('RGB', (256, 256), color=(255, 255, 255))
-            draw3 = ImageDraw.Draw(img3)
-            draw3.ellipse([64, 64, 192, 192], fill=(255, 0, 0))
-            img3_path = tmpdir / "red_circle.png"
-            img3.save(img3_path)
-            
-            # Image 4: Blue square (same color, different structure)
-            img4 = Image.new('RGB', (256, 256), color=(255, 255, 255))
-            draw4 = ImageDraw.Draw(img4)
-            draw4.rectangle([64, 64, 192, 192], fill=(0, 0, 255))
-            img4_path = tmpdir / "blue_square.png"
-            img4.save(img4_path)
-            
-            print("[OK] Test images created")
-            
-            # Test encoding
-            print("\n3. Testing dual encoding...")
-            emb1 = manager.encode_image(img1_path)
-            emb2 = manager.encode_image(img2_path)
-            emb3 = manager.encode_image(img3_path)
-            emb4 = manager.encode_image(img4_path)
-            
-            if not all([emb1, emb2, emb3, emb4]):
-                print("[FAIL] Encoding failed")
-                return False
-            
-            print("[OK] Dual encoding works")
-            print(f"   Embedding keys: {list(emb1.keys())}")
-            print(f"   Color shape: {emb1['color'].shape}")
-            print(f"   Struct type: {type(emb1['struct']).__name__}")
-            
-            # Test similarity computation
-            print("\n4. Testing similarity computation...")
-            
-            color_sim_similar = manager.get_color_similarity(emb1, emb2)
-            color_sim_diff = manager.get_color_similarity(emb1, emb3)
-            
-            struct_sim_similar = manager.get_struct_similarity(emb1, emb2)
-            struct_sim_diff = manager.get_struct_similarity(emb1, emb4)
-            
-            print(f"   Color:  Blue1 <-> Blue2: {color_sim_similar:.3f} (similar)")
-            print(f"   Color:  Blue1 <-> Red:   {color_sim_diff:.3f} (different)")
-            print(f"   Struct: Circle1 <-> Circle2: {struct_sim_similar:.3f} (similar)")
-            print(f"   Struct: Circle <-> Square:   {struct_sim_diff:.3f} (different)")
-            
-            print("[OK] Similarity computation works")
-            
-            # Test collapse detection
-            print("\n5. Testing collapse detection (OR logic)...")
-            
-            # No collapse: diverse images
-            should_inject, reason = manager.check_collapse(emb1, [emb3, emb4])
-            print(f"   Diverse set: {should_inject} - {reason}")
-            
-            # Should detect if recent images are all very similar
-            should_inject, reason = manager.check_collapse(emb2, [emb1, emb1, emb1])
-            print(f"   Similar set: {should_inject} - {reason}")
-            
-            print("[OK] Collapse detection works")
-            
-            # Test serialization
-            print("\n6. Testing serialization...")
-            serialized = manager.to_serializable(emb1)
-            deserialized = manager.from_serializable(serialized)
-            
-            # Check color
-            if not np.allclose(emb1['color'], deserialized['color']):
-                print("[FAIL] Color serialization failed")
-                return False
-            
-            # Check struct
-            if emb1['struct'] != deserialized['struct']:
-                print("[FAIL] Struct serialization failed")
-                return False
-            
-            print("[OK] Serialization works")
-        
-        print("\n" + "=" * 60)
-        print("DualMetricSimilarityManager test PASSED")
-        print("=" * 60)
-        return True
-        
-    except Exception as e:
-        print(f"\n[FAIL] Test failed with exception: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-
-if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(levelname)s - %(message)s",
-    )
-    
-    success = test_dual_similarity()
-    exit(0 if success else 1)
 
