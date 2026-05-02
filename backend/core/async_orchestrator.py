@@ -669,10 +669,7 @@ class AsyncGenerationOrchestrator:
                     # Don't register further ahead!
                     
                     # Check if interpolations kf_num -> next_kf already registered
-                    has_interp = any(
-                        frame.is_interpolated() and frame.keyframe_pair == (kf_num, next_kf)
-                        for frame in self.buffer.frames.values()
-                    )
+                    has_interp = (kf_num, next_kf) in self.buffer.registered_interp_pairs
                     
                     if not has_interp:
                         injection_interp_count = self.config['generation']['hybrid'].get(
@@ -786,10 +783,7 @@ class AsyncGenerationOrchestrator:
                 # Don't register further ahead - causes duplicate registrations!
                 
                 # Check if interpolations kf_num -> next_kf already registered
-                has_interp = any(
-                    frame.is_interpolated() and frame.keyframe_pair == (kf_num, next_kf)
-                    for frame in self.buffer.frames.values()
-                )
+                has_interp = (kf_num, next_kf) in self.buffer.registered_interp_pairs
                 
                 if not has_interp:
                     interp_seqs = self.buffer.register_interpolations(

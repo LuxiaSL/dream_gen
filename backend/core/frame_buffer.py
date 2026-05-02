@@ -164,10 +164,14 @@ class FrameBuffer:
         self.frames: Dict[int, FrameSpec] = {}  # sequence_num -> FrameSpec
         self.next_sequence_num = 0
         self.display_sequence_num = 0  # Next frame to display
-        
+        self._evict_watermark = 0  # Last sequence number evicted up to
+
         # Keyframe tracking
         self.keyframe_count = 0
         self.keyframe_sequence_map: Dict[int, int] = {}  # keyframe_num -> sequence_num
+
+        # O(1) lookup for registered interpolation pairs
+        self.registered_interp_pairs: set = set()  # {(start_kf, end_kf), ...}
         
         logger.info(f"FrameBuffer initialized")
         logger.info(f"  Interpolation frames: {interpolation_frames}")
@@ -244,7 +248,8 @@ class FrameBuffer:
             
             self.frames[sequence_num] = frame_spec
             sequence_nums.append(sequence_num)
-        
+
+        self.registered_interp_pairs.add((start_keyframe, end_keyframe))
         logger.debug(f"Registered {count} interpolations between keyframes {start_keyframe}-{end_keyframe}")
         return sequence_nums
     
@@ -336,9 +341,33 @@ class FrameBuffer:
         return None
     
     def advance_display(self) -> None:
-        """Move to next frame in display sequence"""
+        """Move to next frame in display sequence, evicting old entries periodically"""
         self.display_sequence_num += 1
         logger.debug(f"Advanced display to sequence {self.display_sequence_num}")
+
+        if self.display_sequence_num - self._evict_watermark >= 500:
+            self._evict_displayed()
+
+    def _evict_displayed(self) -> None:
+        """Remove displayed frames from the dict to prevent unbounded growth.
+
+        Keeps a trailing window of 200 entries behind the display pointer
+        so that any in-flight references (cache worker, frame pusher) don't
+        hit missing keys.
+        """
+        cutoff = self.display_sequence_num - 200
+        if cutoff <= self._evict_watermark:
+            return
+
+        evicted = 0
+        for seq in list(self.frames.keys()):
+            if seq < cutoff:
+                del self.frames[seq]
+                evicted += 1
+
+        if evicted > 0:
+            logger.info(f"Evicted {evicted} displayed frames (dict size: {len(self.frames)})")
+        self._evict_watermark = cutoff
     
     def get_buffer_status(self) -> Dict:
         """
@@ -359,17 +388,18 @@ class FrameBuffer:
         ready_count = 0
         generating_count = 0
         displayed_count = 0
-        
-        for seq_num in sorted(self.frames.keys()):
-            if seq_num < self.display_sequence_num:
-                if self.frames[seq_num].state == FrameState.DISPLAYED:
-                    displayed_count += 1
-            elif seq_num >= self.display_sequence_num:
-                state = self.frames[seq_num].state
-                if state == FrameState.READY:
-                    ready_count += 1
-                elif state == FrameState.GENERATING:
-                    generating_count += 1
+
+        for seq_num in range(self.display_sequence_num, self.next_sequence_num):
+            frame = self.frames.get(seq_num)
+            if frame is None:
+                continue
+            state = frame.state
+            if state == FrameState.READY:
+                ready_count += 1
+            elif state == FrameState.GENERATING:
+                generating_count += 1
+            elif state == FrameState.DISPLAYED:
+                displayed_count += 1
         
         # Calculate seconds buffered
         seconds_buffered = ready_count / self.target_fps if self.target_fps > 0 else 0
