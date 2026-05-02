@@ -41,7 +41,6 @@ import torch
 
 from backend.core.workers import KeyframeWorker, InterpolationWorker, CacheAnalysisWorker
 from backend.cache.injection_strategy import CacheInjectionStrategy
-from backend.cache.collapse_detector import ModeCollapseDetector
 from backend.fresh import FreshFrameBuffer
 
 logger = logging.getLogger(__name__)
@@ -55,7 +54,7 @@ class AsyncGenerationOrchestrator:
     1. Start/stop all three workers
     2. Track completed keyframes
     3. Submit interpolation pairs (only when both keyframes ready)
-    4. Make injection decisions INLINE (collapse detection + cache/seed injection)
+    4. Make injection decisions INLINE (cache/seed injection)
     5. Handle backpressure (queue depth monitoring)
     6. Coordinate graceful shutdown
     
@@ -71,7 +70,7 @@ class AsyncGenerationOrchestrator:
             └──> CacheAnalysisWorker (CPU analysis)
                  └─> Diversity checks, cache population
         
-        INLINE: Injection decisions (collapse detection, VAE blending)
+        INLINE: Injection decisions (cache/seed injection, VAE blending)
     """
     
     def __init__(
@@ -138,37 +137,8 @@ class AsyncGenerationOrchestrator:
         # === Initialize Injection Components ===
         # These stay in orchestrator (inline decisions)
         
-        self.collapse_detector = None
         self.injection_strategy = None
-        
-        # Initialize collapse detector if enabled
-        if self.config['generation']['cache'].get('collapse_detection', True):
-            # Get dual-metric thresholds if available
-            cache_config = self.config['generation']['cache']
-            color_config = cache_config.get('color_histogram', {})
-            phash_config = cache_config.get('phash', {})
-            
-            # Template-aware collapse detection settings
-            history_size = cache_config.get('collapse_history_size', 100)
-            detection_window = cache_config.get('collapse_detection_window', 50)
-            warmup_frames = cache_config.get('warmup_keyframes', 50)
-            use_baseline = cache_config.get('collapse_baseline_comparison', True)
-            
-            self.collapse_detector = ModeCollapseDetector(
-                similarity_manager=similarity_manager,
-                history_size=history_size,
-                detection_window=detection_window,
-                color_convergence_threshold=color_config.get('convergence_threshold', 0.15),
-                color_force_cache_threshold=color_config.get('force_cache_threshold', 0.30),
-                struct_convergence_threshold=phash_config.get('convergence_threshold', 0.08),
-                struct_force_cache_threshold=phash_config.get('force_cache_threshold', 0.15),
-                convergence_mode=cache_config.get('convergence_mode', 'absolute'),
-                log_stats=cache_config.get('log_convergence_stats', True),
-                warmup_frames=warmup_frames,
-                use_baseline_comparison=use_baseline
-            )
-            logger.info("Collapse detector initialized (inline in orchestrator)")
-        
+
         # Initialize injection strategy (always enabled when cache/similarity available)
         if cache_manager and similarity_manager:
             # Use dedicated injection VAE if available (zero contention with interpolation)
@@ -226,7 +196,6 @@ class AsyncGenerationOrchestrator:
         # === INTERVENTION STATS (Phase 4 - for tuning) ===
         # Track different intervention types to understand system behavior
         self.forced_mutation_count = 0      # Collapse-triggered mutations
-        self.collapse_detection_count = 0   # Times collapse was detected (non-ok status)
         self.template_switch_count = 0      # Full template switches (seed injection)
         
         # Injection frequency tracking (for seed forcing)
@@ -285,7 +254,6 @@ class AsyncGenerationOrchestrator:
         
         logger.info("AsyncGenerationOrchestrator initialized")
         logger.info(f"  - Seed image: {seed_image}")
-        logger.info(f"  - Collapse detection: {self.collapse_detector is not None}")
         logger.info(f"  - Injection strategy: {self.injection_strategy is not None}")
     
     async def run(self) -> None:
@@ -847,8 +815,7 @@ class AsyncGenerationOrchestrator:
                     logger.info(f"  Forced mutations: {self.forced_mutation_count}")
                     logger.info(f"  Cache injections: {self.cache_injections}")
                     logger.info(f"  Template switches: {self.template_switch_count}")
-                    logger.info(f"  Collapse detections: {self.collapse_detection_count}")
-                    
+
                     # Calculate ratios for tuning guidance
                     total_interventions = (
                         self.forced_mutation_count + 
@@ -978,69 +945,10 @@ class AsyncGenerationOrchestrator:
             # First keyframe after warmup
             logger.info(
                 f"[WARMUP_COMPLETE] Warmup period finished! "
-                f"Collapse detection and adaptive interventions now ACTIVE. "
+                f"Adaptive interventions now ACTIVE. "
                 f"Cache size: {self.cache.size() if self.cache else 0}"
             )
-        
-        # === MODE COLLAPSE DETECTION ===
-        collapse_result = None
-        if self.collapse_detector and self.similarity_manager and current_path:
-            try:
-                # Encode current frame for collapse detection
-                current_embedding = self.similarity_manager.encode_image(current_path)
-                if current_embedding is not None:
-                    collapse_result = self.collapse_detector.analyze_frame(current_embedding)
-                    
-                    # Record collapse status for adaptive seed injection
-                    is_collapsed = collapse_result['status'] in ['converging', 'collapsed']
-                    self.injection_strategy.record_collapse_detection(is_collapsed)
-                    
-                    # Log collapse metrics
-                    if collapse_result['convergence_delta'] > 0:
-                        logger.info(
-                            f"[COLLAPSE_METRICS] Status: {collapse_result['status']}, "
-                            f"Delta: {collapse_result['convergence_delta']:.3f}, "
-                            f"Similarity: {collapse_result['avg_similarity']:.3f}"
-                        )
-                    
-                    # === FORCED MUTATION (soft intervention) ===
-                    # Mutation happens FIRST as the lightest intervention
-                    # This gives BEND mode a chance to fix convergence before injection
-                    should_force_mutation = collapse_result.get('should_force_mutation', False)
-                    if should_force_mutation and self.use_combinatorial:
-                        # Force mutation to semantic opposites (2 components)
-                        self.prompt_manager.force_mutation_opposites(n_components=2)
-                        self.forced_mutation_count += 1
-                        logger.info(
-                            f"[COLLAPSE_RESPONSE] Forced mutation of 2 components "
-                            f"(reason: {collapse_result.get('trigger_reason', 'convergence')}, "
-                            f"total forced mutations: {self.forced_mutation_count})"
-                        )
-                    
-                    # Track collapse detection (any non-ok status)
-                    if collapse_result['status'] != 'ok':
-                        self.collapse_detection_count += 1
-                    
-                    # Adjust injection rate based on collapse status
-                    baseline_prob = self.config['generation']['cache']['injection_probability']
-                    
-                    if collapse_result['action'] == 'scale_injection':
-                        # Gradually scale from baseline to 100%
-                        scaled_prob = collapse_result.get('scaled_injection_probability', 0.0)
-                        self.current_injection_rate = baseline_prob + (1.0 - baseline_prob) * scaled_prob
-                        logger.info(
-                            f"[SCALING] Injection probability scaled to {self.current_injection_rate:.0%} "
-                            f"(delta: {collapse_result['convergence_delta']:.3f})"
-                        )
-                    elif collapse_result['action'] == 'force_cache':
-                        # Will force injection below
-                        pass
-                    else:
-                        # Normal baseline rate
-                        self.current_injection_rate = baseline_prob
-            except Exception as e:
-                logger.error(f"Collapse detection failed: {e}", exc_info=True)
-        
+
         # === SEED INJECTION (Adaptive or Forced) ===
         seed_cooldown = self.config['generation']['cache'].get('seed_injection_cooldown', 2)
         keyframes_since_seed = kf_num - self.last_seed_injection_kf
@@ -1069,16 +977,13 @@ class AsyncGenerationOrchestrator:
         keyframes_since_cache = kf_num - self.last_cache_injection_kf
         on_cooldown = keyframes_since_cache <= cache_cooldown
         
-        force_cache = collapse_result and collapse_result['action'] == 'force_cache'
         probability_cache = (
-            not force_cache and
             not on_cooldown and
             self.cache.size() > 0 and
             random.random() < self.current_injection_rate
         )
-        
-        # Force cache ignores cooldown
-        if force_cache or probability_cache:
+
+        if probability_cache:
             return True, 'cache'
         
         return False, None
@@ -1201,13 +1106,7 @@ class AsyncGenerationOrchestrator:
                 if self.cache:
                     self.cache.switch_template(new_template_id)
                     logger.info(f"    ✓ Cache manager switched (old cache archived)")
-                
-                # 3. Reset collapse detector for new template baseline
-                if self.collapse_detector:
-                    self.collapse_detector.reset_for_template(new_template_id)
-                    warmup = self.config['generation']['cache'].get('warmup_keyframes', 50)
-                    logger.info(f"    ✓ Collapse detector reset (warmup: {warmup} frames)")
-                
+
                 # Note: Buffer automatically triggers regeneration for consumed template
                 
                 metadata = {
@@ -1257,29 +1156,14 @@ class AsyncGenerationOrchestrator:
             elif injection_type == 'cache':
                 logger.info(f"  -> Injecting CACHE frame (keyframe {keyframe_num})")
                 
-                # Extract which metric triggered (for smart selection)
-                collapse_trigger = None
-                # Note: collapse_result not passed here, would need to store in state if needed
-                
                 result = await self.injection_strategy.inject_dissimilar_keyframe(
                     current_image_path=current_path,
                     target_keyframe_num=keyframe_num,
-                    collapse_trigger=collapse_trigger
                 )
-                
+
                 if result:
                     target_path, metadata = result
-                    
-                    # Reset embedding history to break convergence signal
-                    if self.collapse_detector:
-                        reset_mode = self.config['generation']['cache'].get('embedding_history_reset', 'partial')
-                        if reset_mode == 'full':
-                            self.collapse_detector.reset()
-                        elif reset_mode == 'partial':
-                            keep_recent = self.config['generation']['cache'].get('embedding_history_keep_recent', 5)
-                            self.collapse_detector.partial_reset(keep_recent)
-                        logger.info(f"  Embedding history reset ({reset_mode}) after cache injection")
-                    
+
                     # Mark as ready in buffer
                     self.buffer.mark_ready(sequence_num, target_path)
                     
@@ -1514,8 +1398,7 @@ class AsyncGenerationOrchestrator:
             "is_running": self.running,
             # === INTERVENTION STATS (Phase 4) ===
             "forced_mutation_count": self.forced_mutation_count,
-            "template_switch_count": self.template_switch_count,
-            "collapse_detection_count": self.collapse_detection_count
+            "template_switch_count": self.template_switch_count
         }
         
         # Add denoising state machine stats (Phase 2)
@@ -1530,18 +1413,6 @@ class AsyncGenerationOrchestrator:
                 })
             except Exception as e:
                 logger.debug(f"Failed to get prompt stats: {e}")
-        
-        # Add mode collapse detection stats
-        if self.collapse_detector:
-            try:
-                collapse_stats = self.collapse_detector.get_stats()
-                stats.update({
-                    "collapse_recent_similarity": collapse_stats.get("recent_avg_similarity", 0.0),
-                    "collapse_overall_similarity": collapse_stats.get("overall_avg_similarity", 0.0),
-                    "collapse_frames_analyzed": collapse_stats.get("frames_analyzed", 0)
-                })
-            except Exception as e:
-                logger.debug(f"Failed to get collapse stats: {e}")
         
         # Add injection strategy stats
         if self.injection_strategy:

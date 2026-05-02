@@ -24,11 +24,7 @@ import random
 from PIL import Image
 import torch
 
-from core.generator import DreamGenerator
-# Direct diffusers backend — imported conditionally based on config
-# from core.direct_sd_backend import DirectSDBackend
 from core.frame_buffer import FrameBuffer
-from core.generation_coordinator import GenerationCoordinator
 from core.async_orchestrator import AsyncGenerationOrchestrator
 from core.shared_resources import SharedVAEAccess
 from core.display_selector import DisplayFrameSelector
@@ -153,6 +149,7 @@ class DreamController:
             from core.direct_sd_backend import DirectSDBackend
             self.generator = DirectSDBackend(self.config)
         else:
+            from core.generator import DreamGenerator
             self.generator = DreamGenerator(self.config)
         
         # Use CombinatorialPromptSystem if templates are available, else legacy PromptManager
