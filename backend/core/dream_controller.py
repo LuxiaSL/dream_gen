@@ -429,7 +429,6 @@ class DreamController:
                 on_resume=self._on_cloud_resume,
                 on_save_state=self._on_cloud_save_state,
                 on_shutdown=self._on_cloud_shutdown,
-                on_load_state=self._on_cloud_load_state,
             )
             
             # Create frame pusher (needs full config for resolution + FPS for H.264 encoder)
