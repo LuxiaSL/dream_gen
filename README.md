@@ -218,14 +218,14 @@ The emergent behaviors are what make it worth watching:
 | Interpolation | 12 frames via VAE slerp, ~0.15s each |
 | Effective FPS | ~5 frames/second streamed |
 | Cache metrics | pHash-8 (structure) + ColorHist (color), CPU-based |
-| Cloud cost | ~$1/hour on RunPod |
+| Cloud cost | Runs on dedicated B200 via Heimdall |
 | Storage | None — frames are ephemeral |
 
 ### Architecture
 
 ```
 ┌─────────────────┐     WebSocket       ┌─────────────────┐     WebSocket       ┌─────────────────┐
-│  RunPod GPU     │ ──────────────────► │  VPS (Aethera)  │ ──────────────────► │  Browsers       │
+│  GPU (B200)     │ ──────────────────► │  VPS (Aethera)  │ ──────────────────► │  Browsers       │
 │  dream_gen      │   Binary frames     │  Frame Hub      │   Binary frames     │  /dreams        │
 └─────────────────┘                     └─────────────────┘                     └─────────────────┘
 ```
@@ -250,7 +250,7 @@ dream_gen/
 │   ├── components.yaml          # 12 categories × ~20 words each
 │   └── components_embeddings.npz # Pre-computed for similarity selection
 ├── daemon.py                    # Production process manager
-└── docker/                      # RunPod deployment images
+└── docker/                      # Calibration image + deployment docs
 ```
 
 ### Running Locally
@@ -273,7 +273,6 @@ uv run daemon.py  # Manages ComfyUI + generation loop
 ```
 
 See [docs/INSTALLATION_GUIDE.md](docs/INSTALLATION_GUIDE.md) for detailed Windows desktop setup.
-See [docs/RUNPOD_DEPLOYMENT_GUIDE.md](docs/RUNPOD_DEPLOYMENT_GUIDE.md) for cloud deployment.
 See [docs/CONFIG_REFERENCE.md](docs/CONFIG_REFERENCE.md) for all configuration options.
 
 ---

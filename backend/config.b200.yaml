@@ -1,9 +1,9 @@
 # Dream Window — B200 Direct Backend Configuration
 # =================================================
 # For Heimdall always-on service on dedicated B200 GPU.
-# No ComfyUI, no RunPod. Direct diffusers pipeline.
+# No ComfyUI. Direct diffusers pipeline.
 #
-# Pacing tuned for ~6-7 FPS keyframes (3x faster than RunPod).
+# Pacing tuned for ~6-7 FPS keyframes.
 # All cooldowns/thresholds scaled accordingly for slow, dreamy evolution.
 
 system:

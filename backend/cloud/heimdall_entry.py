@@ -2,7 +2,7 @@
 Heimdall Entry Point — Direct Diffusers Deployment
 
 Simplified entry point for running Dream Window on dedicated GPU hardware
-(e.g., B200 via Heimdall job scheduler). No ComfyUI, no RunPod SDK.
+(e.g., B200 via Heimdall job scheduler). No ComfyUI.
 
 Usage:
     python -m cloud.heimdall_entry [--config CONFIG] [--vps-url URL] [--auth-token TOKEN]

@@ -7,8 +7,8 @@
 #   docker build -f docker/Dockerfile.calibration -t luxiasl/dreamgen-calibration:latest .
 #   docker push luxiasl/dreamgen-calibration:latest
 #
-# Run (RunPod Template):
-#   Set as template image, auto-runs calibration suite on startup
+# Run:
+#   Auto-runs calibration suite on startup
 #
 # Environment Variables:
 #   CALIBRATION_MODE         - "broad", "deep", "intervention", "full" (default: full)

@@ -1,6 +1,6 @@
 # Dream Window Pod Testing Configuration
 # ======================================
-# For RunPod pod development/testing with SSH access
+# For GPU pod development/testing with SSH access
 # Uses /workspace paths instead of Docker /app paths
 
 system:

@@ -1,6 +1,6 @@
 # Dream Window Cloud Configuration
 # ================================
-# Optimized for RunPod Serverless deployment.
+# Optimized for cloud deployment.
 # Matches structure of config.yaml exactly.
 
 system:
@@ -183,7 +183,7 @@ performance:
   max_generation_fps: null        # null = no throttle, or e.g. 4.0 to cap keyframe rate (direct backend only)
   async_file_operations: true
 
-# Daemon disabled on cloud (runpod_handler manages lifecycle)
+# Daemon disabled on cloud (entry point manages lifecycle)
 daemon:
   enabled: false
 

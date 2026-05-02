@@ -2,7 +2,7 @@
 
 **From Zero to Running: A Beginner-Friendly Guide**
 
-This guide covers Windows desktop installation with the Rainmeter widget. For cloud deployment (RunPod), see [RUNPOD_DEPLOYMENT_GUIDE.md](RUNPOD_DEPLOYMENT_GUIDE.md).
+This guide covers Windows desktop installation with the Rainmeter widget.
 
 This guide assumes little-to-no technical experience. Follow each step carefully, and you'll have dream_gen creating beautiful AI art on your desktop!
 
@@ -1130,9 +1130,9 @@ Enjoy your living AI dream window! 🌟
 
 ## Cloud Deployment
 
-This guide covers Windows desktop installation. For cloud deployment on RunPod (the primary deployment method), see:
+This guide covers Windows desktop installation. For cloud deployment (Heimdall on B200), see
+`backend/cloud/heimdall_entry.py`. For all configuration options, see:
 
-- **[RUNPOD_DEPLOYMENT_GUIDE.md](RUNPOD_DEPLOYMENT_GUIDE.md)** — Complete cloud setup guide
 - **[CONFIG_REFERENCE.md](CONFIG_REFERENCE.md)** — All configuration options explained
 
 Cloud mode streams frames to a VPS for browser-based viewing at sites like [aetherawi.red/dreams](https://aetherawi.red/dreams).

@@ -1,225 +1,68 @@
 name: Build and Push Docker Images
 
-# Two-Pod Architecture:
-# - luxiasl/dreamgen-comfyui: ComfyUI + SD 1.5 + nginx auth (rarely changes)
-# - luxiasl/dreamgen-backend: DreamGen orchestrator (changes frequently)
-#
-# Legacy images (kept for backwards compatibility):
-# - luxiasl/dreamgen-base: Base image with ComfyUI
-# - luxiasl/dreamgen: Combined image for serverless
+# Calibration benchmark image only.
+# DreamGen runs on dedicated GPU hardware via Heimdall — no Docker needed.
 
 on:
   push:
     branches: [main]
     paths:
-      - 'backend/**'
-      - 'docker/**'
-      - 'prompts/**'
-      - 'seeds/**'
+      - 'backend/tools/calibration/**'
       - 'calibration/**'
-      - 'pyproject.toml'
+      - 'docker/Dockerfile.calibration'
       - '.github/workflows/docker-build.yml'
   workflow_dispatch:
     inputs:
-      rebuild_comfyui:
-        description: 'Force rebuild ComfyUI image (slow, downloads model)'
-        required: false
-        default: 'false'
-        type: boolean
-      rebuild_dreamgen:
-        description: 'Force rebuild DreamGen backend image'
-        required: false
-        default: 'false'
-        type: boolean
       rebuild_calibration:
         description: 'Force rebuild Calibration benchmark image'
-        required: false
-        default: 'false'
-        type: boolean
-      rebuild_legacy:
-        description: 'Rebuild legacy combined image (serverless)'
         required: false
         default: 'false'
         type: boolean
 
 env:
   REGISTRY: docker.io
-  # Two-pod architecture images
-  COMFYUI_IMAGE: luxiasl/dreamgen-comfyui
-  DREAMGEN_IMAGE: luxiasl/dreamgen-backend
-  # Calibration benchmark image
   CALIBRATION_IMAGE: luxiasl/dreamgen-calibration
-  # Legacy images (serverless)
-  BASE_IMAGE: luxiasl/dreamgen-base
-  MAIN_IMAGE: luxiasl/dreamgen
 
 jobs:
-  # ==================== Check what needs building ====================
   check-changes:
     runs-on: ubuntu-latest
     outputs:
-      comfyui_changed: ${{ steps.check.outputs.comfyui_changed }}
-      dreamgen_changed: ${{ steps.check.outputs.dreamgen_changed }}
       calibration_changed: ${{ steps.check.outputs.calibration_changed }}
-      legacy_changed: ${{ steps.check.outputs.legacy_changed }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2
-      
+
       - name: Check changed files
         id: check
         run: |
-          # ComfyUI image changes (rarely)
-          if [[ "${{ github.event.inputs.rebuild_comfyui }}" == "true" ]]; then
-            echo "comfyui_changed=true" >> $GITHUB_OUTPUT
-            echo "ComfyUI: Force rebuild requested"
-          elif git diff --name-only HEAD~1 HEAD | grep -qE "docker/Dockerfile.comfyui|docker/comfyui-start.sh"; then
-            echo "comfyui_changed=true" >> $GITHUB_OUTPUT
-            echo "ComfyUI: Dockerfile or startup script changed"
-          else
-            echo "comfyui_changed=false" >> $GITHUB_OUTPUT
-            echo "ComfyUI: No changes"
-          fi
-          
-          # DreamGen backend changes (frequently)
-          if [[ "${{ github.event.inputs.rebuild_dreamgen }}" == "true" ]]; then
-            echo "dreamgen_changed=true" >> $GITHUB_OUTPUT
-            echo "DreamGen: Force rebuild requested"
-          elif git diff --name-only HEAD~1 HEAD | grep -qE "backend/|prompts/|docker/Dockerfile.dreamgen"; then
-            echo "dreamgen_changed=true" >> $GITHUB_OUTPUT
-            echo "DreamGen: Backend or prompts changed"
-          else
-            echo "dreamgen_changed=false" >> $GITHUB_OUTPUT
-            echo "DreamGen: No changes"
-          fi
-          
-          # Calibration image changes
           if [[ "${{ github.event.inputs.rebuild_calibration }}" == "true" ]]; then
             echo "calibration_changed=true" >> $GITHUB_OUTPUT
             echo "Calibration: Force rebuild requested"
-          elif git diff --name-only HEAD~1 HEAD | grep -qE "backend/tools/calibration|calibration/|docker/Dockerfile.calibration|docker/calibration-entrypoint.sh"; then
+          elif git diff --name-only HEAD~1 HEAD | grep -qE "backend/tools/calibration|calibration/|docker/Dockerfile.calibration"; then
             echo "calibration_changed=true" >> $GITHUB_OUTPUT
             echo "Calibration: Benchmark files changed"
           else
             echo "calibration_changed=false" >> $GITHUB_OUTPUT
             echo "Calibration: No changes"
           fi
-          
-          # Legacy image changes
-          if [[ "${{ github.event.inputs.rebuild_legacy }}" == "true" ]]; then
-            echo "legacy_changed=true" >> $GITHUB_OUTPUT
-            echo "Legacy: Force rebuild requested"
-          elif git diff --name-only HEAD~1 HEAD | grep -qE "docker/Dockerfile.base|docker/Dockerfile.cloud"; then
-            echo "legacy_changed=true" >> $GITHUB_OUTPUT
-            echo "Legacy: Dockerfile changed"
-          else
-            echo "legacy_changed=false" >> $GITHUB_OUTPUT
-            echo "Legacy: No changes"
-          fi
 
-  # ==================== Build ComfyUI Image (rarely) ====================
-  build-comfyui:
-    needs: check-changes
-    if: needs.check-changes.outputs.comfyui_changed == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Free up disk space
-        run: |
-          echo "Before cleanup:"
-          df -h
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          sudo rm -rf /opt/hostedtoolcache/CodeQL /opt/hostedtoolcache/go
-          sudo docker system prune -af
-          echo "After cleanup:"
-          df -h
-      
-      - uses: actions/checkout@v4
-      
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      
-      - name: Build and push ComfyUI image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./docker/Dockerfile.comfyui
-          push: true
-          tags: |
-            ${{ env.COMFYUI_IMAGE }}:latest
-            ${{ env.COMFYUI_IMAGE }}:${{ github.sha }}
-          cache-from: type=registry,ref=${{ env.COMFYUI_IMAGE }}:buildcache
-          cache-to: type=registry,ref=${{ env.COMFYUI_IMAGE }}:buildcache,mode=max
-      
-      - name: Summary
-        run: |
-          echo "### ComfyUI Image Built! 🖼️" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Image:** \`${{ env.COMFYUI_IMAGE }}:latest\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-
-  # ==================== Build DreamGen Backend Image (frequently) ====================
-  build-dreamgen:
-    needs: check-changes
-    if: needs.check-changes.outputs.dreamgen_changed == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      
-      - name: Build and push DreamGen backend image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./docker/Dockerfile.dreamgen
-          push: true
-          tags: |
-            ${{ env.DREAMGEN_IMAGE }}:latest
-            ${{ env.DREAMGEN_IMAGE }}:${{ github.sha }}
-          build-args: |
-            BUILD_DATE=${{ github.event.head_commit.timestamp }}
-            GIT_COMMIT=${{ github.sha }}
-          cache-from: type=registry,ref=${{ env.DREAMGEN_IMAGE }}:buildcache
-          cache-to: type=registry,ref=${{ env.DREAMGEN_IMAGE }}:buildcache,mode=max
-      
-      - name: Summary
-        run: |
-          echo "### DreamGen Backend Image Built! 🎨" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Image:** \`${{ env.DREAMGEN_IMAGE }}:latest\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-
-  # ==================== Build Calibration Benchmark Image ====================
   build-calibration:
     needs: check-changes
     if: needs.check-changes.outputs.calibration_changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-      
+
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      
+
       - name: Build and push Calibration image
         uses: docker/build-push-action@v5
         with:
@@ -234,95 +77,10 @@ jobs:
             GIT_COMMIT=${{ github.sha }}
           cache-from: type=registry,ref=${{ env.CALIBRATION_IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.CALIBRATION_IMAGE }}:buildcache,mode=max
-      
+
       - name: Summary
         run: |
-          echo "### Calibration Benchmark Image Built! 📊" >> $GITHUB_STEP_SUMMARY
+          echo "### Calibration Benchmark Image Built!" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Image:** \`${{ env.CALIBRATION_IMAGE }}:latest\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Run as template:**" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "CALIBRATION_MODE=full" >> $GITHUB_STEP_SUMMARY
-          echo "CALIBRATION_FRAMES=1500" >> $GITHUB_STEP_SUMMARY
-          echo "COMFYUI_URL=http://127.0.0.1:8188" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-
-  # ==================== Build Legacy Images (serverless, optional) ====================
-  build-legacy-base:
-    needs: check-changes
-    if: needs.check-changes.outputs.legacy_changed == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Free up disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          sudo docker system prune -af
-      
-      - uses: actions/checkout@v4
-      
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      
-      - name: Build and push base image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./docker/Dockerfile.base
-          push: true
-          tags: |
-            ${{ env.BASE_IMAGE }}:latest
-            ${{ env.BASE_IMAGE }}:${{ github.sha }}
-          cache-from: type=registry,ref=${{ env.BASE_IMAGE }}:buildcache
-          cache-to: type=registry,ref=${{ env.BASE_IMAGE }}:buildcache,mode=max
-
-  build-legacy-main:
-    needs: [check-changes, build-legacy-base]
-    if: always() && !failure() && !cancelled() && (needs.check-changes.outputs.legacy_changed == 'true' || needs.check-changes.outputs.dreamgen_changed == 'true')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Free up disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          sudo docker system prune -af
-      
-      - uses: actions/checkout@v4
-      
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      
-      - name: Build and push main image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./docker/Dockerfile.cloud
-          push: true
-          tags: |
-            ${{ env.MAIN_IMAGE }}:latest
-            ${{ env.MAIN_IMAGE }}:${{ github.sha }}
-          build-args: |
-            BASE_IMAGE=${{ env.BASE_IMAGE }}:latest
-            BUILD_DATE=${{ github.event.head_commit.timestamp }}
-            GIT_COMMIT=${{ github.sha }}
-          cache-from: type=registry,ref=${{ env.MAIN_IMAGE }}:buildcache
-          cache-to: type=registry,ref=${{ env.MAIN_IMAGE }}:buildcache,mode=max
-      
-      - name: Summary
-        run: |
-          echo "### Legacy Images Built! 📦" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Main image:** \`${{ env.MAIN_IMAGE }}:latest\`" >> $GITHUB_STEP_SUMMARY
           echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
