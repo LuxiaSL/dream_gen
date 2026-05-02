@@ -132,8 +132,14 @@ class DisplayFrameSelector:
         
         try:
             image = frame_spec.image
+            if image is None and frame_spec.file_path and frame_spec.file_path.exists():
+                loop = asyncio.get_event_loop()
+                image = await loop.run_in_executor(
+                    None,
+                    lambda: Image.open(frame_spec.file_path)
+                )
             if image is None:
-                logger.error(f"Frame {frame_spec.sequence_num}: no image in memory")
+                logger.error(f"Frame {frame_spec.sequence_num}: no image in memory or on disk")
                 return False
 
             # Update current prompt and keyframe number on keyframe display
