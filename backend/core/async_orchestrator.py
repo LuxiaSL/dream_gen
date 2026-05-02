@@ -1426,28 +1426,6 @@ class AsyncGenerationOrchestrator:
             except Exception as e:
                 logger.debug(f"Failed to get injection stats: {e}")
         
-        # Add cache diversity stats
-        if self.cache and self.similarity_manager:
-            try:
-                diversity_stats = self.cache.get_diversity_stats(similarity_manager=self.similarity_manager)
-                
-                # Handle dual-metric stats
-                if 'diversity_score_color' in diversity_stats:
-                    stats.update({
-                        "cache_diversity_score_color": diversity_stats.get("diversity_score_color", 0.0),
-                        "cache_diversity_score_struct": diversity_stats.get("diversity_score_struct", 0.0),
-                        "cache_avg_color_similarity": diversity_stats.get("avg_color_similarity", 0.0),
-                        "cache_avg_struct_similarity": diversity_stats.get("avg_struct_similarity", 0.0)
-                    })
-                else:
-                    # Fallback for single-metric
-                    stats.update({
-                        "cache_diversity_score": diversity_stats.get("diversity_score", 0.0),
-                        "cache_avg_similarity": diversity_stats.get("avg_similarity", 0.0)
-                    })
-            except Exception as e:
-                logger.debug(f"Failed to get cache diversity stats: {e}")
-        
         # Add worker queue depths
         if self.keyframe_worker:
             stats["keyframe_queue_depth"] = self.keyframe_worker.request_queue.qsize()

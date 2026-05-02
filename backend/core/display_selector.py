@@ -353,14 +353,5 @@ class DisplayFrameSelector:
             "current_display_sequence": self.buffer.display_sequence_num
         }
         
-        # Add cleanup stats if enabled
-        if self.cleanup_enabled:
-            stats.update({
-                "cleanup_enabled": True,
-                "frames_deleted": self.frames_deleted
-            })
-        else:
-            stats["cleanup_enabled"] = False
-        
         return stats
 
