@@ -31,8 +31,6 @@ from core.display_selector import DisplayFrameSelector
 from utils.prompt_manager import PromptManager
 from prompts.combinatorial import CombinatorialPromptSystem
 from utils.status_writer import StatusWriter
-from utils.file_ops import atomic_write_image_with_retry
-from utils.game_detector import GameDetector
 from cache.manager import CacheManager
 from cache.dual_similarity import DualMetricSimilarityManager
 from utils.perf_stats import get_perf_stats
@@ -156,7 +154,6 @@ class DreamController:
         self.prompt_manager = self._init_prompt_system()
         
         self.status_writer = StatusWriter(self.output_dir)
-        self.game_detector = GameDetector(self.config)
         self.cache = CacheManager(self.config)
         
         # Initialize dual-metric similarity manager for cache
@@ -291,22 +288,7 @@ class DreamController:
                 )
                 
                 self.logger.info("  Workers: KeyframeWorker, InterpolationWorker, CacheAnalysisWorker")
-                self.logger.info("  Expected FPS improvement: 2x+ (from ~2.7 to ~5+ fps)")
-            else:
-                self.logger.info("Using GenerationCoordinator (legacy sequential pipeline)")
-                
-                # Create legacy generation coordinator
-                self.vae_access = None
-                self.generation_coordinator = GenerationCoordinator(
-                    frame_buffer=self.frame_buffer,
-                    generator=self.generator,
-                    latent_encoder=self.latent_encoder,
-                    prompt_manager=self.prompt_manager,
-                    config=self.config,
-                    cache_manager=self.cache,
-                    similarity_manager=self.similarity_manager
-                )
-            
+
             # Get cleanup config
             cleanup_config = self.config.get('display', {})
             cleanup_enabled = cleanup_config.get('cleanup_displayed_frames', False)
@@ -350,8 +332,6 @@ class DreamController:
         self.frame_count = 0
         self.current_image = None
         self.start_time = None
-        self.vram_freed = False  # Track if we've freed VRAM for gaming
-        self.last_game_check = 0  # Timestamp of last game detection check
         
         # Task management for shutdown
         self.running_tasks = []
@@ -376,45 +356,13 @@ class DreamController:
                 self.display_selector.on_frame_callback = self._on_frame_displayed
                 self.logger.info("Cloud callback attached to display selector")
         else:
-            self.logger.info("Cloud mode: disabled (standalone Rainmeter mode)")
+            self.logger.info("Cloud mode: disabled")
         
         self.logger.info("[OK] Initialization complete")
         self.logger.info(f"Mode: {self.config['generation']['mode']}")
         self.logger.info(f"Resolution: {self.config['generation']['resolution']}")
         self.logger.info(f"Model: {self.config['generation']['model']}")
         self.logger.info("=" * 70)
-    
-    def cleanup_old_frames(self):
-        """
-        Clean up old numbered frames to prevent unbounded storage growth
-        
-        Keeps only the most recent N frames (configured in display.max_output_frames).
-        Preserves special files: current_frame.png, previous_frame.png, next_frame.png, status.json
-        
-        This runs periodically during generation to maintain a rolling window of frames.
-        """
-        try:
-            # Get all numbered frames
-            frame_files = sorted(self.output_dir.glob("frame_*.png"))
-            
-            if len(frame_files) <= self.max_output_frames:
-                return  # Nothing to clean
-            
-            # Calculate how many to delete
-            num_to_delete = len(frame_files) - self.max_output_frames
-            files_to_delete = frame_files[:num_to_delete]
-            
-            # Delete oldest frames
-            for frame_file in files_to_delete:
-                try:
-                    frame_file.unlink()
-                except Exception as e:
-                    self.logger.warning(f"Failed to delete {frame_file.name}: {e}")
-            
-            self.logger.info(f"Cleaned up {num_to_delete} old frames (keeping last {self.max_output_frames})")
-            
-        except Exception as e:
-            self.logger.error(f"Error during frame cleanup: {e}")
     
     def _init_prompt_system(self):
         """
@@ -634,105 +582,6 @@ class DreamController:
         self.logger.info("Received shutdown command from VPS")
         self.running = False
     
-    async def _on_cloud_load_state(self, state_bytes: bytes) -> None:
-        """
-        Handle load state command from VPS
-        
-        Restores generation state from a previously saved snapshot, including:
-        - Last keyframe latent (for interpolation continuity)
-        - Frame/keyframe counters
-        - Theme index
-        - Cache metadata (if included)
-        
-        Args:
-            state_bytes: Serialized state bundle from VPS
-        """
-        self.logger.info(f"Received load state command from VPS ({len(state_bytes)} bytes)")
-        
-        try:
-            # Import deserializer
-            from cloud.state_sync import deserialize_state
-            import torch
-            
-            # Deserialize the state bundle
-            bundle = deserialize_state(state_bytes)
-            
-            self.logger.info(f"State bundle contains: {list(bundle.keys())}")
-            
-            # Restore latent tensor for interpolation
-            if "latent" in bundle:
-                latent_np = bundle["latent"]
-                latent_tensor = torch.from_numpy(latent_np)
-                
-                # Determine device
-                if torch.cuda.is_available():
-                    device_id = self.config.get('system', {}).get('gpu_id', 0)
-                    device = f"cuda:{device_id}"
-                else:
-                    device = "cpu"
-                
-                latent_tensor = latent_tensor.to(device)
-                
-                self.logger.info(f"Restored latent: shape={latent_tensor.shape}, device={device}")
-                
-                # Inject into generation coordinator if available
-                if hasattr(self, 'generation_coordinator') and self.generation_coordinator:
-                    # Get the current keyframe number from restored state
-                    state = bundle.get("state", {})
-                    keyframe_count = state.get("keyframe_count", 1)
-                    
-                    # Store as the last keyframe latent
-                    self.generation_coordinator.keyframe_latents[keyframe_count] = latent_tensor
-                    self.logger.info(f"Injected latent as keyframe {keyframe_count}")
-                
-                # Store for async orchestrator if using that instead
-                if hasattr(self, 'orchestrator') and self.orchestrator:
-                    # The orchestrator handles this differently
-                    self.logger.info("Async orchestrator detected - latent restoration handled at startup")
-            
-            # Restore generation state counters
-            if "state" in bundle:
-                state = bundle["state"]
-                
-                if "frame_count" in state:
-                    self.frame_count = state["frame_count"]
-                    self.logger.info(f"Restored frame_count: {self.frame_count}")
-                
-                if "keyframe_count" in state and hasattr(self, 'generation_coordinator'):
-                    if self.generation_coordinator:
-                        self.generation_coordinator.keyframes_generated = state["keyframe_count"]
-                        self.logger.info(f"Restored keyframe_count: {state['keyframe_count']}")
-                
-                if "theme_index" in state:
-                    self.prompt_manager.current_theme_index = state["theme_index"]
-                    self.logger.info(f"Restored theme_index: {state['theme_index']}")
-                
-                if "last_seed" in state and hasattr(self, 'generator'):
-                    self.generator.last_seed = state["last_seed"]
-                    self.logger.info(f"Restored last_seed: {state['last_seed']}")
-            
-            # Restore cache metadata if included
-            if "cache_meta" in bundle:
-                try:
-                    self.cache.restore_metadata(bundle["cache_meta"])
-                    self.logger.info("Restored cache metadata")
-                except Exception as e:
-                    self.logger.warning(f"Could not restore cache metadata: {e}")
-            
-            # Restore similarity embeddings if included
-            if "embeddings" in bundle:
-                try:
-                    self.similarity_manager.deserialize(bundle["embeddings"])
-                    self.logger.info("Restored similarity embeddings")
-                except Exception as e:
-                    self.logger.warning(f"Could not restore embeddings: {e}")
-            
-            self.logger.info("[OK] State restoration complete")
-            
-        except Exception as e:
-            self.logger.error(f"Failed to restore state: {e}", exc_info=True)
-            # Continue without restored state - will start fresh
-    
     async def _on_frame_displayed(
         self, 
         image: Image, 
@@ -764,174 +613,6 @@ class DreamController:
             prompt=prompt,
         )
 
-    def get_bootstrap_frame(self) -> Optional[Path]:
-        """
-        Generate initial bootstrap frame via txt2img
-        
-        DEPRECATED: When using AsyncGenerationOrchestrator with CombinatorialPromptSystem,
-        the FreshFrameBuffer handles bootstrap automatically. This method is only
-        used for legacy GenerationCoordinator mode.
-        
-        Returns:
-            Path to generated image, or None on failure
-        """
-        self.logger.info("[BOOTSTRAP] Generating initial frame via txt2img...")
-        
-        # Get prompt from prompt manager
-        prompt = self.prompt_manager.get_next_prompt()
-        negative = self.prompt_manager.get_negative_prompt() if hasattr(self.prompt_manager, 'get_negative_prompt') else None
-        
-        # Generate via txt2img
-        result = self.generator.generate_from_prompt(
-            prompt=prompt,
-            negative_prompt=negative
-        )
-        
-        if result:
-            self.logger.info(f"[BOOTSTRAP] Generated initial frame: {result}")
-            return result
-        
-        self.logger.error("[BOOTSTRAP] txt2img generation failed!")
-        return None
-    
-    def get_random_seed_image(self) -> Path:
-        """
-        DEPRECATED: Use get_bootstrap_frame() or FreshFrameBuffer instead.
-        
-        Raises:
-            NotImplementedError: Always - seed images are no longer supported
-        """
-        raise NotImplementedError(
-            "Seed images are REMOVED. Bootstrap frames are now generated via txt2img. "
-            "Use get_bootstrap_frame() for legacy mode, or FreshFrameBuffer for "
-            "AsyncGenerationOrchestrator with CombinatorialPromptSystem."
-        )
-    
-    def check_game_state(self) -> bool:
-        """
-        Check if game is running and manage VRAM accordingly
-        
-        This is THE KEY to preventing VRAM conflicts!
-        
-        When game detected:
-        1. Pause generation
-        2. Free VRAM (unload models)
-        3. Wait for game to close
-        
-        When game closes:
-        4. Resume generation
-        5. Model reloads automatically on next generation (~15s penalty)
-        
-        Returns:
-            True if should pause generation (game running)
-        """
-        # Throttle checks to avoid overhead
-        current_time = time.time()
-        if current_time - self.last_game_check < self.game_detector.check_interval:
-            return self.paused
-        
-        self.last_game_check = current_time
-        
-        # Check for running games
-        game_detected = self.game_detector.is_game_running()
-        
-        if game_detected and not self.paused:
-            # Game just started - pause and free VRAM!
-            self.logger.warning(f"[GAME] DETECTED: {game_detected}")
-            self.logger.info("Pausing generation and freeing VRAM...")
-            self.paused = True
-            
-            # Free VRAM (unload models) — only applies to ComfyUI backend
-            try:
-                if hasattr(self.generator, "client"):
-                    success = self.generator.client.free_memory(
-                        unload_models=True,
-                        free_memory=True
-                    )
-                    if success:
-                        self.vram_freed = True
-                        self.logger.info("[OK] VRAM freed - safe for gaming!")
-                    else:
-                        self.logger.warning("Could not free VRAM (ComfyUI might not support /free endpoint)")
-                        self.logger.info("Generation paused anyway for safety")
-                else:
-                    self.logger.info("Generation paused (direct backend — no VRAM free needed)")
-            except Exception as e:
-                self.logger.error(f"Error freeing VRAM: {e}")
-            
-            return True
-        
-        elif not game_detected and self.paused:
-            # Game closed - resume!
-            self.logger.info("[GAME] Game closed - resuming generation")
-            self.logger.info("(Models will reload on next generation - ~15s delay expected)")
-            self.paused = False
-            self.vram_freed = False
-            return False
-        
-        return self.paused
-    
-    def write_current_frame(self, frame_path: Path):
-        """
-        Write frame to current_frame.png for display
-        
-        Uses atomic writes to prevent corruption/tearing.
-        
-        Args:
-            frame_path: Path to frame to display
-        """
-        output_file = self.output_dir / "current_frame.png"
-        
-        try:
-            # Use atomic write with retry
-            image = Image.open(frame_path)
-            success = atomic_write_image_with_retry(
-                image,
-                output_file,
-                max_retries=3
-            )
-            
-            if success:
-                self.logger.debug(f"Updated current_frame.png")
-            else:
-                self.logger.warning("Failed to update current_frame.png")
-                
-        except Exception as e:
-            self.logger.error(f"Error writing current frame: {e}")
-    
-    def update_status(self, generation_time: float, mode: str, prompt: str):
-        """
-        Update status.json for display/monitoring
-        
-        Args:
-            generation_time: Time taken to generate frame
-            mode: Generation mode used
-            prompt: Current prompt
-        """
-        try:
-            # Calculate buffer status (for widget loading indicator)
-            buffer_target = self.config.get('display', {}).get('buffer_size', 5)
-            buffer_filled = min(self.frame_count, buffer_target)
-            
-            status_data = {
-                "frame_number": self.frame_count,
-                "generation_time": round(generation_time, 2),
-                "status": "paused" if self.paused else "live",
-                "current_mode": mode,
-                "current_prompt": prompt[:100],  # Truncate long prompts
-                "cache_size": self.cache.size(),
-                "uptime_minutes": round((time.time() - self.start_time) / 60, 1) if self.start_time else 0,
-                # Buffer status for widget
-                "buffer_filled": buffer_filled,
-                "buffer_target": buffer_target,
-                "is_buffering": buffer_filled < buffer_target,
-            }
-            
-            self.status_writer.write_status(status_data)
-            
-        except Exception as e:
-            self.logger.error(f"Failed to update status: {e}")
-    
     async def run_buffered_hybrid_loop(self) -> None:
         """
         Run buffered hybrid generation loop (NEW ARCHITECTURE)
@@ -951,159 +632,38 @@ class DreamController:
         if self.cloud_enabled and self.vps_client and not self.vps_client.connected:
             await self.connect_to_vps()
         
-        # Check if using async orchestrator
-        use_async = self.config['generation'].get('use_async_orchestrator', False)
-        
-        if use_async:
-            # AsyncOrchestrator handles seed bootstrap internally
-            self.logger.info("Using AsyncGenerationOrchestrator (parallelized)")
-            
-            # Clear generation queue (ComfyUI only)
-            if hasattr(self.generator, "client"):
-                self.logger.info("Clearing ComfyUI queue...")
-                queue_status = self.generator.client.get_queue()
-                if queue_status:
-                    running_count = len(queue_status.get("queue_running", []))
-                    pending_count = len(queue_status.get("queue_pending", []))
-                    if running_count > 0 or pending_count > 0:
-                        self.logger.warning(f"Found stale jobs: {running_count} running, {pending_count} pending")
-                        self.generator.client.interrupt_execution()
-                        self.generator.client.clear_queue()
-                        self.logger.info("Queue cleared")
-            
-            # Start orchestrator and display tasks concurrently
-            self.logger.info("Starting orchestrator and display tasks...")
-            
-            generation_task = asyncio.create_task(self.generation_coordinator.run())
-            display_task = asyncio.create_task(self.display_selector.run())
-            status_task = asyncio.create_task(self._update_buffer_status_loop())
-            
-            # Store task references for signal handler
-            self.running_tasks = [generation_task, display_task, status_task]
-            self.asyncio_loop = asyncio.get_event_loop()
-            
-            try:
-                # Run all tasks concurrently
-                await asyncio.gather(generation_task, display_task, status_task)
-            except asyncio.CancelledError:
-                self.logger.info("Buffered hybrid loop cancelled")
-            except KeyboardInterrupt:
-                self.logger.info("Buffered hybrid loop interrupted")
-            except Exception as e:
-                self.logger.error(f"Error in buffered hybrid loop: {e}", exc_info=True)
-            finally:
-                # Clean up orchestrator (handles worker shutdown)
-                await self.generation_coordinator.stop()
-                self.display_selector.stop()
-                
-                # Cancel tasks
-                for task in [generation_task, display_task, status_task]:
-                    if not task.done():
-                        task.cancel()
-                        try:
-                            await task
-                        except asyncio.CancelledError:
-                            pass
-                
-                # Clear task references
-                self.running_tasks = []
-                self.asyncio_loop = None
-        
-        else:
-            # Legacy GenerationCoordinator (original flow)
-            self.logger.info("Using GenerationCoordinator (legacy sequential)")
-            
-            # Generate bootstrap frame via txt2img
-            seed_image = self.get_bootstrap_frame()
-            if seed_image is None:
-                raise RuntimeError(
-                    "Failed to generate bootstrap frame via txt2img. "
-                    "Check ComfyUI connection and model availability."
-                )
-            self.logger.info(f"Starting from bootstrap frame: {seed_image.name}")
-            
-            # Register and prepare seed as keyframe 1
-            self.logger.info("Preparing seed frame as keyframe 1...")
-            sequence_num = self.frame_buffer.register_keyframe(1)
-            
-            # Copy seed to keyframe directory
-            target_path = self.frame_buffer.keyframe_dir / "keyframe_001.png"
-            Image.open(seed_image).save(target_path)
-            self.frame_buffer.mark_ready(sequence_num, target_path)
-            
-            # Encode seed frame if using VAE
-            if self.latent_encoder:
-                try:
-                    if torch.cuda.is_available():
-                        torch.cuda.synchronize()
-                    
-                    latent = self.latent_encoder.encode(target_path, for_interpolation=True)
-                    self.generation_coordinator.keyframe_latents[1] = latent
-                    self.generation_coordinator.keyframe_paths[1] = target_path
-                    
-                    self.logger.info("  [OK] Seed frame encoded as keyframe 1")
-                except Exception as e:
-                    self.logger.error(f"  [FAIL] Could not encode seed frame: {e}")
-            
-            # Set seed in generation coordinator
-            self.generation_coordinator.set_seed_image(target_path)
-            
-            # Mark keyframe 1 as already generated (the seed)
-            # This prevents the coordinator from regenerating keyframe 1
-            self.generation_coordinator.current_keyframe_num = 1
-            self.generation_coordinator.keyframes_generated = 1
-            self.logger.info("  [OK] Keyframe 1 registered (seed frame preserved)")
-            
-            # Clear generation queue (ComfyUI only)
-            if hasattr(self.generator, "client"):
-                self.logger.info("Clearing ComfyUI queue...")
-                queue_status = self.generator.client.get_queue()
-                if queue_status:
-                    running_count = len(queue_status.get("queue_running", []))
-                    pending_count = len(queue_status.get("queue_pending", []))
-                    if running_count > 0 or pending_count > 0:
-                        self.logger.warning(f"Found stale jobs: {running_count} running, {pending_count} pending")
-                        self.generator.client.interrupt_execution()
-                        self.generator.client.clear_queue()
-                        self.logger.info("Queue cleared")
-            
-            # Start generation and display tasks concurrently
-            self.logger.info("Starting generation and display tasks...")
-            
-            generation_task = asyncio.create_task(self.generation_coordinator.run())
-            display_task = asyncio.create_task(self.display_selector.run())
-            status_task = asyncio.create_task(self._update_buffer_status_loop())
-            
-            # Store task references for signal handler
-            self.running_tasks = [generation_task, display_task, status_task]
-            self.asyncio_loop = asyncio.get_event_loop()
-            
-            try:
-                # Run both tasks concurrently
-                await asyncio.gather(generation_task, display_task, status_task)
-            except asyncio.CancelledError:
-                self.logger.info("Buffered hybrid loop cancelled")
-            except KeyboardInterrupt:
-                self.logger.info("Buffered hybrid loop interrupted")
-            except Exception as e:
-                self.logger.error(f"Error in buffered hybrid loop: {e}", exc_info=True)
-            finally:
-                # Clean up
-                self.generation_coordinator.stop()
-                self.display_selector.stop()
-                
-                # Cancel tasks
-                for task in [generation_task, display_task, status_task]:
-                    if not task.done():
-                        task.cancel()
-                        try:
-                            await task
-                        except asyncio.CancelledError:
-                            pass
-                
-                # Clear task references
-                self.running_tasks = []
-                self.asyncio_loop = None
+        # Start orchestrator and display tasks concurrently
+        self.logger.info("Starting orchestrator and display tasks...")
+
+        generation_task = asyncio.create_task(self.generation_coordinator.run())
+        display_task = asyncio.create_task(self.display_selector.run())
+        status_task = asyncio.create_task(self._update_buffer_status_loop())
+
+        self.running_tasks = [generation_task, display_task, status_task]
+        self.asyncio_loop = asyncio.get_event_loop()
+
+        try:
+            await asyncio.gather(generation_task, display_task, status_task)
+        except asyncio.CancelledError:
+            self.logger.info("Buffered hybrid loop cancelled")
+        except KeyboardInterrupt:
+            self.logger.info("Buffered hybrid loop interrupted")
+        except Exception as e:
+            self.logger.error(f"Error in buffered hybrid loop: {e}", exc_info=True)
+        finally:
+            await self.generation_coordinator.stop()
+            self.display_selector.stop()
+
+            for task in [generation_task, display_task, status_task]:
+                if not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+
+            self.running_tasks = []
+            self.asyncio_loop = None
         
         self.logger.info("=" * 70)
         self.logger.info("BUFFERED HYBRID MODE STOPPED")
