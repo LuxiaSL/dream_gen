@@ -104,29 +104,6 @@ class CacheAnalysisWorker:
         self.frames_cached = 0
         self.frames_skipped = 0
         
-        # === Phase 2 Hooks (Not Implemented Yet) ===
-        # These are designed now to support future enhancement
-        # without refactoring - just flip config flags!
-        
-        self.monitoring_enabled = config.get('generation', {}).get('cache', {}).get(
-            'advanced_monitoring', {}
-        ).get('enabled', False)
-        
-        # Future: O(N²) cache similarity matrix
-        self.diversity_matrix = None
-        
-        # Future: Per-frame redundancy scores
-        self.redundancy_scores = {}
-        
-        # Future: Background monitoring task
-        self.monitoring_task = None
-        
-        if self.monitoring_enabled:
-            logger.info("Advanced cache monitoring ENABLED (Phase 2)")
-            logger.warning("Phase 2 hooks are present but not yet implemented!")
-        else:
-            logger.info("Using Phase 1 cache analysis (basic diversity)")
-        
         logger.info(f"CacheAnalysisWorker initialized (max queue: {max_queue_size})")
     
     async def submit_frame(
@@ -206,18 +183,6 @@ class CacheAnalysisWorker:
             )
             
             should_cache = True
-            if population_mode == 'selective' and self.cache.size() > 0:
-                # Run diversity check in executor
-                should_cache = await loop.run_in_executor(
-                    None,
-                    self.cache.should_cache_frame,
-                    embedding,
-                    False,  # force
-                    self.similarity_manager
-                )
-                
-                if not should_cache:
-                    logger.debug(f"Skipping cache (frame not diverse enough)")
             
             return should_cache, embedding
             
@@ -274,50 +239,6 @@ class CacheAnalysisWorker:
         except Exception as e:
             logger.error(f"Failed to add frame to cache: {e}", exc_info=True)
             return False
-    
-    async def _update_monitoring_metrics(self) -> None:
-        """
-        Phase 2 Hook: Background diversity matrix updates
-        
-        Future implementation will:
-        - Calculate pairwise cache similarities (O(N²))
-        - Update redundancy scores
-        - Detect similarity clusters
-        - Run periodically without blocking generation
-        
-        Phase 1: No-op (returns immediately)
-        """
-        if not self.monitoring_enabled:
-            return
-        
-        # Future: Implement continuous monitoring
-        # await self._calculate_diversity_matrix()
-        # await self._update_redundancy_scores()
-        # await self._detect_clusters()
-        pass
-    
-    async def _get_smart_eviction_candidate(self) -> Optional[str]:
-        """
-        Phase 2 Hook: Smart redundancy-based eviction
-        
-        Future implementation will:
-        - Return most redundant frame based on pre-computed scores
-        - Enable smarter eviction than LRU
-        
-        Phase 1: Returns None (cache falls back to LRU)
-        
-        Returns:
-            Cache ID of eviction candidate, or None
-        """
-        if not self.monitoring_enabled:
-            return None
-        
-        # Future: Implement smart eviction
-        # if self.redundancy_scores:
-        #     most_redundant = max(self.redundancy_scores.items(), key=lambda x: x[1])
-        #     return most_redundant[0]  # cache_id
-        
-        return None
     
     async def run(self) -> None:
         """
@@ -407,60 +328,6 @@ class CacheAnalysisWorker:
                 pass
         
         logger.info("CacheAnalysisWorker stopped")
-    
-    async def _background_monitoring_loop(self) -> None:
-        """
-        Phase 2 Hook: Background monitoring task
-        
-        Periodically updates diversity metrics without blocking frame analysis.
-        
-        Phase 1: No-op loop
-        """
-        logger.info("Background monitoring task started (Phase 2 hook)")
-        
-        refresh_interval = self.config.get('generation', {}).get('cache', {}).get(
-            'advanced_monitoring', {}
-        ).get('diversity_matrix_refresh', 50)
-        
-        while self.running:
-            try:
-                await asyncio.sleep(refresh_interval)
-                
-                # Update monitoring metrics (currently no-op)
-                await self._update_monitoring_metrics()
-                
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Error in background monitoring: {e}", exc_info=True)
-        
-        logger.info("Background monitoring task stopped")
-    
-    async def _log_diversity_stats(self) -> None:
-        """Log cache diversity statistics"""
-        try:
-            # Run diversity stats in executor
-            loop = asyncio.get_event_loop()
-            diversity_stats = await loop.run_in_executor(
-                None,
-                self.cache.get_diversity_stats,
-                self.similarity_manager
-            )
-            
-            # Log dual-metric diversity stats
-            if 'diversity_score_color' in diversity_stats:
-                logger.info(
-                    f"[CACHE_DIVERSITY] Color:{diversity_stats['diversity_score_color']:.3f}, "
-                    f"Struct:{diversity_stats['diversity_score_struct']:.3f}, "
-                    f"Size:{diversity_stats['cache_size']}"
-                )
-            else:
-                logger.info(
-                    f"[CACHE_DIVERSITY] Score:{diversity_stats.get('diversity_score', 0.0):.3f}, "
-                    f"Size:{diversity_stats.get('cache_size', 0)}"
-                )
-        except Exception as e:
-            logger.debug(f"Failed to log diversity stats: {e}")
     
     def stop(self) -> None:
         """

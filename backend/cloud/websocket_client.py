@@ -504,19 +504,6 @@ class VPSWebSocketClient:
         # Schedule reconnection
         self._schedule_reconnect()
     
-    async def send_frame(self, frame_data: bytes, priority: int = 0) -> bool:
-        """
-        Send a frame to VPS (legacy format without metadata)
-        
-        Args:
-            frame_data: WebP-encoded frame bytes
-            priority: Queue priority if disconnected (higher = more important)
-        
-        Returns:
-            True if sent successfully (or queued if disconnected)
-        """
-        return await self._send_binary(MessageType.FRAME, frame_data, priority=priority)
-    
     async def send_frame_with_metadata(
         self,
         frame_data: bytes,
@@ -832,49 +819,9 @@ class VPSWebSocketClient:
                 break  # Exit loop — reconnect will start a fresh one
     
     async def _health_monitor_loop(self) -> None:
-        """
-        Proactive health monitoring
-        
-        This is a BACKUP monitor for detecting silent connection failures.
-        The websockets library already handles ping/pong with its own timeout,
-        but this catches edge cases where the connection goes silent without
-        a clean disconnect.
-        
-        IMPORTANT: The threshold is set high (90s) to avoid false positives
-        during warmup/idle periods when no application-level messages flow.
-        During warmup, the GPU is generating frames locally and hasn't started
-        sending them yet, so VPS has nothing to send back.
-        """
-        while self._should_run:
-            try:
-                await asyncio.sleep(self.HEALTH_CHECK_INTERVAL)
-                
-                if not self.connected:
-                    continue
-                
-                # Check if we've received any message recently
-                # This tracks application-level messages, not websocket pings
-                if self.stats.last_pong_received and self.HEALTH_DEAD_THRESHOLD > 0:
-                    silence_duration = time.time() - self.stats.last_pong_received
+        """Disabled — websockets library handles ping/pong natively."""
+        pass
 
-                    if silence_duration > self.HEALTH_DEAD_THRESHOLD:
-                        logger.warning(
-                            f"Connection appears dead - no activity for {silence_duration:.0f}s. "
-                            f"Triggering reconnection..."
-                        )
-                        await self._handle_connection_lost()
-                    elif silence_duration > self.HEALTH_DEAD_THRESHOLD * 0.5:
-                        # Warn at 50% threshold
-                        logger.info(
-                            f"No VPS messages for {silence_duration:.0f}s "
-                            f"(threshold: {self.HEALTH_DEAD_THRESHOLD:.0f}s)"
-                        )
-            
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.warning(f"Health monitor error: {e}")
-    
     async def _handle_control_message(self, message: bytes) -> None:
         """Handle a control message from VPS"""
         msg_type = message[0]
@@ -1018,73 +965,4 @@ class VPSWebSocketClient:
             "last_pong_age": round(pong_age, 1) if pong_age else None,
         }
     
-    async def force_reconnect(self) -> bool:
-        """
-        Force an immediate reconnection attempt
-        
-        Useful for manually triggering reconnection after detecting issues.
-        Properly cleans up existing connection and tasks before reconnecting.
-        Unlike disconnect(), this preserves the message queue.
-        
-        Returns:
-            True if reconnection succeeded
-        """
-        logger.info("Force reconnect requested")
-        
-        # Stop background tasks to prevent duplicates
-        self._should_run = False
-        
-        # Cancel all background tasks (similar to disconnect, but keep queue)
-        tasks_to_cancel = [
-            self._heartbeat_task,
-            self._receive_task,
-            self._reconnect_task,
-            self._health_monitor_task,
-            self._queue_processor_task,
-        ]
-        for task in tasks_to_cancel:
-            if task and not task.done():
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-        
-        # Reset task references
-        self._heartbeat_task = None
-        self._receive_task = None
-        self._reconnect_task = None
-        self._health_monitor_task = None
-        self._queue_processor_task = None
-        
-        # Close existing WebSocket connection
-        if self._websocket:
-            try:
-                await self._websocket.close()
-            except Exception:
-                pass
-        
-        self._websocket = None
-        self._connected = False
-        self._state = ConnectionState.DISCONNECTED
-        self.stats.connected = False
-        
-        # Reset circuit breaker for manual reconnect
-        self._circuit_breaker_tripped_at = None
-        self.stats.consecutive_failures = 0
-        
-        # Try to connect (this will set _should_run = True and start new tasks)
-        return await self.connect()
-    
-    def reset_circuit_breaker(self) -> None:
-        """
-        Manually reset the circuit breaker
-        
-        Use this when you know the server is back up and want to
-        immediately retry connection.
-        """
-        self._circuit_breaker_tripped_at = None
-        self.stats.consecutive_failures = 0
-        self._state = ConnectionState.DISCONNECTED
-        logger.info("Circuit breaker manually reset")
 

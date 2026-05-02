@@ -286,21 +286,7 @@ class CloudFramePusher:
 
     async def close(self) -> None:
         """Flush encoder and clean up resources."""
-        try:
-            final_data = self._encoder.flush()
-            if final_data:
-                # Best-effort send of final NAL units
-                try:
-                    from .websocket_client import MessageType
-                    await self.ws_client.send_raw(
-                        bytes([MessageType.FRAME]) + final_data
-                    )
-                except Exception:
-                    pass
-        except Exception as e:
-            logger.warning(f"Error flushing encoder: {e}")
-        finally:
-            self._encoder.close()
+        self._encoder.close()
 
     def _record_timing(self, time_seconds: float) -> None:
         """Record a timing sample."""
