@@ -6,6 +6,7 @@ to a callback (frame pusher) for H.264 encoding and WebSocket push.
 """
 
 import logging
+import re
 import time
 import asyncio
 from pathlib import Path
@@ -43,6 +44,11 @@ class DisplayFrameSelector:
         self.target_fps = target_fps
         self.min_buffer_seconds = min_buffer_seconds
         self.frame_interval = 1.0 / target_fps if target_fps > 0 else 0.25
+        self.cleanup_displayed_frames = cleanup_displayed_frames
+        # Keyframes this far behind the display cursor can no longer be needed
+        # by generation (which runs ahead), interpolation (in-memory latents),
+        # or the cache worker (analyzes at generation time).
+        self.keyframe_keep_recent = 50
 
         self.running = False
         self.paused = False
@@ -178,6 +184,12 @@ class DisplayFrameSelector:
             if frame_spec.image is not None:
                 frame_spec.image = None
 
+            # Delete keyframe files far behind the display cursor
+            if is_keyframe and self.cleanup_displayed_frames:
+                await asyncio.get_event_loop().run_in_executor(
+                    None, self._cleanup_old_keyframe_files
+                )
+
             if self.frames_displayed % 10 == 0:
                 logger.info(f"Displayed frame: {frame_spec}")
                 status = self.buffer.get_buffer_status()
@@ -190,7 +202,32 @@ class DisplayFrameSelector:
         except Exception as e:
             logger.error(f"Error displaying frame: {e}", exc_info=True)
             return False
-    
+
+    def _cleanup_old_keyframe_files(self) -> None:
+        """
+        Unlink keyframe files older than keyframe_keep_recent behind the
+        current displayed keyframe. Without this, keyframe JPEGs accumulate
+        unbounded (~200KB per keyframe) for the lifetime of the run.
+        """
+        cutoff = self._current_keyframe_num - self.keyframe_keep_recent
+        if cutoff <= 0:
+            return
+
+        keyframe_dir = getattr(self.buffer, 'keyframe_dir', None)
+        if keyframe_dir is None:
+            return
+
+        try:
+            for f in Path(keyframe_dir).glob('keyframe_*'):
+                match = re.match(r'keyframe_(\d+)', f.stem)
+                if match and int(match.group(1)) < cutoff:
+                    try:
+                        f.unlink()
+                    except OSError:
+                        pass
+        except OSError as e:
+            logger.debug(f"Keyframe file cleanup skipped: {e}")
+
     async def run(self, check_interval: float = 0.001) -> None:
         """
         Main display loop

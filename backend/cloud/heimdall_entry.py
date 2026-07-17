@@ -42,6 +42,28 @@ from core.dream_controller import DreamController
 logger = logging.getLogger("heimdall_entry")
 
 
+def _sweep_stale_output(output_dir: Path) -> None:
+    """Delete frame artifacts left over from previous runs (keyframes,
+    generator outputs, fresh frames). Bounded dirs like cache/ are untouched."""
+    patterns = [
+        (output_dir / "keyframes", "keyframe_*"),
+        (output_dir, "frame_*.jpg"),
+        (output_dir / "frames" / "fresh", "fresh_*.png"),
+    ]
+    removed = 0
+    for directory, pattern in patterns:
+        if not directory.is_dir():
+            continue
+        for f in directory.glob(pattern):
+            try:
+                f.unlink()
+                removed += 1
+            except OSError as e:
+                logger.warning(f"Could not remove stale artifact {f}: {e}")
+    if removed:
+        logger.info(f"[OK] Swept {removed} stale frame artifact(s) from {output_dir}")
+
+
 async def run_direct_generation(
     config_path: str,
     vps_websocket_url: str,
@@ -74,6 +96,10 @@ async def run_direct_generation(
 
         # Disable game detection (headless server)
         config.setdefault("game_detection", {})["enabled"] = False
+
+        # Sweep stale frame artifacts from previous runs — keyframe numbering
+        # restarts at 0, so leftovers would never age out via display cleanup
+        _sweep_stale_output(Path(config.get("system", {}).get("output_dir", "./output")))
 
         # Write overridden config to temp file for DreamController
         temp_config = tempfile.NamedTemporaryFile(

@@ -216,11 +216,12 @@ class FreshFrameBuffer:
                     if len(self._generation_times) > 50:
                         self._generation_times.pop(0)
                     
-                    # Copy to our output directory with template-specific naming
+                    # Move to our output directory with template-specific naming
+                    # (move, not copy — the source in output/ is otherwise orphaned)
                     self._frame_counter += 1
                     final_path = self.output_dir / f"fresh_{template_id}_{self._frame_counter:05d}.png"
-                    shutil.copy2(result_path, final_path)
-                    
+                    shutil.move(str(result_path), str(final_path))
+
                     # Store in buffer
                     async with self._buffer_lock:
                         self._buffer[template_id] = BufferedFrame(
@@ -231,8 +232,9 @@ class FreshFrameBuffer:
                             negative_prompt=negative,
                             generated_at=time.time()
                         )
-                    
+
                     self._total_generated += 1
+                    self._prune_old_template_files(template_id, final_path)
                     
                     logger.info(
                         f"[FRESH] Generated '{template_id}' in {elapsed:.2f}s"
@@ -324,6 +326,25 @@ class FreshFrameBuffer:
         
         return prompt, negative_prompt, selected_components
     
+    def _prune_old_template_files(self, template_id: str, current_path: Path) -> None:
+        """
+        Delete superseded fresh frames for a template, keeping the current one
+        plus the immediately previous file as grace for any in-flight injection
+        that captured the old BufferedFrame.
+        """
+        try:
+            old_files = sorted(
+                f for f in self.output_dir.glob(f"fresh_{template_id}_*.png")
+                if f != current_path
+            )
+            for f in old_files[:-1]:
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+        except OSError as e:
+            logger.debug(f"[FRESH] Prune skipped for '{template_id}': {e}")
+
     async def _generate_txt2img(self, prompt: str, negative_prompt: str) -> Optional[Path]:
         """
         Generate a fresh frame using txt2img
