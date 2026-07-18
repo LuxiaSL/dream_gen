@@ -29,9 +29,10 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class Component:
-    """Single component with embedding and optional semantic opposite"""
+    """Single component with dual CLIP/T5 embeddings and optional semantic opposite"""
     word: str
-    embedding: List[float]
+    clip_embedding: List[float]
+    t5_embedding: List[float]
     opposite: Optional[str] = None
 
 
@@ -103,7 +104,10 @@ class CombinatorialPromptSystem:
     """
     
     # Categories that get semantic opposites in negative prompts
-    NEGATABLE_CATEGORIES = {'adjective', 'color', 'style', 'mood'}
+    NEGATABLE_CATEGORIES = {
+        'color_logic', 'light_behavior', 'atmosphere_field',
+        'temporal_state', 'texture_density', 'medium_render'
+    }
     
     def __init__(
         self,
@@ -146,11 +150,11 @@ class CombinatorialPromptSystem:
         self.mutation_probability = 0.12
         self.staleness_threshold = 25
         self.category_weights = {
-            'color': 0.35,
-            'mood': 0.25,
-            'adjective': 0.20,
-            'style': 0.15,
-            'setting': 0.05
+            'color_logic': 0.35,
+            'atmosphere_field': 0.25,
+            'light_behavior': 0.20,
+            'temporal_state': 0.15,
+            'texture_density': 0.05,
         }
         self.similarity_target = 0.55
         self.similarity_range = 0.25
@@ -205,80 +209,104 @@ class CombinatorialPromptSystem:
     def _load_components(self) -> None:
         """
         Load components from YAML file and embeddings from companion npz file
-        
+
         Architecture:
         - components.yaml: Human-editable file with word + opposite
-        - components_embeddings.npz: Auto-generated embeddings (optional)
-        
+        - components_embeddings.npz: Dual-space embeddings (CLIP 512-dim + T5 1024-dim)
+
+        NPZ key format: "category/word/clip" and "category/word/t5"
+        Falls back to legacy single-vector format ("category/word") for compatibility.
+
         If npz file doesn't exist or is outdated, embeddings will be empty
         and similarity-guided selection will fall back to random.
         """
         if not self.components_path.exists():
             raise FileNotFoundError(f"Components file not found: {self.components_path}")
-        
+
         # Load base component data
         with open(self.components_path, 'r') as f:
             data = yaml.safe_load(f)
-        
+
         # Try to load embeddings from companion npz file
         embeddings_path = self.components_path.parent / "components_embeddings.npz"
-        embeddings_dict = self._load_embeddings_npz(embeddings_path)
-        
+        clip_dict, t5_dict = self._load_embeddings_npz(embeddings_path)
+
         # Build component objects
+        embedded_count = 0
         for category, items in data.get('components', {}).items():
             self.components[category] = []
             for item in items:
                 key = f"{category}/{item['word']}"
-                
-                # Get embedding from npz if available, otherwise from YAML (legacy), otherwise empty
-                if key in embeddings_dict:
-                    embedding = embeddings_dict[key].tolist()
-                elif 'embedding' in item and item['embedding']:
-                    embedding = item['embedding']
-                else:
-                    embedding = []
-                
+
+                clip_emb = clip_dict.get(key, [])
+                t5_emb = t5_dict.get(key, [])
+
+                if clip_emb is not None and len(clip_emb) > 0:
+                    embedded_count += 1
+
                 self.components[category].append(
                     Component(
                         word=item['word'],
-                        embedding=embedding,
+                        clip_embedding=clip_emb if isinstance(clip_emb, list) else clip_emb.tolist(),
+                        t5_embedding=t5_emb if isinstance(t5_emb, list) else t5_emb.tolist(),
                         opposite=item.get('opposite')
                     )
                 )
-        
+
         # Log loading summary
         total_components = sum(len(v) for v in self.components.values())
-        embeddings_loaded = len(embeddings_dict)
         logger.debug(f"Loaded components: {', '.join(f'{k}={len(v)}' for k, v in self.components.items())}")
-        if embeddings_loaded > 0:
-            logger.info(f"Loaded {embeddings_loaded} embeddings from {embeddings_path.name}")
+        if embedded_count > 0:
+            logger.info(
+                f"Loaded {embedded_count}/{total_components} dual embeddings "
+                f"(CLIP {len(next((v for v in clip_dict.values()), []))}d, "
+                f"T5 {len(next((v for v in t5_dict.values()), []))}d) "
+                f"from {embeddings_path.name}"
+            )
         else:
             logger.info("No embeddings loaded (using random selection for mutations)")
-    
-    def _load_embeddings_npz(self, path: Path) -> dict:
+
+    def _load_embeddings_npz(self, path: Path) -> tuple:
         """
-        Load embeddings from npz file
-        
+        Load dual-space embeddings from npz file
+
+        Supports two key formats:
+        - Dual-space: "category/word/clip" + "category/word/t5" (preferred)
+        - Legacy single-vector: "category/word" (loaded as CLIP only)
+
         Returns:
-            Dict mapping "category/word" to numpy array, or empty dict if not found
+            Tuple of (clip_dict, t5_dict), each mapping "category/word" to numpy array.
+            Returns ({}, {}) if file not found or load fails.
         """
         import numpy as np
-        
+
         if not path.exists():
             logger.debug(f"Embeddings file not found: {path}")
-            return {}
-        
+            return {}, {}
+
         try:
             data = np.load(path)
-            embeddings = {
-                key: data[key]
-                for key in data.files
-                if not key.startswith("_")  # Skip metadata keys
-            }
-            return embeddings
+            clip_dict: dict = {}
+            t5_dict: dict = {}
+
+            for key in data.files:
+                if key.startswith("_"):
+                    continue
+
+                if key.endswith("/clip"):
+                    base_key = key[:-5]  # strip "/clip"
+                    clip_dict[base_key] = data[key]
+                elif key.endswith("/t5"):
+                    base_key = key[:-3]  # strip "/t5"
+                    t5_dict[base_key] = data[key]
+                else:
+                    # Legacy single-vector format — treat as CLIP
+                    clip_dict[key] = data[key]
+
+            return clip_dict, t5_dict
         except Exception as e:
             logger.warning(f"Failed to load embeddings from {path}: {e}")
-            return {}
+            return {}, {}
     
     def _initialize_random_state(self) -> None:
         """Initialize with random template and components"""
@@ -532,96 +560,115 @@ class CombinatorialPromptSystem:
     # MUTATION SYSTEM
     # ═══════════════════════════════════════════════════════════════════════════
     
+    # Relative weight of CLIP vs T5 when combining dual-space similarities.
+    # CLIP captures visual similarity, T5 captures semantic similarity.
+    CLIP_SIMILARITY_WEIGHT = 0.6
+    T5_SIMILARITY_WEIGHT = 0.4
+
     def _select_similar_component(
         self,
         current: Component,
         pool: List[Component]
     ) -> Component:
         """
-        Select a new component using similarity-guided selection
-        
-        Prefers components with moderate semantic similarity to the current one.
-        This creates smooth visual transitions - not too similar (boring) and
-        not too different (jarring).
-        
-        Selection uses weighted random sampling where components closer to
-        the target similarity (default 0.55) get higher weights.
-        
-        Falls back to random selection if:
-        - Embeddings not available (placeholder values)
-        - No candidates in acceptable similarity range
-        
+        Select a new component using dual-space similarity-guided selection
+
+        Computes cosine similarity in both CLIP (visual) and T5 (semantic) spaces,
+        then combines them as a weighted average. Prefers components with moderate
+        combined similarity — not too similar (boring) and not too different (jarring).
+
+        Falls back gracefully:
+        - Both spaces available → weighted combination
+        - Only CLIP available → CLIP only
+        - Neither available → random selection
+
         Args:
             current: Current component to transition from
             pool: Available components to select from (excluding current)
-            
+
         Returns:
             Selected component
         """
         import numpy as np
-        
-        # Check if embeddings are available (not placeholder 8-dim values)
-        if not current.embedding or len(current.embedding) < 16:
-            # Placeholder embeddings - fall back to random
+
+        has_clip = bool(current.clip_embedding) and len(current.clip_embedding) >= 16
+        has_t5 = bool(current.t5_embedding) and len(current.t5_embedding) >= 16
+
+        if not has_clip and not has_t5:
             return random.choice(pool)
-        
-        current_emb = np.array(current.embedding)
-        
-        # Compute similarities to all candidates
-        candidates = []
+
+        current_clip = np.array(current.clip_embedding) if has_clip else None
+        current_t5 = np.array(current.t5_embedding) if has_t5 else None
+
+        # Compute combined similarities to all candidates
+        candidates: List[Tuple[Component, float]] = []
+        min_sim = self.similarity_target - self.similarity_range
+        max_sim = self.similarity_target + self.similarity_range
+
         for comp in pool:
-            if not comp.embedding or len(comp.embedding) != len(current.embedding):
+            comp_has_clip = bool(comp.clip_embedding) and len(comp.clip_embedding) >= 16
+            comp_has_t5 = bool(comp.t5_embedding) and len(comp.t5_embedding) >= 16
+
+            # Need at least one shared space
+            if not (comp_has_clip or comp_has_t5):
                 continue
-            
-            comp_emb = np.array(comp.embedding)
-            
-            # Cosine similarity (embeddings should be normalized)
-            sim = float(np.dot(current_emb, comp_emb))
-            
-            # Filter to acceptable similarity range
-            min_sim = self.similarity_target - self.similarity_range
-            max_sim = self.similarity_target + self.similarity_range
-            
-            if min_sim < sim < max_sim:
-                candidates.append((comp, sim))
-        
+
+            sims = []
+            weights_for_avg = []
+
+            if has_clip and comp_has_clip:
+                clip_sim = float(np.dot(current_clip, np.array(comp.clip_embedding)))
+                sims.append(clip_sim)
+                weights_for_avg.append(self.CLIP_SIMILARITY_WEIGHT)
+
+            if has_t5 and comp_has_t5:
+                t5_sim = float(np.dot(current_t5, np.array(comp.t5_embedding)))
+                sims.append(t5_sim)
+                weights_for_avg.append(self.T5_SIMILARITY_WEIGHT)
+
+            if not sims:
+                continue
+
+            # Weighted average of available similarities
+            combined_sim = sum(s * w for s, w in zip(sims, weights_for_avg)) / sum(weights_for_avg)
+
+            if min_sim < combined_sim < max_sim:
+                candidates.append((comp, combined_sim))
+
         if not candidates:
-            # No candidates in acceptable range - use random selection
             selected = random.choice(pool)
             logger.info(
-                f"[SIMILARITY] No candidates in range [{self.similarity_target - self.similarity_range:.2f}, "
-                f"{self.similarity_target + self.similarity_range:.2f}] - random fallback: '{selected.word}'"
+                f"[SIMILARITY] No candidates in range [{min_sim:.2f}, {max_sim:.2f}] "
+                f"- random fallback: '{selected.word}'"
             )
             return selected
-        
+
         # Weight candidates: prefer those closer to target similarity
-        # Weight = 1.0 - |similarity - target|, so target gets weight 1.0
-        weights = [
-            1.0 - abs(sim - self.similarity_target) 
+        sel_weights = [
+            1.0 - abs(sim - self.similarity_target)
             for _, sim in candidates
         ]
-        
-        # Normalize weights for random.choices
-        total = sum(weights)
+
+        total = sum(sel_weights)
         if total > 0:
-            weights = [w / total for w in weights]
+            sel_weights = [w / total for w in sel_weights]
         else:
-            weights = [1.0 / len(candidates)] * len(candidates)
-        
-        # Weighted random selection
-        selected = random.choices(candidates, weights=weights, k=1)[0]
-        
-        # Log candidates considered
+            sel_weights = [1.0 / len(candidates)] * len(candidates)
+
+        selected = random.choices(candidates, weights=sel_weights, k=1)[0]
+
+        spaces_used = ("CLIP+T5" if (has_clip and has_t5) else
+                       "CLIP" if has_clip else "T5")
         top_candidates = sorted(candidates, key=lambda x: x[1], reverse=True)[:5]
         logger.info(
             f"[SIMILARITY] '{current.word}' → '{selected[0].word}' "
             f"(sim={selected[1]:.3f}, target={self.similarity_target:.2f}, "
-            f"candidates={len(candidates)}/{len(pool)})"
+            f"candidates={len(candidates)}/{len(pool)}, space={spaces_used})"
         )
         logger.debug(
             f"[SIMILARITY] Top candidates: {[(c.word, f'{s:.3f}') for c, s in top_candidates]}"
         )
-        
+
         return selected[0]
     
     def should_mutate(self) -> bool:
@@ -938,27 +985,30 @@ class CombinatorialPromptSystem:
     # EMBEDDINGS (for Phase 6 - Similarity calculations)
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def get_prompt_embedding(self) -> Optional[List[float]]:
+    def get_prompt_embedding(self, space: str = "clip") -> Optional[List[float]]:
         """
         Get combined embedding for current prompt
-        
-        Averages embeddings of all current components.
-        Used for similarity-guided component selection.
-        
+
+        Averages CLIP or T5 embeddings of all current components.
+        CLIP embeddings capture visual similarity, T5 captures semantic.
+
+        Args:
+            space: Which embedding space — "clip" (default) or "t5"
+
         Returns:
             Combined embedding vector or None if not available
         """
         embeddings = []
-        
+
         for components in self.current_multi_components.values():
             for comp in components:
-                if comp.embedding:
-                    embeddings.append(comp.embedding)
-        
+                emb = comp.clip_embedding if space == "clip" else comp.t5_embedding
+                if emb:
+                    embeddings.append(emb)
+
         if not embeddings:
             return None
-        
-        # Average all component embeddings
+
         import numpy as np
         return np.mean(embeddings, axis=0).tolist()
     

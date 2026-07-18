@@ -140,3 +140,23 @@ templates:
     required_components: [temporal_state, subject_form, spatial_logic, material_substance, color_logic, medium_render]
     notes: "Transition captured - nascent to decaying, blooming to withered"
 
+  # ═══════════════════════════════════════════════════════════════════════════
+  # ESSENCE - Visual haiku, 3 slots only
+  # Emphasis: texture_density, subject_form, spatial_logic
+  # Omits: medium_render, color_logic, setting, atmosphere, light, etc.
+  # ═══════════════════════════════════════════════════════════════════════════
+  - id: "essence"
+    structure: "{texture_density} {subject_form}, {spatial_logic}"
+    required_components: [texture_density, subject_form, spatial_logic]
+    notes: "Three concepts, no scaffolding — each component carries maximum visual weight"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # SITE DECAY - Place and process, no rendering style or palette
+  # Emphasis: underrepresented categories (scale, temporal, setting, phenomenon, texture)
+  # Omits: medium_render, color_logic (lets Midjourney choose its own aesthetic)
+  # ═══════════════════════════════════════════════════════════════════════════
+  - id: "site_decay"
+    structure: "{scale_perspective}, {temporal_state} {setting_location}, {phenomenon_pattern} across {texture_density}"
+    required_components: [scale_perspective, setting_location, temporal_state, phenomenon_pattern, texture_density]
+    notes: "Place and process — no rendering style, no palette, Midjourney chooses its own aesthetic"
+
