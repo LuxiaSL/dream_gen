@@ -273,6 +273,17 @@ class DreamController:
                 # Note: Bootstrap frame is handled by FreshFrameBuffer in orchestrator
                 # No seed image needed - fresh buffer populates at startup
                 
+                # Load resume checkpoint if a valid one exists (SPEC-resume.md)
+                # Any problem degrades to a fresh start, never a crash.
+                self.resume_dir = self.output_dir / "resume"
+                self.resume_state = None
+                if self.config.get('resume', {}).get('enabled', True):
+                    try:
+                        from core.resume_state import load_resume_state
+                        self.resume_state = load_resume_state(self.resume_dir, self.config)
+                    except Exception as e:
+                        self.logger.warning(f"Resume load failed (fresh start): {e}")
+
                 # Create async orchestrator
                 # Note: seed_image=None because FreshFrameBuffer handles bootstrap
                 self.generation_coordinator = AsyncGenerationOrchestrator(
@@ -284,7 +295,9 @@ class DreamController:
                     similarity_manager=self.similarity_manager,
                     config=self.config,
                     seed_image=None,  # Fresh buffer handles bootstrap
-                    injection_vae=self.injection_vae  # Dedicated VAE for injection blending
+                    injection_vae=self.injection_vae,  # Dedicated VAE for injection blending
+                    resume_state=self.resume_state,
+                    resume_dir=self.resume_dir
                 )
                 
                 self.logger.info("  Workers: KeyframeWorker, InterpolationWorker, CacheAnalysisWorker")
@@ -445,6 +458,18 @@ class DreamController:
                 try:
                     from chronicle import ChronicleRecorder
                     self.chronicle_recorder = ChronicleRecorder(self.vps_client, self.config)
+
+                    # Resume continuity (SPEC-resume.md): lifetime numbering +
+                    # session stitching for the chronicle
+                    resume_state = getattr(self, 'resume_state', None)
+                    if resume_state is not None:
+                        self.chronicle_recorder.epoch_offset = resume_state.lifetime_keyframes
+                        self.chronicle_recorder.resumed_from = resume_state.session_id or None
+                        self.logger.info(
+                            f"  Chronicle continuity: epoch {resume_state.lifetime_keyframes}, "
+                            f"resumed from session {resume_state.session_id[:8] if resume_state.session_id else '?'}"
+                        )
+
                     if hasattr(self.generation_coordinator, 'chronicle'):
                         self.generation_coordinator.chronicle = self.chronicle_recorder
                         self.logger.info("  Chronicle recorder attached to orchestrator")

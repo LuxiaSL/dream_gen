@@ -83,7 +83,9 @@ class AsyncGenerationOrchestrator:
         similarity_manager,  # DualMetricSimilarityManager instance
         config: Dict[str, Any],
         seed_image: Optional[Path] = None,
-        injection_vae=None  # Dedicated LatentEncoder for injection blending (zero contention)
+        injection_vae=None,  # Dedicated LatentEncoder for injection blending (zero contention)
+        resume_state=None,  # Optional ResumeState (SPEC-resume.md)
+        resume_dir: Optional[Path] = None  # Where checkpoints are written
     ):
         """
         Initialize async generation orchestrator
@@ -206,6 +208,16 @@ class AsyncGenerationOrchestrator:
         # they're staged here by keyframe number and drained at completion.
         self.chronicle = None  # ChronicleRecorder | None
         self.chronicle_events: Dict[int, list] = {}
+
+        # === Resume (SPEC-resume.md) ===
+        self.resume_state = resume_state
+        self.resume_dir = resume_dir
+        self.epoch_offset = resume_state.lifetime_keyframes if resume_state else 0
+        resume_config = self.config.get('resume', {})
+        self.resume_enabled = bool(resume_config.get('enabled', True)) and resume_dir is not None
+        self.checkpoint_interval = int(resume_config.get('checkpoint_interval_keyframes', 50))
+        self._checkpoint_in_flight = False
+        self._last_checkpoint_kf = 0
         
         # Denoise values for DRIFT/BEND modes
         fresh_config = self.config.get('fresh_generation', {})
@@ -302,12 +314,38 @@ class AsyncGenerationOrchestrator:
                 await self.fresh_buffer.populate_all()
                 logger.info("Fresh frame buffer ready!")
             
-            # Bootstrap: Get first frame from fresh buffer (txt2img)
-            if self.fresh_buffer:
+            # Bootstrap: resume from checkpoint if present, else fresh buffer
+            if self.resume_state is not None and self.resume_dir is not None:
+                # === RESUME PATH (SPEC-resume.md) ===
+                # Seed from the previous session's last keyframe and restore
+                # the prompt system's aesthetic state - the dream continues
+                # mid-thought instead of rebooting from a fresh seed.
+                from core.resume_state import resume_image_path
+                rs = self.resume_state
+                self.current_image_path = resume_image_path(self.resume_dir, rs)
+
+                if hasattr(self.prompt_manager, 'switch_template'):
+                    self.prompt_manager.switch_template(
+                        rs.prompt.template_id or None,
+                        rs.prompt.components or None
+                    )
+                    # switch_template resets mutation tracking; restore it
+                    self.prompt_manager.total_frames = rs.prompt.total_frames
+                    self.prompt_manager.total_mutations = rs.prompt.total_mutations
+                    self.prompt_manager.frames_since_mutation = rs.prompt.frames_since_mutation
+
+                logger.info("=" * 60)
+                logger.info("[RESUME] Continuing from checkpoint")
+                logger.info(f"  Lifetime keyframes so far: {rs.lifetime_keyframes}")
+                logger.info(f"  Template: '{rs.prompt.template_id}'")
+                logger.info(f"  Components: {rs.prompt.components}")
+                logger.info(f"  Seed image: {self.current_image_path.name}")
+                logger.info("=" * 60)
+            elif self.fresh_buffer:
                 logger.info("Bootstrap: Getting initial frame from fresh buffer...")
                 bootstrap_frame = await self.fresh_buffer.select_and_consume()
                 self.current_image_path = bootstrap_frame.path
-                
+
                 # Switch prompt system to this template/components
                 self.prompt_manager.switch_template(
                     bootstrap_frame.template_id,
@@ -403,7 +441,17 @@ class AsyncGenerationOrchestrator:
         
         logger.info("Stopping AsyncGenerationOrchestrator...")
         self.running = False
-        
+
+        # Final resume checkpoint - the dream's last thought (SPEC-resume.md)
+        if (self.resume_enabled and self.current_image_path is not None
+                and self.current_keyframe_num > 0):
+            self._checkpoint_in_flight = False  # override any pending periodic save
+            await self._save_checkpoint(self.current_keyframe_num, self.current_image_path)
+            logger.info(
+                f"  Final resume checkpoint at keyframe {self.current_keyframe_num} "
+                f"(lifetime {self.epoch_offset + self.current_keyframe_num})"
+            )
+
         # Stop workers
         self.keyframe_worker.running = False
         self.interpolation_worker.running = False
@@ -438,6 +486,48 @@ class AsyncGenerationOrchestrator:
         logger.info(f"  Cache analyses: {self.cache_worker.frames_analyzed}")
         logger.info("="*70)
     
+    async def _save_checkpoint(self, kf_num: int, kf_path: Path) -> None:
+        """
+        Write a resume checkpoint (SPEC-resume.md). Never raises; file I/O
+        runs in the executor. Guarded against overlapping saves.
+        """
+        if not self.resume_enabled or self._checkpoint_in_flight:
+            return
+        self._checkpoint_in_flight = True
+        try:
+            import functools
+            from core.resume_state import PromptResumeState, save_resume_state
+
+            pm = self.prompt_manager
+            prompt_state = PromptResumeState(
+                template_id=pm.get_current_template_id() if hasattr(pm, 'get_current_template_id') else "",
+                components=pm.get_current_components() if hasattr(pm, 'get_current_components') else {},
+                total_frames=getattr(pm, 'total_frames', 0),
+                total_mutations=getattr(pm, 'total_mutations', 0),
+                frames_since_mutation=getattr(pm, 'frames_since_mutation', 0),
+            )
+            session_id = self.chronicle.session_id if self.chronicle else ""
+
+            ok = await asyncio.get_running_loop().run_in_executor(
+                None,
+                functools.partial(
+                    save_resume_state,
+                    self.resume_dir,
+                    config=self.config,
+                    session_id=session_id,
+                    lifetime_keyframes=self.epoch_offset + kf_num,
+                    local_keyframe=kf_num,
+                    prompt_state=prompt_state,
+                    keyframe_image_path=kf_path,
+                ),
+            )
+            if ok:
+                logger.debug(f"Resume checkpoint saved at keyframe {kf_num}")
+        except Exception:
+            logger.debug("Resume checkpoint failed", exc_info=True)
+        finally:
+            self._checkpoint_in_flight = False
+
     def _chronicle_note(self, kf_num: int, kind: str, detail: str = "") -> None:
         """
         Stage a chronicle event for a keyframe that hasn't completed yet.
@@ -586,6 +676,14 @@ class AsyncGenerationOrchestrator:
                         )
                     except Exception:
                         logger.debug("Chronicle hook failed", exc_info=True)
+
+                # === Resume checkpoint (fire-and-forget, SPEC-resume.md) ===
+                if (self.resume_enabled and
+                        kf_num - self._last_checkpoint_kf >= self.checkpoint_interval):
+                    self._last_checkpoint_kf = kf_num
+                    asyncio.get_running_loop().create_task(
+                        self._save_checkpoint(kf_num, kf_path)
+                    )
 
                 # === 3. Check for Missing Interpolation Pairs (Gap Detection) ===
                 # Use buffer's built-in logic to find gaps!

@@ -250,6 +250,45 @@ async def test_disabled_recorder_is_inert(keyframe_png):
     await rec.close()
 
 
+async def test_resume_continuity(keyframe_png):
+    """Resumed sessions emit session_resume (not session_start) and carry
+    lifetime keyframe numbering offset by the epoch."""
+    ws = FakeWSClient()
+    rec = ChronicleRecorder(ws, make_config())
+    rec.epoch_offset = 15000
+    rec.resumed_from = "prev_session_abc"
+
+    await rec.on_keyframe(keyframe_num=1, sequence_num=1, prompt="p",
+                          events=[], image_path=keyframe_png)
+    await drain(rec)
+    await rec._flush()
+
+    r = ws.batches()[0].records[0]
+    kinds = [e.kind for e in r.events]
+    assert kinds == ["session_resume"]
+    assert r.events[0].detail == "prev_session_abc"
+    assert r.lifetime_keyframe == 15001
+    assert r.keyframe == 1
+
+    await rec.close()
+
+
+async def test_fresh_session_lifetime_equals_local(keyframe_png):
+    ws = FakeWSClient()
+    rec = ChronicleRecorder(ws, make_config())
+
+    await rec.on_keyframe(keyframe_num=7, sequence_num=7, prompt="p",
+                          events=[], image_path=keyframe_png)
+    await drain(rec)
+    await rec._flush()
+
+    r = ws.batches()[0].records[0]
+    assert [e.kind for e in r.events] == ["session_start"]
+    assert r.lifetime_keyframe == 7
+
+    await rec.close()
+
+
 async def test_close_flushes_remaining(keyframe_png):
     ws = FakeWSClient()
     rec = ChronicleRecorder(ws, make_config(flush_interval_s=9999,

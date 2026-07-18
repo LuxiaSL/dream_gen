@@ -67,6 +67,11 @@ class ChronicleRecorder:
         # One session per process boot; the VPS stitches history by session_id
         self.session_id: str = uuid.uuid4().hex
 
+        # Resume continuity (SPEC-resume.md), set by DreamController when a
+        # checkpoint was loaded: lifetime numbering offset + prior session id
+        self.epoch_offset: int = 0
+        self.resumed_from: Optional[str] = None
+
         # Embedding encoders (numpy/PIL only - cheap, no GPU)
         self._color = ColorHistogramEncoder()
         self._phash = PHashEncoder()
@@ -123,7 +128,12 @@ class ChronicleRecorder:
 
             event_models = []
             if not self._session_started:
-                event_models.append(ChronicleEvent(kind="session_start"))
+                if self.resumed_from:
+                    event_models.append(
+                        ChronicleEvent(kind="session_resume", detail=self.resumed_from)
+                    )
+                else:
+                    event_models.append(ChronicleEvent(kind="session_start"))
                 self._session_started = True
             for ev in events or []:
                 try:
@@ -140,6 +150,7 @@ class ChronicleRecorder:
 
             job = {
                 "keyframe": keyframe_num,
+                "lifetime_keyframe": self.epoch_offset + keyframe_num,
                 "sequence": sequence_num,
                 "ts": now,
                 "prompt": prompt or "",
@@ -232,6 +243,7 @@ class ChronicleRecorder:
                     record = KeyframeRecord(
                         session_id=self.session_id,
                         keyframe=job["keyframe"],
+                        lifetime_keyframe=job["lifetime_keyframe"],
                         sequence=job["sequence"],
                         ts=job["ts"],
                         prompt=job["prompt"],

@@ -20,7 +20,8 @@ EventKind = Literal[
     "cache_injection",
     "seed_injection",
     "template_switch",
-    "session_start",
+    "session_start",  # fresh boot - hard era boundary for the segmenter
+    "session_resume",  # continued from a checkpoint - continuity, NOT a boundary
 ]
 
 
@@ -36,6 +37,7 @@ class KeyframeRecord(BaseModel):
 
     session_id: str  # unique per GPU process boot
     keyframe: int  # keyframe number (monotonic within session)
+    lifetime_keyframe: Optional[int] = None  # epoch + keyframe (SPEC-resume.md)
     sequence: int  # buffer sequence number of the keyframe
     ts: float  # unix epoch, GPU clock
     prompt: str

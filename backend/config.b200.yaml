@@ -201,3 +201,12 @@ chronicle:
   thumbnail_size: [256, 128]
   webp_quality: 70
   max_queue: 200               # work queue bound (drop-oldest beyond this)
+
+# ═══════════════════════════════════════════════════════════════════
+# RESUME - the dream picks up where it left off (SPEC-resume.md)
+# Local checkpoint (output/resume/) with last keyframe + prompt state
+# + lifetime counters. Invalid/missing checkpoint -> clean fresh start.
+# ═══════════════════════════════════════════════════════════════════
+resume:
+  enabled: true
+  checkpoint_interval_keyframes: 50   # ~40s at current keyframe rate
