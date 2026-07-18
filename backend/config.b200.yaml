@@ -186,3 +186,18 @@ cloud:
     reconnect_delay: 1.0
     max_reconnect_delay: 60.0
     heartbeat_interval: 30.0
+
+# ═══════════════════════════════════════════════════════════════════
+# CHRONICLE - the dream's own memory (SPEC-chronicle.md)
+# Per-keyframe records + tiered thumbnails pushed to the VPS (0x05).
+# Fire-and-forget: disabling this or any chronicle failure never
+# affects generation.
+# ═══════════════════════════════════════════════════════════════════
+chronicle:
+  enabled: true
+  thumbnail_interval_s: 30     # scheduled thumbnail cadence (events always get one)
+  flush_interval_s: 5          # batch flush cadence
+  flush_max_records: 50        # ...or when this many records accumulate
+  thumbnail_size: [256, 128]
+  webp_quality: 70
+  max_queue: 200               # work queue bound (drop-oldest beyond this)

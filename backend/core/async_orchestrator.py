@@ -200,6 +200,12 @@ class AsyncGenerationOrchestrator:
         
         # Injection frequency tracking (for seed forcing)
         self.recent_cache_injections = deque(maxlen=10)
+
+        # === Chronicle (optional observer, attached by DreamController) ===
+        # Events are decided for next_kf before that keyframe completes, so
+        # they're staged here by keyframe number and drained at completion.
+        self.chronicle = None  # ChronicleRecorder | None
+        self.chronicle_events: Dict[int, list] = {}
         
         # Denoise values for DRIFT/BEND modes
         fresh_config = self.config.get('fresh_generation', {})
@@ -432,6 +438,39 @@ class AsyncGenerationOrchestrator:
         logger.info(f"  Cache analyses: {self.cache_worker.frames_analyzed}")
         logger.info("="*70)
     
+    def _chronicle_note(self, kf_num: int, kind: str, detail: str = "") -> None:
+        """
+        Stage a chronicle event for a keyframe that hasn't completed yet.
+
+        No-op when no recorder is attached. Never raises. The staged events
+        are drained (popped) when keyframe kf_num completes in _coordinate.
+        """
+        if self.chronicle is None:
+            return
+        try:
+            self.chronicle_events.setdefault(kf_num, []).append(
+                {"kind": kind, "detail": detail}
+            )
+            # Bound the staging dict: keyframes that failed/never completed
+            # would otherwise leak their staged events forever
+            if len(self.chronicle_events) > 50:
+                for old_kf in sorted(self.chronicle_events.keys())[:-25]:
+                    del self.chronicle_events[old_kf]
+        except Exception:
+            pass
+
+    def _chronicle_component_diff(self, before: dict, after: dict) -> str:
+        """Human-readable diff of prompt components, e.g. "color_logic: 'a' -> 'b'"."""
+        try:
+            changes = [
+                f"{cat}: '{before.get(cat, '?')}' -> '{word}'"
+                for cat, word in after.items()
+                if before.get(cat) != word
+            ]
+            return ", ".join(changes)
+        except Exception:
+            return ""
+
     async def _coordinate(self) -> None:
         """
         Main coordination loop - Smart Pre-Registration Pattern
@@ -527,10 +566,27 @@ class AsyncGenerationOrchestrator:
                 # Update current state
                 self.current_image_path = kf_path
                 self.current_keyframe_num = kf_num
-                
+
                 # Mark task done
                 self.keyframe_worker.result_queue.task_done()
-                
+
+                # === Chronicle: record this keyframe (fire-and-forget) ===
+                if self.chronicle is not None:
+                    try:
+                        pm = self.prompt_manager
+                        await self.chronicle.on_keyframe(
+                            keyframe_num=kf_num,
+                            sequence_num=sequence_num if sequence_num is not None else -1,
+                            prompt=prompt,
+                            negative=pm.get_current_negative() if hasattr(pm, 'get_current_negative') else "",
+                            template_id=pm.get_current_template_id() if hasattr(pm, 'get_current_template_id') else "",
+                            components=pm.get_current_components() if hasattr(pm, 'get_current_components') else {},
+                            events=self.chronicle_events.pop(kf_num, []),
+                            image_path=kf_path,
+                        )
+                    except Exception:
+                        logger.debug("Chronicle hook failed", exc_info=True)
+
                 # === 3. Check for Missing Interpolation Pairs (Gap Detection) ===
                 # Use buffer's built-in logic to find gaps!
                 missing_pair = self.buffer.needs_interpolations()
@@ -682,10 +738,19 @@ class AsyncGenerationOrchestrator:
                         if injection_type == 'seed':
                             self.last_seed_injection_kf = next_kf
                             self.template_switch_count += 1
+                            new_template = (
+                                self.prompt_manager.get_current_template_id()
+                                if hasattr(self.prompt_manager, 'get_current_template_id') else ""
+                            )
+                            self._chronicle_note(next_kf, "seed_injection")
+                            self._chronicle_note(
+                                next_kf, "template_switch", f"-> {new_template}"
+                            )
                         else:
                             self.last_cache_injection_kf = next_kf
                             self.cache_injections += 1
                             self.recent_cache_injections.append(True)
+                            self._chronicle_note(next_kf, "cache_injection")
                         
                         logger.info(f"  [OK] Injection completed, proceeding to next iteration")
                         continue
@@ -720,12 +785,28 @@ class AsyncGenerationOrchestrator:
                             f"  [MANUAL_BYPASS] Frame {next_kf} triggers FORCED MUTATION "
                             f"(% {self.manual_bypass_mutation_interval} == 0)"
                         )
+                        components_before = self.prompt_manager.get_current_components()
                         self.prompt_manager.mutate()
                         self.forced_mutation_count += 1
+                        self._chronicle_note(
+                            next_kf, "forced_mutation",
+                            self._chronicle_component_diff(
+                                components_before,
+                                self.prompt_manager.get_current_components()
+                            )
+                        )
                         logger.info(f"  [MUTATION] Manual bypass forced mutation, entering BEND mode")
                     # Check if should mutate components (normal adaptive path)
                     elif self.prompt_manager.should_mutate():
+                        components_before = self.prompt_manager.get_current_components()
                         self.prompt_manager.mutate()
+                        self._chronicle_note(
+                            next_kf, "mutation",
+                            self._chronicle_component_diff(
+                                components_before,
+                                self.prompt_manager.get_current_components()
+                            )
+                        )
                         logger.info(f"  [MUTATION] Component mutated, entering BEND mode")
                     
                     # Get mode and denoise

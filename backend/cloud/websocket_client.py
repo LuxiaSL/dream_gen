@@ -34,6 +34,7 @@ class MessageType(IntEnum):
     STATE = 0x02
     HEARTBEAT = 0x03
     STATUS = 0x04
+    CHRONICLE = 0x05
 
 
 class ControlType(IntEnum):
@@ -595,7 +596,23 @@ class VPSWebSocketClient:
             True if sent successfully
         """
         return await self._send_binary(MessageType.STATUS, status_json, priority=5)
-    
+
+    async def send_chronicle(self, batch_json: bytes) -> bool:
+        """
+        Send a chronicle batch to the VPS (see backend/chronicle/).
+
+        Lossy by design: chronicle batches are not queued across disconnects
+        (only FRAME messages are) - a batch lost during a reconnect is
+        acceptable, the chronicle is impressionist.
+
+        Args:
+            batch_json: JSON-encoded ChronicleBatch bytes
+
+        Returns:
+            True if sent successfully
+        """
+        return await self._send_binary(MessageType.CHRONICLE, batch_json, priority=3)
+
     async def _send_binary(self, msg_type: MessageType, payload: bytes, priority: int = 0) -> bool:
         """
         Send a binary message with type prefix

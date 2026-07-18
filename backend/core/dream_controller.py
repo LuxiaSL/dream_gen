@@ -348,6 +348,7 @@ class DreamController:
         self.vps_client = None
         self.frame_pusher = None
         self.state_sync = None
+        self.chronicle_recorder = None
         
         if self.cloud_enabled:
             self._init_cloud_mode()
@@ -436,7 +437,23 @@ class DreamController:
             
             # Create state sync
             self.state_sync = CloudStateSync(self.vps_client, cloud_config)
-            
+
+            # Create chronicle recorder and attach it to the orchestrator
+            # (the dream's memory - see SPEC-chronicle.md). Failure to init
+            # the chronicle must never block cloud mode.
+            if self.config.get('chronicle', {}).get('enabled', True):
+                try:
+                    from chronicle import ChronicleRecorder
+                    self.chronicle_recorder = ChronicleRecorder(self.vps_client, self.config)
+                    if hasattr(self.generation_coordinator, 'chronicle'):
+                        self.generation_coordinator.chronicle = self.chronicle_recorder
+                        self.logger.info("  Chronicle recorder attached to orchestrator")
+                    else:
+                        self.logger.info("  Chronicle recorder created (no orchestrator hook - legacy coordinator)")
+                except Exception as e:
+                    self.logger.warning(f"Chronicle init failed (continuing without): {e}")
+                    self.chronicle_recorder = None
+
             # Attach callback to display selector for pushing frames
             if self.display_selector and self.frame_pusher:
                 self.display_selector.on_frame_callback = self._on_frame_displayed
@@ -485,7 +502,14 @@ class DreamController:
         """
         if not self.cloud_enabled or not self.vps_client:
             return
-        
+
+        # Flush any remaining chronicle records (before the connection closes)
+        if self.chronicle_recorder:
+            try:
+                await self.chronicle_recorder.close()
+            except Exception as e:
+                self.logger.debug(f"Chronicle close failed: {e}")
+
         # Push final state
         if self.state_sync:
             try:
