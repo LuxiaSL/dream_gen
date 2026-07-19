@@ -89,7 +89,7 @@ generation:
     injection_logic: "any"
     injection_mode: "dissimilar"
     injection_probability: 0.08   # was 0.15 — less random injection at higher keyframe rate
-    blend_weight: 0.65            # collapse counter-move; was 0.55 ("suggests"), 0.75 original
+    blend_weight: 0.35            # cached frame suggests (~1/3); anchor promotion makes it durable anyway
     injection_cooldown: 15        # was 5 — at most every ~2.5 seconds
     seed_injection_cooldown: 15   # was 5
     embedding_history_reset: "partial"
@@ -122,6 +122,7 @@ generation:
       mutation_interval: 16         # was 8 — ~12.6s: 8 kf bend + 8 kf settle
       cache_injection_interval: 48  # ~38s — collapse counter-move (was 120; cache worker was dead until 2026-07-19)
       template_swap_interval: 1000  # was 72 — ~13 min, this IS the era scale
+      cache_injection_lockout_after_swap: 96  # fresh era accumulates before recall can pull backward
 
     advanced_monitoring:
       enabled: false
@@ -129,12 +130,18 @@ generation:
 fresh_generation:
   enabled: true
 
+  # Anchor walking (SPEC-anchor.md): the lineage advances anchor->anchor at
+  # bend denoise; drift frames chain locally from each anchor and are
+  # discarded from the lineage at the next mutation. Mush cannot compound.
+  anchor_walking:
+    enabled: true
+    mutation_interpolation_frames: 60   # ~2s glide across each re-anchor jump
+    noise_pinning: true                 # one noise seed per era; resampled at swaps
+
   denoising:
-    drift: 0.18                   # was 0.12 — stronger prompt pull per step; the
-                                  # attractors live in the contractive img2img map,
-                                  # not the intervention schedule (2026-07-19)
-    bend: 0.55                    # collapse counter-move; was 0.48, 0.35 original
-    bend_frames: 8                # bend length; settle = mutation_interval - bend_frames
+    drift: 0.18                   # local orbit around the anchor
+    bend: 0.60                    # re-anchor strength: components genuinely restructure
+    bend_frames: 8                # legacy chained mode only; ignored under anchor_walking
 
   mutation:
     base_probability: 0.04        # was 0.12 — ~1 mutation per 25 keyframes (~4 seconds)

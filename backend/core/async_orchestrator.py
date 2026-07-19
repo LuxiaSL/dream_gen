@@ -223,6 +223,25 @@ class AsyncGenerationOrchestrator:
         self._checkpoint_in_flight = False
         self._last_checkpoint_kf = 0
         
+        # === Anchor walking (SPEC-anchor.md) ===
+        # The lineage advances anchor->anchor at bend denoise (strong,
+        # detail-preserving regenerations from a clean anchor); drift frames
+        # chain locally from each anchor and are DISCARDED from the lineage
+        # at the next mutation. Degradation cannot compound across eras.
+        aw = self.config.get('fresh_generation', {}).get('anchor_walking', {})
+        self.anchor_walking = bool(aw.get('enabled', False))
+        self.mutation_interp_frames = int(aw.get('mutation_interpolation_frames', 60))
+        self.noise_pinning = bool(aw.get('noise_pinning', True))
+        self.anchor_path: Optional[Path] = None
+        self._anchor_files: deque = deque(maxlen=2)  # rotate stable copies
+        self._pending_anchor_kf: Optional[int] = None
+        self.era_seed: int = random.randint(0, 2**32 - 1)
+        if self.anchor_walking:
+            logger.info(
+                f"Anchor walking ENABLED: mutation interp {self.mutation_interp_frames} "
+                f"frames, noise pinning {self.noise_pinning}"
+            )
+
         # Denoise values for DRIFT/BEND modes
         fresh_config = self.config.get('fresh_generation', {})
         denoising_config = fresh_config.get('denoising', {})
@@ -245,6 +264,9 @@ class AsyncGenerationOrchestrator:
         self.manual_bypass_mutation_interval = manual_bypass_config.get('mutation_interval', 5)
         self.manual_bypass_cache_interval = manual_bypass_config.get('cache_injection_interval', 25)
         self.manual_bypass_template_interval = manual_bypass_config.get('template_swap_interval', 75)
+        self.cache_injection_lockout_kf = int(
+            manual_bypass_config.get('cache_injection_lockout_after_swap', 96)
+        )
         
         if self.manual_bypass_enabled:
             logger.info("=" * 60)
@@ -357,10 +379,14 @@ class AsyncGenerationOrchestrator:
                 logger.info(f"  Components: {rs.prompt.components}")
                 logger.info(f"  Seed image: {self.current_image_path.name}")
                 logger.info("=" * 60)
+                if self.anchor_walking:
+                    self._set_anchor(self.current_image_path, new_era=True)
             elif self.fresh_buffer:
                 logger.info("Bootstrap: Getting initial frame from fresh buffer...")
                 bootstrap_frame = await self.fresh_buffer.select_and_consume()
                 self.current_image_path = bootstrap_frame.path
+                if self.anchor_walking:
+                    self._set_anchor(self.current_image_path, new_era=True)
 
                 # Switch prompt system to this template/components
                 self.prompt_manager.switch_template(
@@ -544,6 +570,38 @@ class AsyncGenerationOrchestrator:
         finally:
             self._checkpoint_in_flight = False
 
+    def _set_anchor(self, source_path: Path, new_era: bool = False) -> None:
+        """
+        Promote an image to be the era anchor. Copies it to a stable rotating
+        file (keyframe files get cleaned up behind the display cursor; the
+        anchor must outlive them). Never raises.
+        """
+        try:
+            if source_path is None or not Path(source_path).exists():
+                return
+            anchor_dir = self.buffer.keyframe_dir.parent / "anchor"
+            anchor_dir.mkdir(parents=True, exist_ok=True)
+            dest = anchor_dir / f"anchor_{self.current_keyframe_num:06d}_{int(time.time())}.png"
+            shutil.copy2(source_path, dest)
+            # Rotate: keep the last 2 (a queued job may still reference the old one)
+            if len(self._anchor_files) == self._anchor_files.maxlen:
+                old = self._anchor_files[0]
+                try:
+                    Path(old).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            self._anchor_files.append(dest)
+            self.anchor_path = dest
+            if new_era:
+                self.era_seed = random.randint(0, 2**32 - 1)
+            logger.info(
+                f"  [ANCHOR] {'New era anchor' if new_era else 'Re-anchored'}: "
+                f"{Path(source_path).name}"
+            )
+        except Exception:
+            logger.warning("Anchor promotion failed (continuing on old anchor)",
+                           exc_info=True)
+
     def _on_worker_task_done(self, name: str, task: "asyncio.Task") -> None:
         """Log loudly if a worker task dies with an exception (never raises)."""
         try:
@@ -686,6 +744,12 @@ class AsyncGenerationOrchestrator:
                 # Update current state
                 self.current_image_path = kf_path
                 self.current_keyframe_num = kf_num
+
+                # Anchor walking: a completed re-anchor keyframe becomes the
+                # new era anchor (the lineage advances one deliberate step)
+                if self.anchor_walking and self._pending_anchor_kf == kf_num:
+                    self._pending_anchor_kf = None
+                    self._set_anchor(kf_path)
 
                 # Mark task done
                 self.keyframe_worker.result_queue.task_done()
@@ -897,7 +961,8 @@ class AsyncGenerationOrchestrator:
                 generation_mode = "drift"
                 denoise = self.denoise_drift
                 negative_prompt = None
-                
+                mutation_fired = False
+
                 if self.use_combinatorial:
                     # === MANUAL BYPASS: Force mutation on interval ===
                     should_force_mutation_bypass = (
@@ -924,6 +989,7 @@ class AsyncGenerationOrchestrator:
                                 self.prompt_manager.get_current_components()
                             )
                         )
+                        mutation_fired = True
                         logger.info(f"  [MUTATION] Manual bypass forced mutation, entering BEND mode")
                     # Check if should mutate components (normal adaptive path)
                     elif self.prompt_manager.should_mutate():
@@ -936,10 +1002,26 @@ class AsyncGenerationOrchestrator:
                                 self.prompt_manager.get_current_components()
                             )
                         )
+                        mutation_fired = True
                         logger.info(f"  [MUTATION] Component mutated, entering BEND mode")
-                    
+
                     # Get mode and denoise
-                    if self.prompt_manager.is_in_bend_mode():
+                    if self.anchor_walking:
+                        # Anchor mode: bend denoise applies ONLY to the
+                        # re-anchor keyframe (generated FROM the anchor);
+                        # everything else drifts. bend_frames lingering is
+                        # replaced by the longer mutation interpolation.
+                        if mutation_fired:
+                            generation_mode = "bend"
+                            denoise = self.denoise_bend
+                            logger.info(
+                                f"  [BEND/ANCHOR] Re-anchor generation from anchor "
+                                f"(denoise {denoise:.2f})"
+                            )
+                        else:
+                            generation_mode = "drift"
+                            denoise = self.denoise_drift
+                    elif self.prompt_manager.is_in_bend_mode():
                         generation_mode = "bend"
                         denoise = self.denoise_bend
                         logger.info(f"  [BEND] Using high denoise ({denoise:.2f}) for prompt transition")
@@ -964,9 +1046,12 @@ class AsyncGenerationOrchestrator:
                 has_interp = (kf_num, next_kf) in self.buffer.registered_interp_pairs
                 
                 if not has_interp:
+                    n_interp = self.config['generation']['hybrid']['interpolation_frames']
+                    if self.anchor_walking and mutation_fired:
+                        # Re-anchor keyframes jump further; glide across them
+                        n_interp = self.mutation_interp_frames
                     interp_seqs = self.buffer.register_interpolations(
-                        kf_num, next_kf,
-                        self.config['generation']['hybrid']['interpolation_frames']
+                        kf_num, next_kf, n_interp
                     )
                     logger.info(f"  Pre-registered interpolations {kf_num}->{next_kf}: seq {interp_seqs[0]}-{interp_seqs[-1]}")
                 
@@ -984,16 +1069,31 @@ class AsyncGenerationOrchestrator:
                 # Mark as generating
                 self.buffer.mark_generating(next_seq)
                 
-                # Submit keyframe generation with denoising state
-                logger.info(f"  Submitting keyframe {next_kf} ({generation_mode.upper()}, denoise={denoise:.2f})")
+                # Submit keyframe generation with denoising state.
+                # Anchor mode: re-anchor keyframes generate FROM the era
+                # anchor (not the drifted current frame) — the lineage is
+                # anchor->anchor; drift is local and discarded.
+                init_image = kf_path
+                if (self.anchor_walking and mutation_fired
+                        and self.anchor_path is not None
+                        and self.anchor_path.exists()):
+                    init_image = self.anchor_path
+                    self._pending_anchor_kf = next_kf
+
+                logger.info(
+                    f"  Submitting keyframe {next_kf} ({generation_mode.upper()}, "
+                    f"denoise={denoise:.2f}"
+                    f"{', from ANCHOR' if init_image is not kf_path else ''})"
+                )
                 await self.keyframe_worker.submit_request(
-                    current_image=kf_path,
+                    current_image=init_image,
                     keyframe_num=next_kf,
                     sequence_num=next_seq,
                     prompt=next_prompt,
                     negative_prompt=negative_prompt,
                     denoise=denoise,
-                    generation_mode=generation_mode
+                    generation_mode=generation_mode,
+                    seed=self.era_seed if (self.anchor_walking and self.noise_pinning) else None,
                 )
                 
                 # === PERIODIC STATS (every 10 keyframes) ===
@@ -1124,8 +1224,17 @@ class AsyncGenerationOrchestrator:
             
             # Check cache injection (medium intervention)
             if kf_num > 0 and kf_num % self.manual_bypass_cache_interval == 0:
+                # Post-swap lockout: give a fresh era time to accumulate its
+                # own cache before injections can wash it back into the
+                # previous era's restored archive
+                kf_into_era = kf_num % self.manual_bypass_template_interval
+                if 0 < kf_into_era < self.cache_injection_lockout_kf:
+                    logger.debug(
+                        f"[MANUAL_BYPASS] Cache injection locked out "
+                        f"({kf_into_era}/{self.cache_injection_lockout_kf} kf into era)"
+                    )
                 # Only if cache has frames
-                if self.cache.size() > 0:
+                elif self.cache.size() > 0:
                     logger.info(
                         f"[MANUAL_BYPASS] Frame {kf_num} triggers CACHE INJECTION "
                         f"(% {self.manual_bypass_cache_interval} == 0)"
@@ -1356,6 +1465,10 @@ class AsyncGenerationOrchestrator:
                     except Exception as e:
                         logger.error(f"Failed to encode seed keyframe: {e}")
 
+                    # Template swap = hard era boundary: new anchor, new noise
+                    if self.anchor_walking:
+                        self._set_anchor(target_path, new_era=True)
+
                     # Submit to cache analysis (seeds are always diverse)
                     await self.cache_worker.submit_frame(
                         frame_path=target_path,
@@ -1416,6 +1529,11 @@ class AsyncGenerationOrchestrator:
                         logger.debug(f"  Encoded dissimilar keyframe {keyframe_num} to latent")
                     except Exception as e:
                         logger.error(f"Failed to encode dissimilar keyframe: {e}")
+
+                    # Cache injection = recalled memory becomes the new anchor
+                    # (durable influence, not a nudge the chain forgets)
+                    if self.anchor_walking:
+                        self._set_anchor(target_path)
 
                     # Submit to cache analysis (for diversity tracking)
                     await self.cache_worker.submit_frame(

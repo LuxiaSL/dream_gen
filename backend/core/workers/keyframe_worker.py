@@ -133,7 +133,8 @@ class KeyframeWorker:
         prompt: str,
         negative_prompt: Optional[str] = None,
         denoise: Optional[float] = None,
-        generation_mode: str = "drift"
+        generation_mode: str = "drift",
+        seed: Optional[int] = None,
     ) -> None:
         """
         Submit a keyframe generation request
@@ -157,7 +158,8 @@ class KeyframeWorker:
             'prompt': prompt,
             'negative_prompt': negative_prompt,
             'denoise': denoise,
-            'generation_mode': generation_mode
+            'generation_mode': generation_mode,
+            'seed': seed,  # noise pinning (None = random per generation)
         }
         
         # This will block if queue is full (backpressure)
@@ -243,7 +245,8 @@ class KeyframeWorker:
                                     image_path=current_image,
                                     prompt=prompt,
                                     negative_prompt=negative_prompt,
-                                    denoise=denoise
+                                    denoise=denoise,
+                                    seed=request.get('seed'),
                                 ),
                                 timeout=generation_timeout
                             )
