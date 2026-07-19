@@ -249,13 +249,7 @@ class CacheAnalysisWorker:
         """
         self.running = True
         logger.info("CacheAnalysisWorker started")
-        
-        # Start background monitoring (Phase 2 hook - currently no-op)
-        if self.monitoring_enabled:
-            self.monitoring_task = asyncio.create_task(
-                self._background_monitoring_loop()
-            )
-        
+
         while self.running:
             try:
                 # Get next frame (with timeout to allow checking running flag)
@@ -289,18 +283,16 @@ class CacheAnalysisWorker:
                         self.frames_skipped += 1
                     
                     self.frames_analyzed += 1
-                    
-                    # Log diversity stats periodically
-                    if self.config.get('generation', {}).get('cache', {}).get(
-                        'log_diversity_stats', True
-                    ):
-                        diversity_interval = self.config.get('generation', {}).get(
-                            'cache', {}
-                        ).get('diversity_check_interval', 10)
-                        
-                        if self.cache.size() % diversity_interval == 0:
-                            await self._log_diversity_stats()
-                
+
+                    # Heartbeat so cache health is visible in logs (the cache
+                    # was silently dead for two months once; never again)
+                    if self.frames_analyzed % 100 == 0:
+                        logger.info(
+                            f"[CACHE_HEALTH] analyzed={self.frames_analyzed} "
+                            f"cached={self.frames_cached} size={self.cache.size()} "
+                            f"queue={self.analysis_queue.qsize()}"
+                        )
+
                 except Exception as e:
                     logger.error(
                         f"Error analyzing frame {frame['path'].name}: {e}",
@@ -318,15 +310,7 @@ class CacheAnalysisWorker:
             except Exception as e:
                 logger.error(f"Error in cache analysis worker loop: {e}", exc_info=True)
                 await asyncio.sleep(1.0)  # Back off on error
-        
-        # Cancel monitoring task if running
-        if self.monitoring_task and not self.monitoring_task.done():
-            self.monitoring_task.cancel()
-            try:
-                await self.monitoring_task
-            except asyncio.CancelledError:
-                pass
-        
+
         logger.info("CacheAnalysisWorker stopped")
     
     def stop(self) -> None:
@@ -357,6 +341,5 @@ class CacheAnalysisWorker:
             'queue_depth': self.analysis_queue.qsize(),
             'is_processing': self.processing,
             'is_running': self.running,
-            'monitoring_enabled': self.monitoring_enabled
         }
 

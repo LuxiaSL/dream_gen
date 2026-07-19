@@ -301,7 +301,19 @@ class AsyncGenerationOrchestrator:
             self.keyframe_task = asyncio.create_task(self.keyframe_worker.run())
             self.interpolation_task = asyncio.create_task(self.interpolation_worker.run())
             self.cache_task = asyncio.create_task(self.cache_worker.run())
-            
+
+            # A worker task that dies is otherwise silent (nothing awaits
+            # them) — the cache worker starved the cache for two months this
+            # way. Scream on unexpected death.
+            for _name, _task in (
+                ("keyframe", self.keyframe_task),
+                ("interpolation", self.interpolation_task),
+                ("cache", self.cache_task),
+            ):
+                _task.add_done_callback(
+                    lambda t, name=_name: self._on_worker_task_done(name, t)
+                )
+
             logger.info("[OK] All workers started")
             
             # === FRESH FRAME BUFFER POPULATION ===
@@ -527,6 +539,20 @@ class AsyncGenerationOrchestrator:
             logger.debug("Resume checkpoint failed", exc_info=True)
         finally:
             self._checkpoint_in_flight = False
+
+    def _on_worker_task_done(self, name: str, task: "asyncio.Task") -> None:
+        """Log loudly if a worker task dies with an exception (never raises)."""
+        try:
+            if task.cancelled():
+                return
+            exc = task.exception()
+            if exc is not None:
+                logger.error(
+                    f"[WORKER DEATH] {name} worker task died: {exc!r}",
+                    exc_info=exc,
+                )
+        except Exception:
+            pass
 
     def _chronicle_note(self, kf_num: int, kind: str, detail: str = "") -> None:
         """
