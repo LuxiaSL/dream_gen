@@ -101,6 +101,17 @@ class InterpolationWorker:
         # GPU slerp mode: run spherical lerp on GPU instead of CPU thread pool
         # This reduces context switching overhead on cloud GPUs with headroom
         self.gpu_slerp = config.get('generation', {}).get('hybrid', {}).get('gpu_slerp', False)
+
+        # Display the end keyframe as its VAE round-trip (decode(encode(kf)))
+        # so it matches the interpolation frames around it. The raw keyframe
+        # is the only frame that skips the VAE round-trip; displayed raw, it
+        # pops ~7.5x the baseline frame delta (sharper/contrastier for one
+        # frame). Display-only: the raw file on disk still feeds img2img,
+        # cache, and chronicle.
+        self.keyframe_display_roundtrip = (
+            config.get('generation', {}).get('hybrid', {})
+            .get('keyframe_display_roundtrip', True)
+        )
         
         # Statistics
         self.pairs_processed = 0
@@ -184,6 +195,28 @@ class InterpolationWorker:
             logger.error(f"Failed to encode keyframe {kf_num}: {e}", exc_info=True)
             return None
     
+    def _assign_keyframe_display_image(self, kf_num: int, image) -> None:
+        """
+        Replace the keyframe's DISPLAY image with its VAE round-trip so it
+        matches the interpolation frames on both sides (kills the per-keyframe
+        sharpness pop). Never touches the file on disk — img2img chaining,
+        cache, and chronicle all keep reading the raw keyframe.
+
+        Never raises: on any failure the keyframe simply displays raw
+        (pre-fix behavior).
+        """
+        try:
+            seq = self.frame_buffer.get_keyframe_sequence_num(kf_num)
+            if seq is None:
+                return
+            spec = self.frame_buffer.frames.get(seq)
+            if spec is None or spec.state in (FrameState.DISPLAYED, FrameState.FAILED):
+                return
+            spec.image = image
+            logger.debug(f"KF{kf_num} display image set to VAE round-trip")
+        except Exception as e:
+            logger.debug(f"Keyframe round-trip assignment failed for KF{kf_num}: {e}")
+
     async def _generate_interpolations(
         self,
         start_kf_num: int,
@@ -296,7 +329,16 @@ class InterpolationWorker:
         
         # Extract just the latents for batch decode
         latent_list = [latent for latent, _, _ in latents_and_specs]
-        
+
+        # Append the end keyframe's latent so its round-trip decode rides the
+        # same batch (~free 21st decode). Assigned to the keyframe's display
+        # image after decode — see _assign_keyframe_display_image.
+        include_kf_roundtrip = (
+            self.keyframe_display_roundtrip and len(latent_list) > 0
+        )
+        if include_kf_roundtrip:
+            latent_list.append(end_latent)
+
         try:
             # Single GPU call to decode all latents at once!
             # In cloud mode, return numpy arrays (skip PIL — saves ~120ms per batch)
@@ -304,7 +346,13 @@ class InterpolationWorker:
             images = await self.vae_access.decode_batch_async(
                 latent_list, upscale_to_target=True, return_numpy=cloud_mode
             )
-            
+
+            # Peel off the keyframe round-trip (last image) before pairing;
+            # only trust it if the batch came back complete.
+            if include_kf_roundtrip and len(images) == len(latent_list):
+                self._assign_keyframe_display_image(end_kf_num, images[-1])
+                images = images[:-1]
+
             # Pair images back with their frame specs
             decoded_images = []
             for i, (image, (_, frame_spec, sequence_num)) in enumerate(zip(images, latents_and_specs)):
