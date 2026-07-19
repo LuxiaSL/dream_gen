@@ -57,6 +57,7 @@ def unit(seed: int) -> np.ndarray:
 
 CONFIG = {"generation": {"cache": {"latent_admission": {
     "enabled": True, "min_dist": 0.10, "min_interval_kf": 5,
+    "min_interval_s": 0.0,  # wall floor off: tests admit in rapid succession
     "latent_wait_s": 0.5}}}}
 
 
@@ -136,3 +137,20 @@ async def test_disabled_admission_admits_everything(frame):
     a = unit(1)
     assert await _try_admit(w, frame, 1, a) is True
     assert await _try_admit(w, frame, 2, a) is True  # identical, still in
+
+
+async def test_wall_clock_floor_covers_kfless_submissions(frame):
+    """A submission without keyframe_num cannot bypass admission — the
+    wall-clock floor rejects it (the injection double-cache bug)."""
+    cfg = {"generation": {"cache": {"latent_admission": {
+        "enabled": True, "min_dist": 0.10, "min_interval_kf": 5,
+        "min_interval_s": 60.0, "latent_wait_s": 0.1}}}}
+    w = CacheAnalysisWorker(StubCache(), StubSim(), config=cfg)
+
+    assert await _try_admit(w, frame, 10, unit(1)) is True
+    w._last_admission_ts = __import__("asyncio").get_event_loop().time()
+    # kf-less, latent-less submission right after -> time floor rejects
+    ok, _ = await w._analyze_frame_diversity(
+        {"path": frame, "metadata": {}, "latent_vec": None})
+    assert ok is False
+    assert w.frames_rejected_floor >= 1

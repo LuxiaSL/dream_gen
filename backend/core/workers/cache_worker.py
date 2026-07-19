@@ -108,11 +108,13 @@ class CacheAnalysisWorker:
         self.admission_enabled = bool(la.get('enabled', True))
         self.admission_min_dist = float(la.get('min_dist', 0.10))
         self.admission_min_interval_kf = int(la.get('min_interval_kf', 12))
+        self.admission_min_interval_s = float(la.get('min_interval_s', 8.0))
         self.admission_latent_wait_s = float(la.get('latent_wait_s', 4.0))
         # kf_num -> Optional[np.ndarray]; wired by the orchestrator to the
         # interpolation worker's pooled-latent stash
         self.latent_provider = None
         self._last_admitted_kf: 'int | None' = None
+        self._last_admission_ts: float = 0.0
 
         # Statistics
         self.frames_analyzed = 0
@@ -195,18 +197,27 @@ class CacheAnalysisWorker:
             # === 1. Temporal floor (metric-free flood-stop) ===
             # Applies before any encoding: at most one admission per
             # min_interval_kf keyframes, no matter what the metrics say.
-            if (
-                self.admission_enabled
-                and kf_num is not None
-                and self._last_admitted_kf is not None
-                and 0 <= kf_num - self._last_admitted_kf < self.admission_min_interval_kf
-            ):
-                self.frames_rejected_floor += 1
-                logger.debug(
-                    f"Admission floor: {frame_path.name} "
-                    f"(kf {kf_num}, last admitted {self._last_admitted_kf})"
+            # The wall-clock floor also covers submissions without a
+            # keyframe_num — nothing bypasses admission entirely.
+            if self.admission_enabled:
+                kf_floor_hit = (
+                    kf_num is not None
+                    and self._last_admitted_kf is not None
+                    and 0 <= kf_num - self._last_admitted_kf < self.admission_min_interval_kf
                 )
-                return False, None
+                time_floor_hit = (
+                    self._last_admission_ts > 0
+                    and asyncio.get_event_loop().time() - self._last_admission_ts
+                    < self.admission_min_interval_s
+                )
+                if kf_floor_hit or time_floor_hit:
+                    self.frames_rejected_floor += 1
+                    logger.debug(
+                        f"Admission floor: {frame_path.name} "
+                        f"(kf {kf_num}, last admitted {self._last_admitted_kf}, "
+                        f"{'kf' if kf_floor_hit else 'time'} floor)"
+                    )
+                    return False, None
 
             # Encode image with dual-metric similarity system
             # Run in executor to avoid blocking event loop
@@ -370,6 +381,7 @@ class CacheAnalysisWorker:
 
                         if success:
                             self.frames_cached += 1
+                            self._last_admission_ts = asyncio.get_event_loop().time()
                             kf = frame.get('metadata', {}).get('keyframe_num')
                             if kf is not None:
                                 self._last_admitted_kf = kf

@@ -1402,16 +1402,27 @@ class AsyncGenerationOrchestrator:
                         )
                         self.interpolation_worker.keyframe_latents[keyframe_num] = latent
                         self.interpolation_worker.keyframe_paths[keyframe_num] = target_path
-                        
+
+                        # Stash pooled embedding (this direct path bypasses
+                        # _encode_keyframe, which normally does it)
+                        try:
+                            from cache.latent_pool import pool_latent
+                            vec = pool_latent(latent)
+                            if vec is not None:
+                                self.interpolation_worker.keyframe_pooled[keyframe_num] = vec
+                        except Exception:
+                            pass
+
                         logger.debug(f"  Encoded dissimilar keyframe {keyframe_num} to latent")
                     except Exception as e:
                         logger.error(f"Failed to encode dissimilar keyframe: {e}")
-                    
+
                     # Submit to cache analysis (for diversity tracking)
                     await self.cache_worker.submit_frame(
                         frame_path=target_path,
                         prompt='cache_injection',
-                        metadata={'denoise': 0.0, 'type': 'cache_injection', 'injection': True}
+                        metadata={'denoise': 0.0, 'type': 'cache_injection', 'injection': True,
+                                  'keyframe_num': keyframe_num}
                     )
                     
                     injection_time = time.time() - start_time
