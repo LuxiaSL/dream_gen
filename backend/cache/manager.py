@@ -112,6 +112,15 @@ class CacheManager:
         self.config = config  # Store full config for diversity checks
         self.cache_dir = Path(config["system"]["cache_dir"])
         self.max_size = config["generation"]["cache"]["max_size"]
+
+        # Self-regulation (2026-07-19): with a functional distance metric
+        # (cache/latent_pool.py) the cache maintains its own diversity —
+        # eviction removes the older member of the closest latent pair
+        # (redundancy), and entries can expire (TTL) so the cache tracks
+        # recent history instead of fossilizing.
+        sr = config.get("generation", {}).get("cache", {}).get("self_regulation", {})
+        self.eviction_policy = sr.get("eviction", "redundancy")  # "redundancy" | "lru"
+        self.entry_ttl_minutes = float(sr.get("entry_ttl_minutes", 0))  # 0 = never expire
         
         # Active cache directories (where current template's frames live)
         self.active_dir = self.cache_dir / "active"
@@ -172,6 +181,7 @@ class CacheManager:
                     logger.warning(f"Cache image missing: {entry.cache_id}")
 
             logger.info(f"Loaded {len(self.entries)} cache entries")
+            self._sweep_orphan_files()
 
         except Exception as e:
             logger.error(f"Failed to load cache: {e}", exc_info=True)
@@ -378,6 +388,7 @@ class CacheManager:
         self.entries[cache_id] = entry
 
         # Enforce max size
+        self._sweep_expired()
         self._enforce_max_size()
 
         # Save cache
@@ -386,37 +397,110 @@ class CacheManager:
         logger.info(f"Added to cache: {cache_id} (total: {len(self.entries)})")
         return cache_id
 
+    def _remove_entry(self, cache_id: str, reason: str = "") -> None:
+        """Remove an entry AND its image file (the only sanctioned removal
+        path — entries.clear() without this leaks files on disk)."""
+        entry = self.entries.pop(cache_id, None)
+        if entry is None:
+            return
+        try:
+            if entry.image_path.exists():
+                entry.image_path.unlink()
+        except Exception as e:
+            logger.warning(f"Failed to delete cached image {cache_id}: {e}")
+        logger.debug(f"Removed from cache: {cache_id} ({reason})")
+
+    def _pick_eviction_victim(self) -> Optional[str]:
+        """
+        Redundancy eviction: the cache should converge toward a maximally
+        spread set. Latent-less entries go first (their diversity is
+        unverifiable); otherwise evict the OLDER member of the closest
+        latent pair — removes redundancy, keeps novelty.
+        """
+        if not self.entries:
+            return None
+
+        no_latent = [
+            (cid, e) for cid, e in self.entries.items()
+            if not (isinstance(e.embedding, dict) and e.embedding.get("latent"))
+        ]
+        if no_latent:
+            return min(no_latent, key=lambda x: x[1].timestamp)[0]
+
+        try:
+            import numpy as np
+            ids = list(self.entries)
+            vecs = np.array(
+                [self.entries[c].embedding["latent"] for c in ids],
+                dtype=np.float32,
+            )
+            vecs /= np.linalg.norm(vecs, axis=1, keepdims=True) + 1e-8
+            sims = vecs @ vecs.T
+            np.fill_diagonal(sims, -2.0)
+            i, j = divmod(int(sims.argmax()), len(ids))
+            a, b = ids[i], ids[j]
+            return a if self.entries[a].timestamp <= self.entries[b].timestamp else b
+        except Exception:
+            logger.debug("Redundancy victim selection failed; falling back to LRU",
+                         exc_info=True)
+            return min(self.entries.items(), key=lambda x: x[1].timestamp)[0]
+
+    def _sweep_expired(self) -> None:
+        """Drop entries older than entry_ttl_minutes (0 = disabled)."""
+        if self.entry_ttl_minutes <= 0 or not self.entries:
+            return
+        now = datetime.now()
+        expired = []
+        for cid, entry in self.entries.items():
+            try:
+                age_min = (now - datetime.fromisoformat(entry.timestamp)).total_seconds() / 60
+                if age_min > self.entry_ttl_minutes:
+                    expired.append(cid)
+            except Exception:
+                continue
+        for cid in expired:
+            self._remove_entry(cid, reason="ttl expired")
+        if expired:
+            logger.info(f"Cache TTL sweep: {len(expired)} entries expired "
+                        f"(>{self.entry_ttl_minutes:.0f}min)")
+
+    def _sweep_orphan_files(self) -> None:
+        """Delete image files not referenced by any entry (crash windows and
+        historical clear-without-delete paths leaked these)."""
+        try:
+            referenced = {e.image_path.name for e in self.entries.values()}
+            removed = 0
+            for f in self.image_dir.glob("*.png"):
+                if f.name not in referenced:
+                    try:
+                        f.unlink()
+                        removed += 1
+                    except OSError:
+                        pass
+            if removed:
+                logger.info(f"Cache orphan sweep: removed {removed} unreferenced files")
+        except Exception:
+            logger.debug("Orphan sweep failed", exc_info=True)
+
     def _enforce_max_size(self) -> None:
         """
-        Remove oldest entries if cache exceeds max size
-        
-        Uses LRU (Least Recently Used) eviction strategy
+        Remove entries if cache exceeds max size.
+
+        Policy "redundancy" (default): evict the older member of the closest
+        latent pair. Policy "lru": oldest first.
         """
         if len(self.entries) <= self.max_size:
             return
 
-        # Sort by timestamp (oldest first)
-        sorted_entries = sorted(
-            self.entries.items(), key=lambda x: x[1].timestamp
-        )
-
-        # Remove oldest
         to_remove = len(self.entries) - self.max_size
-
-        for i in range(to_remove):
-            cache_id, entry = sorted_entries[i]
-
-            # Delete image file
-            try:
-                if entry.image_path.exists():
-                    entry.image_path.unlink()
-            except Exception as e:
-                logger.warning(f"Failed to delete cached image: {e}")
-
-            # Remove from entries
-            del self.entries[cache_id]
-
-            logger.debug(f"Evicted from cache: {cache_id}")
+        for _ in range(to_remove):
+            if self.eviction_policy == "redundancy":
+                victim = self._pick_eviction_victim()
+            else:
+                victim = min(self.entries.items(), key=lambda x: x[1].timestamp)[0]
+            if victim is None:
+                break
+            self._remove_entry(victim, reason=f"eviction ({self.eviction_policy})")
 
         logger.info(f"Cache size enforced: {len(self.entries)}/{self.max_size}")
 
@@ -811,8 +895,10 @@ class CacheManager:
             restored = self.restore_archived(new_template_id)
             result["restored"] = restored
         else:
-            # Start fresh for new template
-            self.entries.clear()
+            # Start fresh for new template — delete files too, or they leak
+            # (this branch orphaned every un-archived clear's images)
+            for cid in list(self.entries):
+                self._remove_entry(cid, reason="template fresh start")
             # Save empty cache state
             self.save_cache()
         
