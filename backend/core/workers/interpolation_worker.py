@@ -94,6 +94,12 @@ class InterpolationWorker:
         # Latent cache (avoid re-encoding keyframes)
         self.keyframe_latents: Dict[int, torch.Tensor] = {}
         self.keyframe_paths: Dict[int, Path] = {}
+
+        # Pooled latent embeddings (128-dim, ~512B each) — kept far longer
+        # than full latents; consumed by cache admission, injection selection,
+        # and the chronicle (see cache/latent_pool.py)
+        self.keyframe_pooled: Dict[int, 'np.ndarray'] = {}
+        self.keyframe_pooled_keep = 300
         
         # Slerp precomputed parameters cache
         self.slerp_precomputed: Dict[Tuple[int, int], Dict] = {}
@@ -186,9 +192,23 @@ class InterpolationWorker:
             # Cache for reuse
             self.keyframe_latents[kf_num] = latent
             self.keyframe_paths[kf_num] = kf_path
-            
+
+            # Stash the pooled embedding (never raises, returns None on fail)
+            try:
+                from cache.latent_pool import pool_latent
+                vec = pool_latent(latent)
+                if vec is not None:
+                    self.keyframe_pooled[kf_num] = vec
+                    if len(self.keyframe_pooled) > self.keyframe_pooled_keep:
+                        for old in sorted(self.keyframe_pooled)[
+                            : len(self.keyframe_pooled) - self.keyframe_pooled_keep
+                        ]:
+                            del self.keyframe_pooled[old]
+            except Exception:
+                logger.debug(f"Pooled embedding failed for KF{kf_num}", exc_info=True)
+
             logger.debug(f"Encoded and cached KF{kf_num}")
-            
+
             return latent
             
         except Exception as e:
@@ -512,6 +532,19 @@ class InterpolationWorker:
                 # Submit to cache worker (will handle encoding & selective caching)
                 # In cloud mode, midpoint may not have a file_path (in-memory only)
                 if self.cache_worker and midpoint_frame.file_path:
+                    # Pool the midpoint's own latent so admission can gate it
+                    midpoint_vec = None
+                    try:
+                        from cache.latent_pool import pool_latent
+                        mid_latent = next(
+                            (lat for lat, _, seq in latents_and_specs
+                             if seq == midpoint_sequence),
+                            None,
+                        )
+                        if mid_latent is not None:
+                            midpoint_vec = pool_latent(mid_latent)
+                    except Exception:
+                        pass
                     await self.cache_worker.submit_frame(
                         frame_path=midpoint_frame.file_path,
                         prompt=f"interpolation_{start_kf_num}_{end_kf_num}_t0.5",
@@ -519,8 +552,10 @@ class InterpolationWorker:
                             'type': 'interpolation_midpoint',
                             'start_kf': start_kf_num,
                             'end_kf': end_kf_num,
+                            'keyframe_num': end_kf_num,
                             't': midpoint_frame.interpolation_t
-                        }
+                        },
+                        latent_vec=midpoint_vec,
                     )
             except Exception as e:
                 logger.debug(f"Interpolation midpoint cache submission failed: {e}")

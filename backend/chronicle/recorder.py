@@ -72,6 +72,12 @@ class ChronicleRecorder:
         self.epoch_offset: int = 0
         self.resumed_from: Optional[str] = None
 
+        # Pooled-latent embeddings (cache/latent_pool.py), set by
+        # DreamController: kf_num -> Optional[np.ndarray]. Records are
+        # enriched at flush time — by then (>=5s after creation) the
+        # interpolation worker has encoded the keyframe's latent.
+        self.latent_provider = None
+
         # Embedding encoders (numpy/PIL only - cheap, no GPU)
         self._color = ColorHistogramEncoder()
         self._phash = PHashEncoder()
@@ -323,6 +329,15 @@ class ChronicleRecorder:
     async def _flush(self) -> None:
         if not self._pending:
             return
+        if self.latent_provider is not None:
+            for rec in self._pending:
+                if rec.latent_pool is None:
+                    try:
+                        vec = self.latent_provider(rec.keyframe)
+                        if vec is not None:
+                            rec.latent_pool = [round(float(x), 4) for x in vec]
+                    except Exception:
+                        pass
         batch = ChronicleBatch(records=self._pending)
         self._pending = []
         self._last_flush = time.time()

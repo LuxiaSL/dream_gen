@@ -135,6 +135,10 @@ class AsyncGenerationOrchestrator:
         
         # Pass cache_worker to interpolation worker for midpoint caching
         self.interpolation_worker.cache_worker = self.cache_worker
+
+        # Latent-gated admission: cache worker reads pooled embeddings from
+        # the interpolation worker's stash (cache/latent_pool.py)
+        self.cache_worker.latent_provider = self.interpolation_worker.keyframe_pooled.get
         
         # === Initialize Injection Components ===
         # These stay in orchestrator (inline decisions)
@@ -800,7 +804,8 @@ class AsyncGenerationOrchestrator:
                 await self.cache_worker.submit_frame(
                     frame_path=kf_path,
                     prompt=prompt,
-                    metadata={'denoise': gen_time, 'type': 'keyframe'}
+                    metadata={'denoise': gen_time, 'type': 'keyframe',
+                              'keyframe_num': kf_num}
                 )
                 
                 # === 6. Decide Next Keyframe (with injection logic) ===
@@ -1336,16 +1341,27 @@ class AsyncGenerationOrchestrator:
                         )
                         self.interpolation_worker.keyframe_latents[keyframe_num] = latent
                         self.interpolation_worker.keyframe_paths[keyframe_num] = target_path
-                        
+
+                        # Stash pooled embedding (normally done in
+                        # _encode_keyframe, which this direct path bypasses)
+                        try:
+                            from cache.latent_pool import pool_latent
+                            vec = pool_latent(latent)
+                            if vec is not None:
+                                self.interpolation_worker.keyframe_pooled[keyframe_num] = vec
+                        except Exception:
+                            pass
+
                         logger.debug(f"  Encoded seed keyframe {keyframe_num} to latent")
                     except Exception as e:
                         logger.error(f"Failed to encode seed keyframe: {e}")
-                    
+
                     # Submit to cache analysis (seeds are always diverse)
                     await self.cache_worker.submit_frame(
                         frame_path=target_path,
                         prompt=metadata.get('prompt', 'seed_injection'),
-                        metadata={'denoise': 0.0, 'type': metadata['type'], 'injection': True}
+                        metadata={'denoise': 0.0, 'type': metadata['type'], 'injection': True,
+                                  'keyframe_num': keyframe_num}
                     )
                     
                     injection_time = time.time() - start_time
@@ -1364,6 +1380,9 @@ class AsyncGenerationOrchestrator:
                 result = await self.injection_strategy.inject_dissimilar_keyframe(
                     current_image_path=current_path,
                     target_keyframe_num=keyframe_num,
+                    current_latent_vec=self.interpolation_worker.keyframe_pooled.get(
+                        self.current_keyframe_num
+                    ),
                 )
 
                 if result:

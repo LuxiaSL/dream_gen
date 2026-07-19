@@ -174,10 +174,15 @@ class DualMetricSimilarityManager:
         Returns:
             JSON-serializable dictionary
         """
-        return {
+        serialized = {
             'color': self.color_encoder.to_serializable(embedding['color']),
             'struct': embedding['struct']  # Already a string
         }
+        # Pooled latent (cache/latent_pool.py) rides along when present
+        if embedding.get('latent') is not None:
+            lat = embedding['latent']
+            serialized['latent'] = [float(x) for x in lat]
+        return serialized
     
     def from_serializable(self, serialized: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -189,8 +194,11 @@ class DualMetricSimilarityManager:
         Returns:
             Dual embedding
         """
-        return {
+        embedding = {
             'color': self.color_encoder.from_serializable(serialized['color']),
             'struct': serialized['struct']  # Already a string
         }
+        if serialized.get('latent') is not None:
+            embedding['latent'] = serialized['latent']  # list of floats
+        return embedding
 

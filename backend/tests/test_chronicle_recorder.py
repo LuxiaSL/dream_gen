@@ -289,6 +289,46 @@ async def test_fresh_session_lifetime_equals_local(keyframe_png):
     await rec.close()
 
 
+async def test_latent_pool_enrichment_at_flush(keyframe_png):
+    """Records gain latent_pool from the provider at flush time, rounded 4dp;
+    keyframes the provider doesn't know stay None."""
+    import numpy as np
+
+    ws = FakeWSClient()
+    rec = ChronicleRecorder(ws, make_config())
+    pooled = {1: np.array([0.123456, -0.654321], dtype=np.float32)}
+    rec.latent_provider = pooled.get
+
+    await rec.on_keyframe(keyframe_num=1, sequence_num=1, prompt="p",
+                          events=[], image_path=keyframe_png)
+    await rec.on_keyframe(keyframe_num=2, sequence_num=2, prompt="p",
+                          events=[], image_path=keyframe_png)
+    await drain(rec)
+    await rec._flush()
+
+    records = {r.keyframe: r for r in ws.batches()[0].records}
+    assert records[1].latent_pool == [0.1235, -0.6543]
+    assert records[2].latent_pool is None
+
+    await rec.close()
+
+
+async def test_broken_latent_provider_never_raises(keyframe_png):
+    ws = FakeWSClient()
+    rec = ChronicleRecorder(ws, make_config())
+    rec.latent_provider = lambda kf: (_ for _ in ()).throw(RuntimeError("boom"))
+
+    await rec.on_keyframe(keyframe_num=1, sequence_num=1, prompt="p",
+                          events=[], image_path=keyframe_png)
+    await drain(rec)
+    await rec._flush()
+
+    r = ws.batches()[0].records[0]
+    assert r.latent_pool is None and r.prompt == "p"
+
+    await rec.close()
+
+
 async def test_close_flushes_remaining(keyframe_png):
     ws = FakeWSClient()
     rec = ChronicleRecorder(ws, make_config(flush_interval_s=9999,

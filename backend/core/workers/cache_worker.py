@@ -91,39 +91,66 @@ class CacheAnalysisWorker:
         self.cache = cache
         self.similarity_manager = similarity_manager
         self.config = config
-        
+
         # Queue
         self.analysis_queue = asyncio.Queue(maxsize=max_queue_size)
-        
+
         # State
         self.running = False
         self.processing = False
-        
+
+        # Latent-gated admission (cache/latent_pool.py). The metric audit
+        # showed colorhist/phash can't rank within-motif difference, so the
+        # cache flooded with near-copies and injection became self-reinforcing.
+        # Admission now requires a minimum pooled-latent cosine distance to
+        # the nearest existing entry, plus a metric-free temporal floor.
+        la = config.get('generation', {}).get('cache', {}).get('latent_admission', {})
+        self.admission_enabled = bool(la.get('enabled', True))
+        self.admission_min_dist = float(la.get('min_dist', 0.10))
+        self.admission_min_interval_kf = int(la.get('min_interval_kf', 12))
+        self.admission_latent_wait_s = float(la.get('latent_wait_s', 4.0))
+        # kf_num -> Optional[np.ndarray]; wired by the orchestrator to the
+        # interpolation worker's pooled-latent stash
+        self.latent_provider = None
+        self._last_admitted_kf: 'int | None' = None
+
         # Statistics
         self.frames_analyzed = 0
         self.frames_cached = 0
         self.frames_skipped = 0
-        
-        logger.info(f"CacheAnalysisWorker initialized (max queue: {max_queue_size})")
+        self.frames_rejected_floor = 0
+        self.frames_rejected_similar = 0
+
+        logger.info(
+            f"CacheAnalysisWorker initialized (max queue: {max_queue_size}, "
+            f"latent admission: {'on' if self.admission_enabled else 'off'}, "
+            f"min_dist={self.admission_min_dist}, "
+            f"min_interval={self.admission_min_interval_kf}kf)"
+        )
     
     async def submit_frame(
         self,
         frame_path: Path,
         prompt: str,
-        metadata: Dict[str, Any]
+        metadata: Dict[str, Any],
+        latent_vec=None,
     ) -> None:
         """
         Submit a frame for cache analysis
-        
+
         Args:
             frame_path: Path to frame image
             prompt: Generation prompt used
-            metadata: Additional metadata (denoise, type, etc.)
+            metadata: Additional metadata (denoise, type, keyframe_num, etc.)
+            latent_vec: Optional pre-pooled latent embedding (np.ndarray).
+                        If absent, the worker asks latent_provider by
+                        metadata['keyframe_num'].
         """
         frame = {
             'path': frame_path,
             'prompt': prompt,
-            'metadata': metadata
+            'metadata': metadata,
+            'latent_vec': latent_vec,
         }
         
         # Check for queue backlog (skip if falling behind)
@@ -162,8 +189,25 @@ class CacheAnalysisWorker:
             Tuple of (should_cache, embedding)
         """
         frame_path = frame['path']
-        
+        kf_num = frame.get('metadata', {}).get('keyframe_num')
+
         try:
+            # === 1. Temporal floor (metric-free flood-stop) ===
+            # Applies before any encoding: at most one admission per
+            # min_interval_kf keyframes, no matter what the metrics say.
+            if (
+                self.admission_enabled
+                and kf_num is not None
+                and self._last_admitted_kf is not None
+                and 0 <= kf_num - self._last_admitted_kf < self.admission_min_interval_kf
+            ):
+                self.frames_rejected_floor += 1
+                logger.debug(
+                    f"Admission floor: {frame_path.name} "
+                    f"(kf {kf_num}, last admitted {self._last_admitted_kf})"
+                )
+                return False, None
+
             # Encode image with dual-metric similarity system
             # Run in executor to avoid blocking event loop
             loop = asyncio.get_event_loop()
@@ -172,23 +216,73 @@ class CacheAnalysisWorker:
                 self.similarity_manager.encode_image,
                 frame_path
             )
-            
+
             if embedding is None:
                 logger.warning(f"Failed to encode frame: {frame_path.name}")
                 return False, None
-            
-            # Check if should cache (selective caching for diversity)
-            population_mode = self.config.get('generation', {}).get('cache', {}).get(
-                'population_mode', 'selective'
-            )
-            
-            should_cache = True
-            
-            return should_cache, embedding
-            
+
+            # === 2. Latent distance gate ===
+            latent_vec = frame.get('latent_vec')
+            if latent_vec is None:
+                latent_vec = await self._await_latent(kf_num)
+
+            if latent_vec is not None:
+                embedding['latent'] = latent_vec
+                if self.admission_enabled:
+                    min_dist = self._min_dist_to_cache(latent_vec)
+                    if min_dist is not None and min_dist < self.admission_min_dist:
+                        self.frames_rejected_similar += 1
+                        logger.debug(
+                            f"Admission rejected {frame_path.name}: "
+                            f"min latent dist {min_dist:.4f} < {self.admission_min_dist}"
+                        )
+                        return False, None
+            # No latent available -> the temporal floor above is the only
+            # gate (remora philosophy: a broken latent path must not kill
+            # the cache entirely)
+
+            return True, embedding
+
         except Exception as e:
             logger.error(f"Error analyzing frame diversity: {e}", exc_info=True)
             return False, None
+
+    async def _await_latent(self, kf_num):
+        """
+        Fetch the pooled latent for a keyframe, waiting briefly if the
+        interpolation worker hasn't encoded it yet. Returns None on
+        timeout/failure — never raises.
+        """
+        if self.latent_provider is None or kf_num is None:
+            return None
+        deadline = asyncio.get_event_loop().time() + self.admission_latent_wait_s
+        while True:
+            try:
+                vec = self.latent_provider(kf_num)
+            except Exception:
+                return None
+            if vec is not None:
+                return vec
+            if asyncio.get_event_loop().time() >= deadline:
+                return None
+            await asyncio.sleep(0.5)
+
+    def _min_dist_to_cache(self, vec):
+        """Min cosine distance from vec to existing cache entries (None if no
+        entry has a latent embedding yet)."""
+        try:
+            from cache.latent_pool import cosine_dist
+        except ImportError:
+            return None
+        dists = []
+        for entry in self.cache.get_all():
+            emb = getattr(entry, 'embedding', None)
+            if isinstance(emb, dict) and emb.get('latent') is not None:
+                try:
+                    dists.append(cosine_dist(vec, emb['latent']))
+                except Exception:
+                    pass
+        return min(dists) if dists else None
     
     async def _cache_frame(
         self,
@@ -273,15 +367,18 @@ class CacheAnalysisWorker:
                     if should_cache and embedding is not None:
                         # Add to cache
                         success = await self._cache_frame(frame, embedding)
-                        
+
                         if success:
                             self.frames_cached += 1
+                            kf = frame.get('metadata', {}).get('keyframe_num')
+                            if kf is not None:
+                                self._last_admitted_kf = kf
                             logger.debug(f"Frame cached: {frame['path'].name}")
                         else:
                             self.frames_skipped += 1
                     else:
                         self.frames_skipped += 1
-                    
+
                     self.frames_analyzed += 1
 
                     # Heartbeat so cache health is visible in logs (the cache
@@ -290,6 +387,8 @@ class CacheAnalysisWorker:
                         logger.info(
                             f"[CACHE_HEALTH] analyzed={self.frames_analyzed} "
                             f"cached={self.frames_cached} size={self.cache.size()} "
+                            f"floor_rej={self.frames_rejected_floor} "
+                            f"sim_rej={self.frames_rejected_similar} "
                             f"queue={self.analysis_queue.qsize()}"
                         )
 
@@ -337,6 +436,8 @@ class CacheAnalysisWorker:
             'frames_analyzed': self.frames_analyzed,
             'frames_cached': self.frames_cached,
             'frames_skipped': self.frames_skipped,
+            'frames_rejected_floor': self.frames_rejected_floor,
+            'frames_rejected_similar': self.frames_rejected_similar,
             'cache_rate': cache_rate,
             'queue_depth': self.analysis_queue.qsize(),
             'is_processing': self.processing,

@@ -49,6 +49,7 @@ class KeyframeRecord(BaseModel):
     # Embeddings for VPS-side era segmentation (computed here, never on VPS)
     color_hist: Optional[list[float]] = None  # 96-dim ColorHist, rounded 4dp
     phash: Optional[str] = None  # pHash-8 hex string
+    latent_pool: Optional[list[float]] = None  # 128-dim pooled VAE latent, rounded 4dp
 
     # Present only on sampled/event keyframes
     thumb_webp_b64: Optional[str] = None  # 256x128 webp, ~8-15KB

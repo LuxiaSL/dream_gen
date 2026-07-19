@@ -113,6 +113,7 @@ class CacheInjectionStrategy:
         self,
         current_image_path: Path,
         target_keyframe_num: int,
+        current_latent_vec=None,
     ) -> Optional[Tuple[Path, Dict[str, Any]]]:
         """
         Inject DISSIMILAR cached frame with VAE latent blending
@@ -145,11 +146,51 @@ class CacheInjectionStrategy:
             if not cache_entries:
                 logger.debug("Cache is empty")
                 return None
-            
+
+            selected_entry = None
+
+            # === Latent-first selection (cache/latent_pool.py) ===
+            # Pooled-latent cosine distance ranks within-motif difference
+            # honestly, which the dual metrics provably don't (metric audit
+            # 2026-07-19). Falls through to dual-metric logic when latents
+            # are unavailable.
+            if current_latent_vec is not None:
+                try:
+                    from cache.latent_pool import cosine_dist
+                    min_dist = float(
+                        self.cache_config.get('latent_admission', {}).get('min_dist', 0.10)
+                    )
+                    lat_candidates = []
+                    for entry in cache_entries:
+                        emb = entry.embedding
+                        if isinstance(emb, dict) and emb.get('latent') is not None:
+                            d = cosine_dist(current_latent_vec, emb['latent'])
+                            if d >= min_dist:
+                                lat_candidates.append((entry, d))
+
+                    if lat_candidates:
+                        dists = np.array([d for _, d in lat_candidates])
+                        weights = np.exp(dists * 4)  # favor distant frames
+                        for i, (entry, _) in enumerate(lat_candidates):
+                            if entry.cache_id in self.recent_cache_injections:
+                                weights[i] *= 0.1  # anti-loop penalty
+                        weights = weights / weights.sum()
+                        idx = np.random.choice(len(lat_candidates), p=weights)
+                        selected_entry, sel_dist = lat_candidates[idx]
+                        self.recent_cache_injections.append(selected_entry.cache_id)
+                        logger.info(
+                            f"[LATENT_DISSIMILAR] Selected {selected_entry.cache_id} "
+                            f"(latent dist {sel_dist:.4f}, "
+                            f"{len(lat_candidates)}/{len(cache_entries)} candidates)"
+                        )
+                except Exception:
+                    logger.debug("Latent selection failed; falling back", exc_info=True)
+                    selected_entry = None
+
             # Use dual-metric similarity system
             is_dual_metric = isinstance(current_embedding, dict) and 'color' in current_embedding
-            
-            if is_dual_metric:
+
+            if selected_entry is None and is_dual_metric:
                 # Dual-metric OR logic: Select frames dissimilar in EITHER color OR structure
                 color_range = self.cache_config.get('color_histogram', {}).get('dissimilarity_range', [0.90, 1.70])
                 struct_range = self.cache_config.get('phash', {}).get('dissimilarity_range', [0.42, 0.62])
@@ -217,6 +258,10 @@ class CacheInjectionStrategy:
                     f"dissim:{selected_dissimilarity:.3f})"
                 )
             
+            if selected_entry is None:
+                logger.debug("No injection candidate selected (latent or dual-metric)")
+                return None
+
             # VAE latent blending (not direct copy!)
             if not self.vae_access and not self.latent_encoder:
                 logger.warning("No VAE access available, falling back to direct copy")

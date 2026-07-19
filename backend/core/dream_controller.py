@@ -472,6 +472,11 @@ class DreamController:
 
                     if hasattr(self.generation_coordinator, 'chronicle'):
                         self.generation_coordinator.chronicle = self.chronicle_recorder
+                        # Pooled-latent enrichment at flush time (calibration
+                        # data for the metric upgrade — cache/latent_pool.py)
+                        interp = getattr(self.generation_coordinator, 'interpolation_worker', None)
+                        if interp is not None and hasattr(interp, 'keyframe_pooled'):
+                            self.chronicle_recorder.latent_provider = interp.keyframe_pooled.get
                         self.logger.info("  Chronicle recorder attached to orchestrator")
                     else:
                         self.logger.info("  Chronicle recorder created (no orchestrator hook - legacy coordinator)")
