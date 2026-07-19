@@ -39,6 +39,9 @@ generation:
     interpolation_upscale_method: "bilinear"
     interpolation_downsample_method: "bicubic"
     gpu_slerp: true
+    # Display keyframes as their VAE round-trip so they match neighboring
+    # interp frames (kills the 7.5x per-keyframe sharpness pop, 2026-07-18).
+    keyframe_display_roundtrip: true
 
   img2img:
     denoise: 0.25                 # was 0.3
@@ -64,10 +67,29 @@ generation:
       convergence_threshold: 0.08
       force_cache_threshold: 0.15
 
+    # Latent-gated admission + selection (cache/latent_pool.py, 2026-07-19).
+    # Pooled VAE-latent cosine distance replaces colorhist/phash for cache
+    # decisions (the metric audit showed they can't rank within-motif).
+    # min_dist: admit/inject only if >= this far from nearest cache entry.
+    # min_interval_kf: metric-free floor — at most one admission per N kf.
+    latent_admission:
+      enabled: true
+      min_dist: 0.20          # was 0.10 — admission must mean visually different
+      min_interval_kf: 12
+      min_interval_s: 8.0     # wall-clock floor; also covers kf-less submissions
+      latent_wait_s: 4.0
+
+    # Self-regulating cache: eviction removes the older member of the
+    # closest latent pair (cache converges to a maximally spread set);
+    # TTL expiry keeps it tracking recent history instead of fossilizing.
+    self_regulation:
+      eviction: "redundancy"
+      entry_ttl_minutes: 240
+
     injection_logic: "any"
     injection_mode: "dissimilar"
     injection_probability: 0.08   # was 0.15 — less random injection at higher keyframe rate
-    blend_weight: 0.75
+    blend_weight: 0.65            # collapse counter-move; was 0.55 ("suggests"), 0.75 original
     injection_cooldown: 15        # was 5 — at most every ~2.5 seconds
     seed_injection_cooldown: 15   # was 5
     embedding_history_reset: "partial"
@@ -85,19 +107,21 @@ generation:
     seed_injection_boost_probability: 0.10  # was 0.20
     force_seed_injection_frequency: 0.30
     blend_seed_injection: true
-    seed_blend_weight: 0.85
+    seed_blend_weight: 0.70       # was 0.85 — swap keeps anti-collapse teeth but leaves era residue visible
 
     log_diversity_stats: true
     diversity_check_interval: 25  # was 10
 
     # Simple frame-counting bypass — replaces adaptive detection
-    # Modulo operates on KEYFRAME count (~1.6 FPS keyframes currently).
-    # Each keyframe produces 20 interp frames → ~10 FPS total display.
+    # Modulo operates on KEYFRAME count (~1.27 kf/s measured steady-state).
+    # Era-development tuning 2026-07-18: mutation/bend is the sole engine of
+    # change; injections/swaps are rare punctuation. Invariant:
+    # mutation_interval - bend_frames = settle time, must stay > 0.
     manual_bypass:
       enabled: true
-      mutation_interval: 8          # every ~5 seconds (8 keyframes × 0.6s)
-      cache_injection_interval: 24  # every ~15 seconds
-      template_swap_interval: 72    # every ~45 seconds
+      mutation_interval: 16         # was 8 — ~12.6s: 8 kf bend + 8 kf settle
+      cache_injection_interval: 48  # ~38s — collapse counter-move (was 120; cache worker was dead until 2026-07-19)
+      template_swap_interval: 1000  # was 72 — ~13 min, this IS the era scale
 
     advanced_monitoring:
       enabled: false
@@ -106,9 +130,11 @@ fresh_generation:
   enabled: true
 
   denoising:
-    drift: 0.10                   # was 0.15 — slower evolution per keyframe
-    bend: 0.35                    # was 0.45 — less dramatic mutations
-    bend_frames: 8                # was 5 — longer transition period
+    drift: 0.18                   # was 0.12 — stronger prompt pull per step; the
+                                  # attractors live in the contractive img2img map,
+                                  # not the intervention schedule (2026-07-19)
+    bend: 0.55                    # collapse counter-move; was 0.48, 0.35 original
+    bend_frames: 8                # bend length; settle = mutation_interval - bend_frames
 
   mutation:
     base_probability: 0.04        # was 0.12 — ~1 mutation per 25 keyframes (~4 seconds)
@@ -119,7 +145,7 @@ fresh_generation:
       light_behavior: 0.20
       temporal_state: 0.15
       texture_density: 0.05
-    similarity_target: 0.55
+    similarity_target: 0.50       # was 0.55 — slightly more distant word choices per mutation
     similarity_range: 0.25
 
 display:
