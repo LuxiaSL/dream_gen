@@ -1093,7 +1093,13 @@ class AsyncGenerationOrchestrator:
                     negative_prompt=negative_prompt,
                     denoise=denoise,
                     generation_mode=generation_mode,
-                    seed=self.era_seed if (self.anchor_walking and self.noise_pinning) else None,
+                    # Era-deterministic but PER-FRAME noise: reusing one seed
+                    # across generations lets the same noise pattern
+                    # constructively interfere and burn into the lineage as
+                    # RGB static (observed kf ~290, 2026-07-19). Offsetting
+                    # by keyframe keeps determinism without interference.
+                    seed=(self.era_seed + next_kf) % (2**32)
+                    if (self.anchor_walking and self.noise_pinning) else None,
                 )
                 
                 # === PERIODIC STATS (every 10 keyframes) ===
