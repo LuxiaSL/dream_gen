@@ -136,7 +136,10 @@ fresh_generation:
   anchor_walking:
     enabled: true
     mutation_interpolation_frames: 60   # ~2s glide across each re-anchor jump
-    noise_pinning: true                 # one noise seed per era; resampled at swaps
+    noise_pinning: true                 # era-deterministic, per-frame varied (era_seed + kf)
+    hygiene_min_mass_ratio: 0.5         # refuse mutation-promotions this much emptier
+                                        # than the current anchor (0 = off); swaps and
+                                        # injections always anchor
 
   denoising:
     drift: 0.18                   # local orbit around the anchor

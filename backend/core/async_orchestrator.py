@@ -236,6 +236,13 @@ class AsyncGenerationOrchestrator:
         self._anchor_files: deque = deque(maxlen=2)  # rotate stable copies
         self._pending_anchor_kf: Optional[int] = None
         self.era_seed: int = random.randint(0, 2**32 - 1)
+        # Anchor hygiene: refuse mutation-promotions whose content mass falls
+        # below this fraction of the current anchor's (0 = disabled). Stops
+        # the era-scale thinning ratchet (rich scene -> field over ~8 anchor
+        # steps); the next mutation simply retries from the still-rich anchor
+        # with a different per-frame seed.
+        self.hygiene_ratio = float(aw.get('hygiene_min_mass_ratio', 0.5))
+        self._anchor_mass: Optional[float] = None
         if self.anchor_walking:
             logger.info(
                 f"Anchor walking ENABLED: mutation interp {self.mutation_interp_frames} "
@@ -570,15 +577,50 @@ class AsyncGenerationOrchestrator:
         finally:
             self._checkpoint_in_flight = False
 
-    def _set_anchor(self, source_path: Path, new_era: bool = False) -> None:
+    @staticmethod
+    def _content_mass(image_path: Path) -> Optional[float]:
+        """
+        p98 of gradient magnitude on a downscaled grayscale render: "does the
+        image contain strong structure anywhere". Mean gradient was rejected —
+        it's a texture meter that scores a sparse composition (towers on a
+        gradient sky) barely above a flat field and would refuse legitimate
+        busy->calm transitions. Calibration (2026-07-20): flat field 0.005,
+        sparse-but-alive 0.027, dense texture 0.046. Never raises.
+        """
+        try:
+            import numpy as np
+            from PIL import Image
+            with Image.open(image_path) as im:
+                g = np.asarray(im.convert("L").resize((128, 64)), dtype=np.float32) / 255.0
+            gy, gx = np.gradient(g)
+            return float(np.percentile(np.hypot(gx, gy), 98))
+        except Exception:
+            return None
+
+    def _set_anchor(self, source_path: Path, new_era: bool = False,
+                    guard: bool = False) -> None:
         """
         Promote an image to be the era anchor. Copies it to a stable rotating
         file (keyframe files get cleaned up behind the display cursor; the
-        anchor must outlive them). Never raises.
+        anchor must outlive them). With guard=True (mutation promotions), a
+        candidate markedly emptier than the current anchor is refused —
+        interventions and era boundaries always anchor. Never raises.
         """
         try:
             if source_path is None or not Path(source_path).exists():
                 return
+
+            candidate_mass = None
+            if guard and self.hygiene_ratio > 0 and self._anchor_mass is not None:
+                candidate_mass = self._content_mass(source_path)
+                if (candidate_mass is not None
+                        and candidate_mass < self.hygiene_ratio * self._anchor_mass):
+                    logger.info(
+                        f"  [ANCHOR] Promotion refused: content mass "
+                        f"{candidate_mass:.4f} < {self.hygiene_ratio:.2f} x "
+                        f"{self._anchor_mass:.4f} (keeping current anchor)"
+                    )
+                    return
             anchor_dir = self.buffer.keyframe_dir.parent / "anchor"
             anchor_dir.mkdir(parents=True, exist_ok=True)
             dest = anchor_dir / f"anchor_{self.current_keyframe_num:06d}_{int(time.time())}.png"
@@ -592,6 +634,10 @@ class AsyncGenerationOrchestrator:
                     pass
             self._anchor_files.append(dest)
             self.anchor_path = dest
+            self._anchor_mass = (
+                candidate_mass if candidate_mass is not None
+                else self._content_mass(dest)
+            )
             if new_era:
                 self.era_seed = random.randint(0, 2**32 - 1)
             logger.info(
@@ -749,7 +795,7 @@ class AsyncGenerationOrchestrator:
                 # new era anchor (the lineage advances one deliberate step)
                 if self.anchor_walking and self._pending_anchor_kf == kf_num:
                     self._pending_anchor_kf = None
-                    self._set_anchor(kf_path)
+                    self._set_anchor(kf_path, guard=True)
 
                 # Mark task done
                 self.keyframe_worker.result_queue.task_done()
