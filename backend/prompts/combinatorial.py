@@ -18,6 +18,7 @@ Syntax:
 import logging
 import random
 import re
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -158,7 +159,11 @@ class CombinatorialPromptSystem:
         }
         self.similarity_target = 0.55
         self.similarity_range = 0.25
-        
+        # Anti-repeat: a mutation may not return to any of the last N words
+        # its category held (0 = off). Similarity-guided selection otherwise
+        # ping-pongs between near neighbours (~20% of mutations, 2026-09-25).
+        self.recent_word_memory = 0
+
         # Override with config if provided
         if config and 'fresh_generation' in config:
             mutation_config = config['fresh_generation'].get('mutation', {})
@@ -168,7 +173,10 @@ class CombinatorialPromptSystem:
                 self.category_weights = mutation_config['category_weights']
             self.similarity_target = mutation_config.get('similarity_target', self.similarity_target)
             self.similarity_range = mutation_config.get('similarity_range', self.similarity_range)
-        
+            self.recent_word_memory = max(0, int(mutation_config.get('recent_word_memory', 0)))
+
+        self._recent_words: Dict[str, deque] = {}
+
         # === State Tracking ===
         self.frames_since_mutation = 0
         self.total_frames = 0
@@ -744,10 +752,11 @@ class CombinatorialPromptSystem:
         
         # Get pool excluding current selections
         pool = [c for c in self.components[selected_category] if c.word not in current_words]
-        
+
         if not pool:
             logger.debug(f"No alternative components for '{selected_category}'")
             return self.current_prompt or ""
+        pool = self._avoid_recent(selected_category, pool)
         
         # Select new component using similarity-guided selection
         # Prefers moderate similarity for smooth visual transitions
@@ -757,7 +766,8 @@ class CombinatorialPromptSystem:
         # Replace first component in the category (simplest mutation)
         old_component = current_in_category[0]
         current_in_category[0] = new_component
-        
+        self._remember_word(selected_category, old_component.word)
+
         # Update primary component reference
         self.current_components[selected_category] = new_component
         
@@ -782,6 +792,23 @@ class CombinatorialPromptSystem:
         
         return self.current_prompt or ""
     
+    def _avoid_recent(self, category: str, pool: List["Component"]) -> List["Component"]:
+        """Drop recently held words from a candidate pool (never empties it)."""
+        recent = self._recent_words.get(category)
+        if not recent:
+            return pool
+        fresh = [c for c in pool if c.word not in recent]
+        return fresh or pool
+
+    def _remember_word(self, category: str, word: str) -> None:
+        """Record a word its category just left behind."""
+        if self.recent_word_memory <= 0:
+            return
+        dq = self._recent_words.get(category)
+        if dq is None:
+            dq = self._recent_words[category] = deque(maxlen=self.recent_word_memory)
+        dq.append(word)
+
     def is_in_bend_mode(self) -> bool:
         """
         Check if currently in BEND mode (high denoise after mutation)
@@ -842,9 +869,12 @@ class CombinatorialPromptSystem:
             # Get pool excluding current
             pool = self.components[selected_category]
             pool_excluding_current = [c for c in pool if c.word != current_component.word]
-            
+
             if not pool_excluding_current:
                 continue
+            # Opposite-of-opposite is the original word: without this the
+            # forced flip is a guaranteed ping-pong.
+            pool_excluding_current = self._avoid_recent(selected_category, pool_excluding_current)
             
             # Try to find the ACTUAL semantic opposite of the current component
             # Component.opposite stores the word of its opposite (e.g., "warm" has opposite "cold")
@@ -876,6 +906,7 @@ class CombinatorialPromptSystem:
             old_word = current_component.word
             self.current_multi_components[selected_category][0] = new_component
             self.current_components[selected_category] = new_component
+            self._remember_word(selected_category, old_word)
             
             logger.info(
                 f"[FORCE_MUTATE] {selected_category}: '{old_word}' → '{new_component.word}' "
@@ -935,7 +966,8 @@ class CombinatorialPromptSystem:
         
         old_template_id = self.current_template.id if self.current_template else "none"
         self.current_template = new_template
-        
+        self._recent_words.clear()  # a new era starts with no repeat history
+
         # Select new components
         if components:
             # Use provided components where available

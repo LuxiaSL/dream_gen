@@ -38,7 +38,9 @@ from typing import Optional, Dict, Any, Tuple
 from collections import deque
 
 import torch
+from PIL import Image
 
+from backend.utils.palette import palette_summary, transfer_palette
 from backend.core.workers import KeyframeWorker, InterpolationWorker, CacheAnalysisWorker
 from backend.cache.injection_strategy import CacheInjectionStrategy
 from backend.fresh import FreshFrameBuffer
@@ -243,6 +245,24 @@ class AsyncGenerationOrchestrator:
         # with a different per-frame seed.
         self.hygiene_ratio = float(aw.get('hygiene_min_mass_ratio', 0.5))
         self._anchor_mass: Optional[float] = None
+
+        # Palette grounding (utils/palette.py): the img2img lineage drifts
+        # toward magenta whatever the prompt says. Re-anchor inits are
+        # recolored toward a txt2img render of the new prompt; era swaps take
+        # their palette from the fresh frame.
+        pg = self.config.get('fresh_generation', {}).get('palette_grounding', {})
+        self.palette_grounding = bool(pg.get('enabled', False))
+        self.pg_chroma = float(pg.get('chroma_strength', 0.6))
+        self.pg_luma = float(pg.get('luma_strength', 0.2))
+        self.pg_swap_chroma = float(pg.get('swap_chroma_strength', 0.85))
+        self.pg_swap_luma = float(pg.get('swap_luma_strength', 0.4))
+        self._grounded_files: deque = deque(maxlen=2)  # a queued job may hold the older one
+        if self.palette_grounding:
+            logger.info(
+                f"Palette grounding ENABLED: re-anchor chroma {self.pg_chroma} / "
+                f"luma {self.pg_luma}, swap chroma {self.pg_swap_chroma} / "
+                f"luma {self.pg_swap_luma}"
+            )
         if self.anchor_walking:
             logger.info(
                 f"Anchor walking ENABLED: mutation interp {self.mutation_interp_frames} "
@@ -647,6 +667,62 @@ class AsyncGenerationOrchestrator:
         except Exception:
             logger.warning("Anchor promotion failed (continuing on old anchor)",
                            exc_info=True)
+
+    async def _ground_anchor_palette(self, prompt: str,
+                                     negative_prompt: Optional[str],
+                                     keyframe_num: int) -> Optional[Path]:
+        """
+        Recolor the anchor toward a txt2img render of `prompt`; return the
+        grounded init path, or None (caller falls back to the plain anchor).
+        The reference seed is the era seed, so within an era the reference
+        changes only when the words do. Never raises.
+        """
+        anchor = self.anchor_path
+        try:
+            if anchor is None or not anchor.exists():
+                return None
+            ref_path = await self.generator.generate_from_prompt_async(
+                prompt=prompt, negative_prompt=negative_prompt, seed=self.era_seed,
+            )
+            if ref_path is None or not Path(ref_path).exists():
+                return None
+            ref_keep = anchor.parent / "palette_ref.jpg"
+            shutil.move(str(ref_path), str(ref_keep))
+            dest = anchor.parent / f"grounded_{keyframe_num:06d}.png"
+
+            def _work() -> Tuple[Optional[str], Optional[str], Optional[str]]:
+                with Image.open(anchor) as a_img, Image.open(ref_keep) as r_img:
+                    src, ref = a_img.convert("RGB"), r_img.convert("RGB")
+                out = transfer_palette(src, ref, self.pg_chroma, self.pg_luma)
+                out.save(dest, "PNG", compress_level=1)
+                return palette_summary(src), palette_summary(out), palette_summary(ref)
+
+            before, after, ref_s = await asyncio.get_event_loop().run_in_executor(None, _work)
+            if len(self._grounded_files) == self._grounded_files.maxlen:
+                Path(self._grounded_files[0]).unlink(missing_ok=True)
+            self._grounded_files.append(dest)
+            logger.info(f"  [PALETTE] Re-anchor init grounded: {before} -> {after} (ref {ref_s})")
+            return dest
+        except Exception:
+            logger.warning("Palette grounding failed (using plain anchor)", exc_info=True)
+            return None
+
+    async def _ground_swap_palette(self, blended: "Image.Image",
+                                   fresh_path: Path) -> "Image.Image":
+        """Recolor an era-swap blend toward its fresh frame. Never raises."""
+        try:
+            def _work() -> Tuple["Image.Image", Optional[str], Optional[str]]:
+                with Image.open(fresh_path) as f_img:
+                    fresh = f_img.convert("RGB")
+                out = transfer_palette(blended, fresh, self.pg_swap_chroma, self.pg_swap_luma)
+                return out, palette_summary(blended), palette_summary(out)
+
+            out, before, after = await asyncio.get_event_loop().run_in_executor(None, _work)
+            logger.info(f"  [PALETTE] Swap blend grounded to fresh frame: {before} -> {after}")
+            return out
+        except Exception:
+            logger.warning("Swap palette grounding failed (using plain blend)", exc_info=True)
+            return blended
 
     def _on_worker_task_done(self, name: str, task: "asyncio.Task") -> None:
         """Log loudly if a worker task dies with an exception (never raises)."""
@@ -1125,6 +1201,12 @@ class AsyncGenerationOrchestrator:
                         and self.anchor_path.exists()):
                     init_image = self.anchor_path
                     self._pending_anchor_kf = next_kf
+                    if self.palette_grounding:
+                        grounded = await self._ground_anchor_palette(
+                            next_prompt, negative_prompt, next_kf
+                        )
+                        if grounded is not None:
+                            init_image = grounded
 
                 logger.info(
                     f"  Submitting keyframe {next_kf} ({generation_mode.upper()}, "
@@ -1442,7 +1524,14 @@ class AsyncGenerationOrchestrator:
                             blended_latent,
                             upscale_to_target=True
                         )
-                        
+                        # The latent blend keeps a soft structural dissolve,
+                        # but its 30% residue dominates hue — take the palette
+                        # from the fresh frame instead.
+                        if self.palette_grounding:
+                            blended_image = await self._ground_swap_palette(
+                                blended_image, fresh_frame.path
+                            )
+
                         # Save to keyframe location
                         blended_image.save(keyframe_path, "PNG", optimize=False, compress_level=1)
                         

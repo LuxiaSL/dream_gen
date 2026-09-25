@@ -148,20 +148,45 @@ fresh_generation:
                                         # than the current anchor (0 = off); swaps and
                                         # injections always anchor
 
+  # Palette grounding (utils/palette.py, 2026-09-25): the img2img lineage
+  # drifts toward magenta regardless of prompt (chain 0.87 magenta share vs
+  # 0.02 for fresh txt2img). Each re-anchor's init is recolored toward a
+  # txt2img render of the NEW prompt (era-pinned seed, so the reference only
+  # changes when the words do); era swaps take their palette from the fresh
+  # frame while keeping the soft 70/30 structural dissolve.
+  palette_grounding:
+    enabled: true
+    chroma_strength: 0.6          # re-anchor: a*/b* moved this far toward the reference
+    luma_strength: 0.2            # ...lightness/contrast barely touched (it carries structure)
+    swap_chroma_strength: 0.85    # era swap: palette mostly from the fresh frame
+    swap_luma_strength: 0.4
+
   denoising:
     drift: 0.18                   # local orbit around the anchor
-    bend: 0.60                    # re-anchor strength: components genuinely restructure
+    bend: 0.70                    # was 0.60 — re-anchors visibly restructure (Feb-era bend value)
     bend_frames: 8                # legacy chained mode only; ignored under anchor_walking
 
   mutation:
     base_probability: 0.04        # was 0.12 — ~1 mutation per 25 keyframes (~4 seconds)
     staleness_threshold: 75       # was 25 — forced mutation every ~12 seconds
+    # Reach (2026-09-25): structural slots are mutable too — before, subject,
+    # medium and composition were frozen for the whole era and color_logic
+    # took 43-64% of all mutations. Weights normalize over the categories a
+    # template actually has; structural share lands ~20-55% per template.
     category_weights:
-      color_logic: 0.35
-      atmosphere_field: 0.25
-      light_behavior: 0.20
-      temporal_state: 0.15
-      texture_density: 0.05
+      color_logic: 0.20
+      atmosphere_field: 0.14
+      light_behavior: 0.12
+      temporal_state: 0.10
+      texture_density: 0.06
+      medium_render: 0.06
+      spatial_logic: 0.05
+      material_substance: 0.05
+      phenomenon_pattern: 0.05
+      scale_perspective: 0.03
+      setting_location: 0.03
+      subject_form: 0.02          # lowest: the subject is the era's identity
+    recent_word_memory: 6         # never return to one of the last 6 words a slot held
     similarity_target: 0.50       # was 0.55 — slightly more distant word choices per mutation
     similarity_range: 0.25
 
