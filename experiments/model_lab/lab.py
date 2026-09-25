@@ -243,6 +243,61 @@ def run_vae() -> None:
     log(f"done -> {out}")
 
 
+# ------------------------------------------------------------ vae preview
+def run_preview() -> None:
+    """
+    Side-by-side of the stream's display path with each decoder: the dream's
+    latest keyframes, slerp-interpolated 20 frames per pair (as the
+    interpolation worker does), decoded by stock (top) and ft-ema (bottom).
+    """
+    import subprocess
+    from diffusers import AutoencoderKL
+    from PIL import ImageDraw, ImageFont
+
+    out = LAB / "preview"
+    out.mkdir(parents=True, exist_ok=True)
+    kdir = Path.home() / "luxi-files" / "dreamgen" / "output" / "keyframes"
+    files = sorted(kdir.glob("keyframe_*.*"), key=lambda p: int(p.stem.split("_")[1]))[-25:]
+    imgs = [Image.open(p).convert("RGB").resize((1024, 512)) for p in files]  # snapshot now
+    log(f"{len(imgs)} keyframes {files[0].name} .. {files[-1].name}")
+
+    stock = AutoencoderKL.from_pretrained(SD_ID, subfolder="vae", torch_dtype=torch.float16,
+                                          cache_dir=HF_READ, local_files_only=True).to("cuda").eval()
+    ema = AutoencoderKL.from_pretrained(DECODERS["ft-ema"], torch_dtype=torch.float16,
+                                        cache_dir=HF_LAB, use_safetensors=True).to("cuda").eval()
+    lats = [encode(stock, im) for im in imgs]
+    try:
+        font = ImageFont.truetype("DejaVuSansMono.ttf", 22)
+    except Exception:
+        font = ImageFont.load_default()
+
+    video = out / "vae_preview_stock_top_ftema_bottom.mp4"
+    enc = subprocess.Popen(
+        ["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
+         "-s", "1024x1024", "-r", "30", "-i", "-", "-c:v", "libx264", "-crf", "16",
+         "-preset", "medium", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(video)],
+        stdin=subprocess.PIPE)
+    n = 0
+    for a, b in zip(lats, lats[1:]):
+        for k in range(20):
+            z = slerp(a, b, k / 20)
+            frame = Image.new("RGB", (1024, 1024))
+            frame.paste(decode(stock, z), (0, 0))
+            frame.paste(decode(ema, z), (0, 512))
+            d = ImageDraw.Draw(frame)
+            for y, label in ((6, "STOCK SD 1.5 VAE"), (518, "sd-vae-ft-ema")):
+                d.rectangle([6, y, 16 + 13 * len(label), y + 28], fill=(0, 0, 0))
+                d.text((11, y + 2), label, font=font, fill=(255, 230, 150))
+            if n % 60 == 30:
+                frame.save(out / f"pair_{n:04d}.png")
+            enc.stdin.write(frame.tobytes())
+            n += 1
+    enc.stdin.close()
+    enc.wait()
+    log(f"done: {n} frames -> {video}")
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
-    {"dupe": run_dupe, "vae": run_vae}.get(cmd, lambda: sys.exit(f"usage: lab.py dupe|vae (got {cmd!r})"))()
+    {"dupe": run_dupe, "vae": run_vae, "preview": run_preview}.get(
+        cmd, lambda: sys.exit(f"usage: lab.py dupe|vae|preview (got {cmd!r})"))()
