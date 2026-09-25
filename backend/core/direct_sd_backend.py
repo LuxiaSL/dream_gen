@@ -29,6 +29,11 @@ from typing import Any, Dict, Optional
 import torch
 from PIL import Image
 
+try:
+    from utils.vae_source import vae_source
+except ImportError:  # imported as backend.core.*
+    from backend.utils.vae_source import vae_source
+
 logger = logging.getLogger(__name__)
 
 
@@ -165,6 +170,22 @@ class DirectSDBackend:
             feature_extractor=None,
         )
         self._img2img_pipe.set_progress_bar_config(disable=True)
+
+        # Optional replacement VAE weights (utils/vae_source.py). The stock
+        # SD 1.5 VAE pulls every round trip toward magenta.
+        vae_model, vae_cache_dir = vae_source(self.config)
+        if vae_model:
+            try:
+                from diffusers import AutoencoderKL
+                replacement = AutoencoderKL.from_pretrained(
+                    vae_model, cache_dir=vae_cache_dir,
+                    torch_dtype=torch.float16, use_safetensors=True,
+                ).to(self.device)
+                self._txt2img_pipe.vae = replacement
+                self._img2img_pipe.vae = replacement
+                logger.info(f"Pipeline VAE weights: {vae_model}")
+            except Exception as e:
+                logger.warning(f"VAE '{vae_model}' failed to load ({e}); keeping stock VAE")
 
         # Store direct references for the manual UNet loop
         self._unet = self._txt2img_pipe.unet

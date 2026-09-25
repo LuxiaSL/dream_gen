@@ -51,7 +51,8 @@ class LatentEncoder:
     def __init__(self, vae_path: Optional[Path] = None, device: str = "cuda", auto_load: bool = False,
                  interpolation_resolution_divisor: int = 1, upscale_method: str = "bilinear",
                  downsample_method: str = "bilinear", target_resolution: Optional[Tuple[int, int]] = None,
-                 enable_torch_compile: bool = True, use_taesd_for_interpolations: bool = False):
+                 enable_torch_compile: bool = True, use_taesd_for_interpolations: bool = False,
+                 vae_model: Optional[str] = None, vae_cache_dir: Optional[str] = None):
         """
         Initialize VAE encoder/decoder
         
@@ -65,10 +66,14 @@ class LatentEncoder:
             target_resolution: Force resize to this resolution (width, height) to avoid CUDA issues
             enable_torch_compile: Enable torch.compile optimization (may fail on some systems)
             use_taesd_for_interpolations: Use TAESD (~9x faster) for interpolation batch decode
+            vae_model: HF id of replacement VAE weights (utils/vae_source.py); None = stock
+            vae_cache_dir: HF cache dir for vae_model
         """
         self.device = device if torch.cuda.is_available() else "cpu"
         self.vae = None
         self.vae_path = vae_path
+        self.vae_model = vae_model
+        self.vae_cache_dir = vae_cache_dir
         self.enable_torch_compile = enable_torch_compile
         self.vae_compiled = False  # Track if compilation was successful
         
@@ -119,12 +124,25 @@ class LatentEncoder:
             
             # Load SD 1.5 VAE from HuggingFace
             # Using fp16 for memory efficiency (~500MB vs 1GB)
-            self.vae = AutoencoderKL.from_pretrained(
-                "runwayml/stable-diffusion-v1-5",
-                subfolder="vae",
-                torch_dtype=torch.float16,
-                use_safetensors=True
-            ).to(self.device)
+            if self.vae_model:
+                try:
+                    self.vae = AutoencoderKL.from_pretrained(
+                        self.vae_model,
+                        cache_dir=self.vae_cache_dir,
+                        torch_dtype=torch.float16,
+                        use_safetensors=True
+                    ).to(self.device)
+                    logger.info(f"  VAE weights: {self.vae_model}")
+                except Exception as e:
+                    logger.warning(f"  VAE '{self.vae_model}' failed to load ({e}); using stock")
+                    self.vae = None
+            if self.vae is None:
+                self.vae = AutoencoderKL.from_pretrained(
+                    "runwayml/stable-diffusion-v1-5",
+                    subfolder="vae",
+                    torch_dtype=torch.float16,
+                    use_safetensors=True
+                ).to(self.device)
             
             # Set to eval mode (no training)
             self.vae.eval()

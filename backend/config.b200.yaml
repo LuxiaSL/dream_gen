@@ -23,6 +23,14 @@ generation:
   resolution: [1024, 512]
   mode: "hybrid"
 
+  # VAE weights (utils/vae_source.py). null = the stock SD 1.5 VAE, which
+  # pulls every encode/decode round trip toward magenta (model lab
+  # 2026-09-25: 40-step loop 0.00 -> 0.79 magenta). The decoder-only
+  # fine-tune "stabilityai/sd-vae-ft-ema" stays neutral (0.00 -> 0.05).
+  vae:
+    model: null
+    cache_dir: "~/luxi-files/model-cache"
+
   sd:
     steps: 10
     cfg_scale: 7.0                # was 8.0 — slightly lower for dreamier output

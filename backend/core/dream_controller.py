@@ -33,6 +33,7 @@ from prompts.combinatorial import CombinatorialPromptSystem
 from utils.status_writer import StatusWriter
 from cache.manager import CacheManager
 from cache.dual_similarity import DualMetricSimilarityManager
+from utils.vae_source import vae_source
 from utils.perf_stats import get_perf_stats
 
 # Setup logging
@@ -205,7 +206,9 @@ class DreamController:
                     upscale_method=upscale_method,
                     target_resolution=target_resolution,
                     enable_torch_compile=enable_compile,
-                    use_taesd_for_interpolations=use_taesd
+                    use_taesd_for_interpolations=use_taesd,
+                    vae_model=vae_source(self.config)[0],
+                    vae_cache_dir=vae_source(self.config)[1],
                 )
                 
                 # Synchronize CUDA after loading models to ensure context is fully initialized
@@ -266,7 +269,9 @@ class DreamController:
                     interpolation_resolution_divisor=resolution_divisor,
                     upscale_method=upscale_method,
                     target_resolution=target_resolution,
-                    enable_torch_compile=False  # Simpler for occasional use
+                    enable_torch_compile=False,  # Simpler for occasional use
+                    vae_model=vae_source(self.config)[0],
+                    vae_cache_dir=vae_source(self.config)[1],
                 )
                 self.logger.info("[OK] Secondary VAE loaded for injection (dual-VAE architecture)")
                 
