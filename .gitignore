@@ -104,3 +104,8 @@ convo.md
 docs/INFINITE_GENERATION_DESIGN.md
 fsampler/
 .claude/
+
+# Local stream captures + rendered videos (multi-GB)
+recordings/
+# Pre-reset state snapshots on node1
+state_backups/
