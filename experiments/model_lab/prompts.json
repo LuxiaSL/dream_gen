@@ -1,0 +1,604 @@
+[
+ {
+  "template_id": "abstract_field",
+  "prompt": "bokeh polygon disk in shattered symmetry arrangement, charcoal with goldenrod punctuation, dense fog, infrared photography",
+  "components": {
+   "phenomenon_pattern": "bokeh polygon disk",
+   "spatial_logic": "shattered symmetry",
+   "color_logic": "charcoal with goldenrod punctuation",
+   "atmosphere_field": "dense fog",
+   "medium_render": "infrared photography"
+  },
+  "seed": 1000
+ },
+ {
+  "template_id": "atmospheric_depth",
+  "prompt": "void through drizzle spray and birch pollen haze, rembrandt triangle, electron microscope, molten gold on obsidian, oil pastel drawing",
+  "components": {
+   "subject_form": "void",
+   "atmosphere_field": "drizzle spray",
+   "light_behavior": "rembrandt triangle",
+   "scale_perspective": "electron microscope",
+   "color_logic": "molten gold on obsidian",
+   "medium_render": "oil pastel drawing"
+  },
+  "seed": 1001
+ },
+ {
+  "template_id": "environmental",
+  "prompt": "vast landscape scale view of kelp hatchery tanks, glowing plankton, void barely visible, iceland spar doubling, etching on zinc",
+  "components": {
+   "scale_perspective": "vast landscape scale",
+   "setting_location": "kelp hatchery tanks",
+   "atmosphere_field": "glowing plankton",
+   "subject_form": "void",
+   "light_behavior": "iceland spar doubling",
+   "medium_render": "etching on zinc"
+  },
+  "seed": 1002
+ },
+ {
+  "template_id": "essence",
+  "prompt": "rough hewn lunette, zigzag ascent",
+  "components": {
+   "texture_density": "rough hewn",
+   "subject_form": "lunette",
+   "spatial_logic": "zigzag ascent"
+  },
+  "seed": 1003
+ },
+ {
+  "template_id": "liminal",
+  "prompt": "brutalist grain elevator, cross-polarized glare from beyond, glowing plankton, alternating polarity, celadon and terracotta harmony, anaglyph red cyan",
+  "components": {
+   "setting_location": "brutalist grain elevator",
+   "light_behavior": "cross-polarized glare",
+   "atmosphere_field": "glowing plankton",
+   "spatial_logic": "alternating polarity",
+   "color_logic": "celadon and terracotta harmony",
+   "medium_render": "anaglyph red cyan"
+  },
+  "seed": 1004
+ },
+ {
+  "template_id": "material_collision",
+  "prompt": "braided sinew and suede merging, voronoi cells at boundary, eroded sandstone, airglow night sky, high contrast black and gold, carbon print process",
+  "components": {
+   "material_substance": "braided sinew",
+   "phenomenon_pattern": "voronoi cells",
+   "texture_density": "eroded sandstone",
+   "light_behavior": "airglow night sky",
+   "color_logic": "high contrast black and gold",
+   "medium_render": "carbon print process"
+  },
+  "seed": 1005
+ },
+ {
+  "template_id": "material_study",
+  "prompt": "gynoecium made of suede, sycamore bark flakes surface, noctilucent cloud glow, celadon and terracotta harmony, raku fired glaze",
+  "components": {
+   "subject_form": "gynoecium",
+   "material_substance": "suede",
+   "texture_density": "sycamore bark flakes",
+   "light_behavior": "noctilucent cloud glow",
+   "color_logic": "celadon and terracotta harmony",
+   "medium_render": "raku fired glaze"
+  },
+  "seed": 1006
+ },
+ {
+  "template_id": "minimal_object",
+  "prompt": "solitary perlite lattice, central emergence, airglow night sky, charcoal field with cadmium punctuation, cyanotype",
+  "components": {
+   "material_substance": "perlite",
+   "subject_form": "lattice",
+   "spatial_logic": "central emergence",
+   "light_behavior": "airglow night sky",
+   "color_logic": "charcoal field with cadmium punctuation",
+   "medium_render": "cyanotype"
+  },
+  "seed": 1007
+ },
+ {
+  "template_id": "process_state",
+  "prompt": "decomposing fornix, rust tide creep spreading across cast iron, bone with terracotta punctuation, anaglyph red cyan",
+  "components": {
+   "temporal_state": "decomposing",
+   "subject_form": "fornix",
+   "phenomenon_pattern": "rust tide creep",
+   "material_substance": "cast iron",
+   "color_logic": "bone with terracotta punctuation",
+   "medium_render": "anaglyph red cyan"
+  },
+  "seed": 1008
+ },
+ {
+  "template_id": "ruin_state",
+  "prompt": "resin-entombed banyan tree strangler courtyard, swirling nebula dust, patina creep front reclaiming surfaces, bone with terracotta punctuation, cyanotype",
+  "components": {
+   "temporal_state": "resin-entombed",
+   "setting_location": "banyan tree strangler courtyard",
+   "atmosphere_field": "swirling nebula dust",
+   "phenomenon_pattern": "patina creep front",
+   "color_logic": "bone with terracotta punctuation",
+   "medium_render": "cyanotype"
+  },
+  "seed": 1009
+ },
+ {
+  "template_id": "site_decay",
+  "prompt": "cuckoo clock interior, blooming abandoned film set backlot, wax bloom exudation across micro labyrinth",
+  "components": {
+   "scale_perspective": "cuckoo clock interior",
+   "temporal_state": "blooming",
+   "setting_location": "abandoned film set backlot",
+   "phenomenon_pattern": "wax bloom exudation",
+   "texture_density": "micro labyrinth"
+  },
+  "seed": 1010
+ },
+ {
+  "template_id": "specimen",
+  "prompt": "x-ray crystallography view of isinglass aperture, raku fired glaze, molten gold on obsidian, clinical lighting",
+  "components": {
+   "scale_perspective": "x-ray crystallography view",
+   "material_substance": "isinglass",
+   "subject_form": "aperture",
+   "medium_render": "raku fired glaze",
+   "color_logic": "molten gold on obsidian"
+  },
+  "seed": 1011
+ },
+ {
+  "template_id": "temporal_diptych",
+  "prompt": "petrifying becoming wax-dipped preserved, fornix in rhomboid tiling, camel bone, ancient terracotta patina, spectrograph visualization",
+  "components": {
+   "temporal_state": "petrifying",
+   "subject_form": "fornix",
+   "spatial_logic": "rhomboid tiling",
+   "material_substance": "camel bone",
+   "color_logic": "ancient terracotta patina",
+   "medium_render": "spectrograph visualization"
+  },
+  "seed": 1012
+ },
+ {
+  "template_id": "textural_macro",
+  "prompt": "rooftop parapet lean of sugar crystal crust pewter ingot, led strip underglow, warm terracotta cooling to glacier, anaglyph red cyan",
+  "components": {
+   "scale_perspective": "rooftop parapet lean",
+   "texture_density": "sugar crystal crust",
+   "material_substance": "pewter ingot",
+   "light_behavior": "led strip underglow",
+   "color_logic": "warm terracotta cooling to glacier",
+   "medium_render": "anaglyph red cyan"
+  },
+  "seed": 1013
+ },
+ {
+  "template_id": "abstract_field",
+  "prompt": "bokeh polygon disk in shattered symmetry arrangement, charcoal field with cadmium punctuation, dense fog, infrared photography",
+  "components": {
+   "phenomenon_pattern": "bokeh polygon disk",
+   "spatial_logic": "shattered symmetry",
+   "color_logic": "charcoal field with cadmium punctuation",
+   "atmosphere_field": "dense fog",
+   "medium_render": "infrared photography"
+  },
+  "seed": 1014
+ },
+ {
+  "template_id": "atmospheric_depth",
+  "prompt": "void through mycelium spore burst and birch pollen haze, total internal reflection, electron microscope, absinthe green and bruised purple, oil pastel drawing",
+  "components": {
+   "subject_form": "void",
+   "atmosphere_field": "mycelium spore burst",
+   "light_behavior": "total internal reflection",
+   "scale_perspective": "electron microscope",
+   "color_logic": "absinthe green and bruised purple",
+   "medium_render": "oil pastel drawing"
+  },
+  "seed": 1015
+ },
+ {
+  "template_id": "environmental",
+  "prompt": "vast landscape scale view of kelp hatchery tanks, ocean plankton bloom, void barely visible, bioluminescent, etching on zinc",
+  "components": {
+   "scale_perspective": "vast landscape scale",
+   "setting_location": "kelp hatchery tanks",
+   "atmosphere_field": "ocean plankton bloom",
+   "subject_form": "void",
+   "light_behavior": "bioluminescent",
+   "medium_render": "etching on zinc"
+  },
+  "seed": 1016
+ },
+ {
+  "template_id": "essence",
+  "prompt": "abalone nacre ripples shard, paired opposition",
+  "components": {
+   "texture_density": "abalone nacre ripples",
+   "subject_form": "shard",
+   "spatial_logic": "paired opposition"
+  },
+  "seed": 1017
+ },
+ {
+  "template_id": "liminal",
+  "prompt": "neon-lit alley, iceland spar doubling from beyond, salt spray, cellular repeat, charcoal field with cadmium punctuation, mosaic tessera",
+  "components": {
+   "setting_location": "neon-lit alley",
+   "light_behavior": "iceland spar doubling",
+   "atmosphere_field": "salt spray",
+   "spatial_logic": "cellular repeat",
+   "color_logic": "charcoal field with cadmium punctuation",
+   "medium_render": "mosaic tessera"
+  },
+  "seed": 1018
+ },
+ {
+  "template_id": "material_collision",
+  "prompt": "braided sinew and suede merging, voronoi cells at boundary, smooth gradient, iceland spar doubling, charcoal with goldenrod punctuation, carbon print process",
+  "components": {
+   "material_substance": "braided sinew",
+   "phenomenon_pattern": "voronoi cells",
+   "texture_density": "smooth gradient",
+   "light_behavior": "iceland spar doubling",
+   "color_logic": "charcoal with goldenrod punctuation",
+   "medium_render": "carbon print process"
+  },
+  "seed": 1019
+ },
+ {
+  "template_id": "material_study",
+  "prompt": "gynoecium made of suede, reef wrinkles surface, fresnel louver slash, complementary orange and blue, raku fired glaze",
+  "components": {
+   "subject_form": "gynoecium",
+   "material_substance": "suede",
+   "texture_density": "reef wrinkles",
+   "light_behavior": "fresnel louver slash",
+   "color_logic": "complementary orange and blue",
+   "medium_render": "raku fired glaze"
+  },
+  "seed": 1020
+ },
+ {
+  "template_id": "minimal_object",
+  "prompt": "solitary mercury filament, mirrored bifurcation, bioluminescent, complementary orange and blue, infrared thermograph",
+  "components": {
+   "material_substance": "mercury",
+   "subject_form": "filament",
+   "spatial_logic": "mirrored bifurcation",
+   "light_behavior": "bioluminescent",
+   "color_logic": "complementary orange and blue",
+   "medium_render": "infrared thermograph"
+  },
+  "seed": 1021
+ },
+ {
+  "template_id": "process_state",
+  "prompt": "petrifying spire, differential growth ruffle spreading across shagreen leather, ancient terracotta patina, radiolarian microscopy",
+  "components": {
+   "temporal_state": "petrifying",
+   "subject_form": "spire",
+   "phenomenon_pattern": "differential growth ruffle",
+   "material_substance": "shagreen leather",
+   "color_logic": "ancient terracotta patina",
+   "medium_render": "radiolarian microscopy"
+  },
+  "seed": 1022
+ },
+ {
+  "template_id": "ruin_state",
+  "prompt": "bud-break stage banyan tree strangler courtyard, volcanic ashfall, patina creep front reclaiming surfaces, split complementary, cyanotype",
+  "components": {
+   "temporal_state": "bud-break stage",
+   "setting_location": "banyan tree strangler courtyard",
+   "atmosphere_field": "volcanic ashfall",
+   "phenomenon_pattern": "patina creep front",
+   "color_logic": "split complementary",
+   "medium_render": "cyanotype"
+  },
+  "seed": 1023
+ },
+ {
+  "template_id": "site_decay",
+  "prompt": "cuckoo clock interior, fossilized abandoned film set backlot, wax bloom exudation across gossamer threads",
+  "components": {
+   "scale_perspective": "cuckoo clock interior",
+   "temporal_state": "fossilized",
+   "setting_location": "abandoned film set backlot",
+   "phenomenon_pattern": "wax bloom exudation",
+   "texture_density": "gossamer threads"
+  },
+  "seed": 1024
+ },
+ {
+  "template_id": "specimen",
+  "prompt": "x-ray crystallography view of isinglass aperture, raku fired glaze, charcoal with goldenrod punctuation, clinical lighting",
+  "components": {
+   "scale_perspective": "x-ray crystallography view",
+   "material_substance": "isinglass",
+   "subject_form": "aperture",
+   "medium_render": "raku fired glaze",
+   "color_logic": "charcoal with goldenrod punctuation"
+  },
+  "seed": 1025
+ },
+ {
+  "template_id": "temporal_diptych",
+  "prompt": "resin-entombed becoming pupating, sac in hollow perimeter, galalith plastic, ancient terracotta patina, cave wall fresco",
+  "components": {
+   "temporal_state": "resin-entombed",
+   "subject_form": "sac",
+   "spatial_logic": "hollow perimeter",
+   "material_substance": "galalith plastic",
+   "color_logic": "ancient terracotta patina",
+   "medium_render": "cave wall fresco"
+  },
+  "seed": 1026
+ },
+ {
+  "template_id": "textural_macro",
+  "prompt": "from a diving board above of rough hewn obsidian, circumhorizontal arc, absinthe green and bruised purple, cloisonn\u00e9 enamel",
+  "components": {
+   "scale_perspective": "from a diving board above",
+   "texture_density": "rough hewn",
+   "material_substance": "obsidian",
+   "light_behavior": "circumhorizontal arc",
+   "color_logic": "absinthe green and bruised purple",
+   "medium_render": "cloisonn\u00e9 enamel"
+  },
+  "seed": 1027
+ },
+ {
+  "template_id": "abstract_field",
+  "prompt": "iron sulfide staining in cantilevered overhang arrangement, charcoal with goldenrod punctuation, swirling nebula dust, etching on zinc",
+  "components": {
+   "phenomenon_pattern": "iron sulfide staining",
+   "spatial_logic": "cantilevered overhang",
+   "color_logic": "charcoal with goldenrod punctuation",
+   "atmosphere_field": "swirling nebula dust",
+   "medium_render": "etching on zinc"
+  },
+  "seed": 1028
+ },
+ {
+  "template_id": "atmospheric_depth",
+  "prompt": "void through smoke haze and birch pollen haze, harsh directional, electron microscope, ancient terracotta patina, oil pastel drawing",
+  "components": {
+   "subject_form": "void",
+   "atmosphere_field": "smoke haze",
+   "light_behavior": "harsh directional",
+   "scale_perspective": "electron microscope",
+   "color_logic": "ancient terracotta patina",
+   "medium_render": "oil pastel drawing"
+  },
+  "seed": 1029
+ },
+ {
+  "template_id": "environmental",
+  "prompt": "vast landscape scale view of kelp hatchery tanks, ash suspension, void barely visible, volumetric god rays, etching on zinc",
+  "components": {
+   "scale_perspective": "vast landscape scale",
+   "setting_location": "kelp hatchery tanks",
+   "atmosphere_field": "ash suspension",
+   "subject_form": "void",
+   "light_behavior": "volumetric god rays",
+   "medium_render": "etching on zinc"
+  },
+  "seed": 1030
+ },
+ {
+  "template_id": "essence",
+  "prompt": "flocked wallpaper ganglion, interlocking pentagonal array",
+  "components": {
+   "texture_density": "flocked wallpaper",
+   "subject_form": "ganglion",
+   "spatial_logic": "interlocking pentagonal array"
+  },
+  "seed": 1031
+ },
+ {
+  "template_id": "liminal",
+  "prompt": "brutalist grain elevator, bokeh balls from beyond, swirling nebula dust, alternating polarity, ancient terracotta patina, anaglyph red cyan",
+  "components": {
+   "setting_location": "brutalist grain elevator",
+   "light_behavior": "bokeh balls",
+   "atmosphere_field": "swirling nebula dust",
+   "spatial_logic": "alternating polarity",
+   "color_logic": "ancient terracotta patina",
+   "medium_render": "anaglyph red cyan"
+  },
+  "seed": 1032
+ },
+ {
+  "template_id": "material_collision",
+  "prompt": "braided sinew and suede merging, voronoi cells at boundary, smooth gradient, motheye anti-reflection, charcoal with goldenrod punctuation, carbon print process",
+  "components": {
+   "material_substance": "braided sinew",
+   "phenomenon_pattern": "voronoi cells",
+   "texture_density": "smooth gradient",
+   "light_behavior": "motheye anti-reflection",
+   "color_logic": "charcoal with goldenrod punctuation",
+   "medium_render": "carbon print process"
+  },
+  "seed": 1033
+ },
+ {
+  "template_id": "material_study",
+  "prompt": "gynoecium made of suede, reef wrinkles surface, crepuscular rays, celadon and terracotta harmony, raku fired glaze",
+  "components": {
+   "subject_form": "gynoecium",
+   "material_substance": "suede",
+   "texture_density": "reef wrinkles",
+   "light_behavior": "crepuscular rays",
+   "color_logic": "celadon and terracotta harmony",
+   "medium_render": "raku fired glaze"
+  },
+  "seed": 1034
+ },
+ {
+  "template_id": "minimal_object",
+  "prompt": "solitary mercury filament, mirrored bifurcation, bounce fill wrap, bone white and oxblood, infrared thermograph",
+  "components": {
+   "material_substance": "mercury",
+   "subject_form": "filament",
+   "spatial_logic": "mirrored bifurcation",
+   "light_behavior": "bounce fill wrap",
+   "color_logic": "bone white and oxblood",
+   "medium_render": "infrared thermograph"
+  },
+  "seed": 1035
+ },
+ {
+  "template_id": "process_state",
+  "prompt": "frozen mid-transformation spire, differential growth ruffle spreading across shagreen leather, bone white and oxblood, radiolarian microscopy",
+  "components": {
+   "temporal_state": "frozen mid-transformation",
+   "subject_form": "spire",
+   "phenomenon_pattern": "differential growth ruffle",
+   "material_substance": "shagreen leather",
+   "color_logic": "bone white and oxblood",
+   "medium_render": "radiolarian microscopy"
+  },
+  "seed": 1036
+ },
+ {
+  "template_id": "ruin_state",
+  "prompt": "frozen mid-transformation banyan tree strangler courtyard, glowing plankton, patina creep front reclaiming surfaces, verdigris and rust patina, cyanotype",
+  "components": {
+   "temporal_state": "frozen mid-transformation",
+   "setting_location": "banyan tree strangler courtyard",
+   "atmosphere_field": "glowing plankton",
+   "phenomenon_pattern": "patina creep front",
+   "color_logic": "verdigris and rust patina",
+   "medium_render": "cyanotype"
+  },
+  "seed": 1037
+ },
+ {
+  "template_id": "site_decay",
+  "prompt": "inside a mason jar, acid-etched aurora borealis icefield, spore germination spray across rough hewn",
+  "components": {
+   "scale_perspective": "inside a mason jar",
+   "temporal_state": "acid-etched",
+   "setting_location": "aurora borealis icefield",
+   "phenomenon_pattern": "spore germination spray",
+   "texture_density": "rough hewn"
+  },
+  "seed": 1038
+ },
+ {
+  "template_id": "specimen",
+  "prompt": "pollen grain closeup of horn core arch, wet on wet watercolor, absinthe green and bruised purple, clinical lighting",
+  "components": {
+   "scale_perspective": "pollen grain closeup",
+   "material_substance": "horn core",
+   "subject_form": "arch",
+   "medium_render": "wet on wet watercolor",
+   "color_logic": "absinthe green and bruised purple"
+  },
+  "seed": 1039
+ },
+ {
+  "template_id": "temporal_diptych",
+  "prompt": "crystallizing becoming pupating, sac in hollow perimeter, galalith plastic, absinthe green and bruised purple, cave wall fresco",
+  "components": {
+   "temporal_state": "crystallizing",
+   "subject_form": "sac",
+   "spatial_logic": "hollow perimeter",
+   "material_substance": "galalith plastic",
+   "color_logic": "absinthe green and bruised purple",
+   "medium_render": "cave wall fresco"
+  },
+  "seed": 1040
+ },
+ {
+  "template_id": "textural_macro",
+  "prompt": "rooftop parapet lean of tufted cushion pewter ingot, gridded snoot spot, celadon and terracotta harmony, anaglyph red cyan",
+  "components": {
+   "scale_perspective": "rooftop parapet lean",
+   "texture_density": "tufted cushion",
+   "material_substance": "pewter ingot",
+   "light_behavior": "gridded snoot spot",
+   "color_logic": "celadon and terracotta harmony",
+   "medium_render": "anaglyph red cyan"
+  },
+  "seed": 1041
+ },
+ {
+  "template_id": "abstract_field",
+  "prompt": "bokeh polygon disk in shattered symmetry arrangement, bone with terracotta punctuation, methane bubbles, infrared photography",
+  "components": {
+   "phenomenon_pattern": "bokeh polygon disk",
+   "spatial_logic": "shattered symmetry",
+   "color_logic": "bone with terracotta punctuation",
+   "atmosphere_field": "methane bubbles",
+   "medium_render": "infrared photography"
+  },
+  "seed": 1042
+ },
+ {
+  "template_id": "atmospheric_depth",
+  "prompt": "void through ocean plankton bloom and birch pollen haze, motheye anti-reflection, electron microscope, charcoal with goldenrod punctuation, oil pastel drawing",
+  "components": {
+   "subject_form": "void",
+   "atmosphere_field": "ocean plankton bloom",
+   "light_behavior": "motheye anti-reflection",
+   "scale_perspective": "electron microscope",
+   "color_logic": "charcoal with goldenrod punctuation",
+   "medium_render": "oil pastel drawing"
+  },
+  "seed": 1043
+ },
+ {
+  "template_id": "environmental",
+  "prompt": "vast landscape scale view of kelp hatchery tanks, ocean plankton bloom, void barely visible, crepuscular rays, etching on zinc",
+  "components": {
+   "scale_perspective": "vast landscape scale",
+   "setting_location": "kelp hatchery tanks",
+   "atmosphere_field": "ocean plankton bloom",
+   "subject_form": "void",
+   "light_behavior": "crepuscular rays",
+   "medium_render": "etching on zinc"
+  },
+  "seed": 1044
+ },
+ {
+  "template_id": "essence",
+  "prompt": "seersucker puckers lunette, zigzag ascent",
+  "components": {
+   "texture_density": "seersucker puckers",
+   "subject_form": "lunette",
+   "spatial_logic": "zigzag ascent"
+  },
+  "seed": 1045
+ },
+ {
+  "template_id": "liminal",
+  "prompt": "brutalist grain elevator, diffraction spike star from beyond, marijuana smoke tendrils, alternating polarity, celadon and terracotta harmony, anaglyph red cyan",
+  "components": {
+   "setting_location": "brutalist grain elevator",
+   "light_behavior": "diffraction spike star",
+   "atmosphere_field": "marijuana smoke tendrils",
+   "spatial_logic": "alternating polarity",
+   "color_logic": "celadon and terracotta harmony",
+   "medium_render": "anaglyph red cyan"
+  },
+  "seed": 1046
+ },
+ {
+  "template_id": "material_collision",
+  "prompt": "braided sinew and suede merging, voronoi cells at boundary, thorny briar, soft diffused, bone white and oxblood, carbon print process",
+  "components": {
+   "material_substance": "braided sinew",
+   "phenomenon_pattern": "voronoi cells",
+   "texture_density": "thorny briar",
+   "light_behavior": "soft diffused",
+   "color_logic": "bone white and oxblood",
+   "medium_render": "carbon print process"
+  },
+  "seed": 1047
+ }
+]
