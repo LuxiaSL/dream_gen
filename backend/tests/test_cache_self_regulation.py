@@ -124,3 +124,43 @@ def test_ttl_disabled_by_default(tmp_path, src):
     ).isoformat()
     mgr.add(src, "new", {}, emb(unit(13)))
     assert id_old in mgr.entries  # ttl 0 = never expire
+
+
+def make_per_era_cfg(tmp: Path, max_size: int = 10) -> dict:
+    cfg = make_cfg(tmp, max_size=max_size)
+    cfg["generation"]["cache"]["fresh_cache_per_era"] = True
+    return cfg
+
+
+def test_per_era_switch_neither_archives_nor_restores(tmp_path, src):
+    # Seed an archive for "liminal" the legacy way, so a restore WOULD
+    # be possible if the flag failed to suppress it.
+    legacy = CacheManager(make_cfg(tmp_path, max_size=10))
+    legacy.switch_template("liminal")
+    legacy.add(src, "old era", {}, emb(unit(20)), template_id="liminal")
+    legacy.switch_template("essence")  # archives liminal's entry
+    assert legacy.has_archived("liminal")
+
+    mgr = CacheManager(make_per_era_cfg(tmp_path))
+    mgr.switch_template("essence")
+    mgr.add(src, "essence era", {}, emb(unit(21)), template_id="essence")
+    files = [e.image_path for e in mgr.entries.values()]
+
+    res = mgr.switch_template("liminal")
+
+    assert res["archived"] is False          # essence era not archived
+    assert res["restored"] is False          # liminal archive not restored
+    assert mgr.size() == 0                   # era starts empty
+    assert not any(f.exists() for f in files)  # essence files deleted, no leak
+    assert not mgr.has_archived("essence")
+
+
+def test_legacy_switch_still_archives_and_restores(tmp_path, src):
+    mgr = CacheManager(make_cfg(tmp_path, max_size=10))
+    mgr.switch_template("liminal")
+    mgr.add(src, "p", {}, emb(unit(22)), template_id="liminal")
+    mgr.switch_template("essence")
+    assert mgr.has_archived("liminal")
+    res = mgr.switch_template("liminal")
+    assert res["restored"] is True
+    assert mgr.size() == 1

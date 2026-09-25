@@ -121,7 +121,17 @@ class CacheManager:
         sr = config.get("generation", {}).get("cache", {}).get("self_regulation", {})
         self.eviction_policy = sr.get("eviction", "redundancy")  # "redundancy" | "lru"
         self.entry_ttl_minutes = float(sr.get("entry_ttl_minutes", 0))  # 0 = never expire
-        
+
+        # Per-era cache (2026-09-25): every template era starts empty — a
+        # template's archive from its previous era is neither written nor
+        # restored. Cross-era recalls were an elastic band: under anchor
+        # walking each injection promotes to anchor, so restored entries
+        # pulled every fresh era back into the previous attractor (measured
+        # Sep-16 session: end-of-era latents within 0.01-0.05 of pre-switch).
+        self.fresh_cache_per_era = bool(
+            config.get("generation", {}).get("cache", {}).get("fresh_cache_per_era", False)
+        )
+
         # Active cache directories (where current template's frames live)
         self.active_dir = self.cache_dir / "active"
         self.image_dir = self.active_dir / "images"
@@ -882,7 +892,13 @@ class CacheManager:
             return result
         
         logger.info(f"Switching template: '{self._current_template_id}' -> '{new_template_id}'")
-        
+
+        # Per-era cache: no archive written, no archive restored — the new
+        # era accumulates only its own recalls.
+        if self.fresh_cache_per_era:
+            archive_current_template = False
+            restore_if_archived = False
+
         # Archive current cache if requested and there are entries
         if archive_current_template and self.entries and self._current_template_id:
             archive_path = self.archive_current(self._current_template_id)

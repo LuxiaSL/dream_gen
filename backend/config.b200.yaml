@@ -86,6 +86,13 @@ generation:
       eviction: "redundancy"
       entry_ttl_minutes: 240
 
+    # Per-era cache (2026-09-25): each template era starts with an empty
+    # cache — archives from a template's previous eras are neither written
+    # nor restored. Cross-era recalls were the elastic band snapping every
+    # fresh era back into the old attractor (and their interpolations read
+    # as jagged lurches into an alien look).
+    fresh_cache_per_era: true
+
     injection_logic: "any"
     injection_mode: "dissimilar"
     injection_probability: 0.08   # was 0.15 — less random injection at higher keyframe rate
