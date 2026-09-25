@@ -299,7 +299,47 @@ def run_preview() -> None:
     log(f"done: {n} frames -> {video}")
 
 
+# ------------------------------------------------------------ fresh renders
+def run_fresh() -> None:
+    """
+    The same words from nothing: txt2img of chronicle prompts with the dream's
+    own settings (no anchor, no history), for side-by-side with the tape.
+
+        lab.py fresh <specs.json> [seeds_per_prompt=3]
+
+    specs.json: [{"prompt", "template_id", "components", "seed", ...}, ...]
+    Writes ~/luxi-files/dreamgen-lab/fresh/<i>_s<k>.jpg plus manifest.json.
+    """
+    if len(sys.argv) < 3:
+        sys.exit("usage: lab.py fresh <specs.json> [seeds_per_prompt=3]")
+    specs = json.load(open(sys.argv[2]))
+    per = int(sys.argv[3]) if len(sys.argv) > 3 else 3
+    out = LAB / "fresh"
+    out.mkdir(parents=True, exist_ok=True)
+    ps = prompt_system()
+    t2i, _ = load_pipes()
+    manifest = []
+    for i, s in enumerate(specs):
+        neg = negative_for(ps, s)
+        base = int(s.get("seed", 1000 + i))
+        for k in range(per):
+            name = f"{i:03d}_s{k}.jpg"
+            try:
+                g = torch.Generator("cuda").manual_seed(base + 7919 * k)
+                img = t2i(s["prompt"], negative_prompt=neg, width=1024, height=512,
+                          num_inference_steps=STEPS, guidance_scale=CFG, generator=g).images[0]
+                img.save(out / name, quality=94)
+            except Exception as e:  # one bad prompt must not sink the batch
+                log(f"fresh {i} seed {k} failed: {e}")
+                continue
+            manifest.append({**{k2: s[k2] for k2 in s if k2 != "components"},
+                             "i": i, "k": k, "file": name, "negative": neg})
+        log(f"fresh {i + 1}/{len(specs)}")
+    json.dump(manifest, open(out / "manifest.json", "w"), indent=1)
+    log(f"done: {len(manifest)} images in {out}")
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
-    {"dupe": run_dupe, "vae": run_vae, "preview": run_preview}.get(
-        cmd, lambda: sys.exit(f"usage: lab.py dupe|vae|preview (got {cmd!r})"))()
+    {"dupe": run_dupe, "vae": run_vae, "preview": run_preview, "fresh": run_fresh}.get(
+        cmd, lambda: sys.exit(f"usage: lab.py dupe|vae|preview|fresh (got {cmd!r})"))()
