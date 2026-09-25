@@ -271,12 +271,12 @@ def run_preview() -> None:
     except Exception:
         font = ImageFont.load_default()
 
+    import av  # node1 has no ffmpeg binary; PyAV bundles libx264 (as cloud/video_encoder.py)
     video = out / "vae_preview_stock_top_ftema_bottom.mp4"
-    enc = subprocess.Popen(
-        ["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
-         "-s", "1024x1024", "-r", "30", "-i", "-", "-c:v", "libx264", "-crf", "16",
-         "-preset", "medium", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(video)],
-        stdin=subprocess.PIPE)
+    container = av.open(str(video), mode="w")
+    stream = container.add_stream("libx264", rate=30)
+    stream.width, stream.height, stream.pix_fmt = 1024, 1024, "yuv420p"
+    stream.options = {"crf": "16", "preset": "medium"}
     n = 0
     for a, b in zip(lats, lats[1:]):
         for k in range(20):
@@ -290,10 +290,12 @@ def run_preview() -> None:
                 d.text((11, y + 2), label, font=font, fill=(255, 230, 150))
             if n % 60 == 30:
                 frame.save(out / f"pair_{n:04d}.png")
-            enc.stdin.write(frame.tobytes())
+            for packet in stream.encode(av.VideoFrame.from_image(frame)):
+                container.mux(packet)
             n += 1
-    enc.stdin.close()
-    enc.wait()
+    for packet in stream.encode():
+        container.mux(packet)
+    container.close()
     log(f"done: {n} frames -> {video}")
 
 
