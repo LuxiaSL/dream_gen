@@ -740,6 +740,29 @@ class AsyncGenerationOrchestrator:
         except Exception:
             pass
 
+    def _current_prompt_text(self) -> str:
+        """The prompt in force right now ('' if unavailable). Never raises."""
+        try:
+            get = getattr(self.prompt_manager, 'get_current_prompt', None)
+            return str(get() or "") if get else ""
+        except Exception:
+            return ""
+
+    def _recent_pooled_latent(self, kf_num: int, max_age_kf: int = 4):
+        """
+        Pooled latent of kf_num, or of the nearest earlier keyframe within
+        max_age_kf. Injection is decided the moment a keyframe completes,
+        before the interpolation worker has encoded it, so the exact entry is
+        usually missing; a drift neighbour a few keyframes back is nearly
+        identical (drift is a 0.18 orbit around the same anchor).
+        """
+        pooled = getattr(self.interpolation_worker, 'keyframe_pooled', None) or {}
+        for k in range(kf_num, kf_num - max_age_kf - 1, -1):
+            vec = pooled.get(k)
+            if vec is not None:
+                return vec
+        return None
+
     def _chronicle_note(self, kf_num: int, kind: str, detail: str = "") -> None:
         """
         Stage a chronicle event for a keyframe that hasn't completed yet.
@@ -1050,7 +1073,9 @@ class AsyncGenerationOrchestrator:
                         await self.keyframe_worker.result_queue.put({
                             'keyframe_num': next_kf,
                             'path': injected_result['path'],
-                            'prompt': 'injected',
+                            # the words in force when the memory arrived (the
+                            # chronicle used to record a bare 'injected')
+                            'prompt': self._current_prompt_text() or 'injected',
                             'generation_time': injected_result.get('injection_time', 0.0),
                             'sequence_num': next_seq
                         })
@@ -1071,7 +1096,15 @@ class AsyncGenerationOrchestrator:
                             self.last_cache_injection_kf = next_kf
                             self.cache_injections += 1
                             self.recent_cache_injections.append(True)
-                            self._chronicle_note(next_kf, "cache_injection")
+                            meta = injected_result.get('metadata') or {}
+                            detail = meta.get('cache_id', '')
+                            if meta.get('memory_keyframe') is not None:
+                                detail += f" (kf {meta['memory_keyframe']})"
+                            if meta.get('latent_dist') is not None:
+                                detail += f" d={meta['latent_dist']:.2f}"
+                            if meta.get('memory_prompt'):
+                                detail += f": {meta['memory_prompt'][:160]}"
+                            self._chronicle_note(next_kf, "cache_injection", detail)
                         
                         logger.info(f"  [OK] Injection completed, proceeding to next iteration")
                         continue
@@ -1594,7 +1627,7 @@ class AsyncGenerationOrchestrator:
                 
                 # 2. Switch cache manager (archive old, potentially restore if returning)
                 if self.cache:
-                    self.cache.switch_template(new_template_id)
+                    self.cache.switch_template(new_template_id, era_start_kf=keyframe_num)
                     logger.info(f"    ✓ Cache manager switched (old cache archived)")
 
                 # Note: Buffer automatically triggers regeneration for consumed template
@@ -1664,9 +1697,7 @@ class AsyncGenerationOrchestrator:
                 result = await self.injection_strategy.inject_dissimilar_keyframe(
                     current_image_path=current_path,
                     target_keyframe_num=keyframe_num,
-                    current_latent_vec=self.interpolation_worker.keyframe_pooled.get(
-                        self.current_keyframe_num
-                    ),
+                    current_latent_vec=self._recent_pooled_latent(self.current_keyframe_num),
                 )
 
                 if result:
@@ -1720,9 +1751,10 @@ class AsyncGenerationOrchestrator:
                     
                     return {
                         'path': target_path,
-                        'injection_time': injection_time
+                        'injection_time': injection_time,
+                        'metadata': metadata,
                     }
-            
+
             return None
             
         except Exception as e:

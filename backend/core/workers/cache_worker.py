@@ -334,11 +334,14 @@ class CacheAnalysisWorker:
                 embedding
             )
             
+            if cache_id is None:
+                return False  # refused by the cache (stale admission from a previous era)
+
             logger.debug(
                 f"Added frame to cache: {cache_id} "
                 f"(total: {self.cache.size()})"
             )
-            
+
             return True
             
         except Exception as e:

@@ -148,6 +148,8 @@ class CacheInjectionStrategy:
                 return None
 
             selected_entry = None
+            # What picked the memory (filled by whichever path selects it)
+            selection_info: Dict[str, Any] = {}
 
             # === Latent-first selection (cache/latent_pool.py) ===
             # Pooled-latent cosine distance ranks within-motif difference
@@ -177,6 +179,7 @@ class CacheInjectionStrategy:
                         weights = weights / weights.sum()
                         idx = np.random.choice(len(lat_candidates), p=weights)
                         selected_entry, sel_dist = lat_candidates[idx]
+                        selection_info = {"selection": "latent", "latent_dist": float(sel_dist)}
                         self.recent_cache_injections.append(selected_entry.cache_id)
                         logger.info(
                             f"[LATENT_DISSIMILAR] Selected {selected_entry.cache_id} "
@@ -248,6 +251,12 @@ class CacheInjectionStrategy:
 
                 selected_idx = np.random.choice(len(candidates), p=weights)
                 selected_entry, selected_dissimilarity, selected_color_sim, selected_struct_sim = candidates[selected_idx]
+                selection_info = {
+                    "selection": "dual_metric",
+                    "color_similarity": float(selected_color_sim),
+                    "struct_similarity": float(selected_struct_sim),
+                    "dissimilarity": float(selected_dissimilarity),
+                }
 
                 # Track this injection
                 self.recent_cache_injections.append(selected_entry.cache_id)
@@ -322,15 +331,16 @@ class CacheInjectionStrategy:
                     f"({blend_weight*100:.0f}% cached, {(1-blend_weight)*100:.0f}% current)"
                 )
                 
+                # (Built from selection_info: this dict used to name the
+                # dual-metric locals, so a latent-path selection raised
+                # NameError here and fell through to a 100% direct copy.)
                 metadata = {
                     "type": "dissimilar_cache_injection",
-                    "cache_id": selected_entry.cache_id,
-                    "color_similarity": selected_color_sim,
-                    "struct_similarity": selected_struct_sim,
-                    "dissimilarity": selected_dissimilarity,
-                    "blend_weight": blend_weight
+                    "blend_weight": blend_weight,
+                    **self._memory_info(selected_entry),
+                    **selection_info,
                 }
-                
+
                 return target_path, metadata
                 
             except Exception as e:
@@ -361,10 +371,10 @@ class CacheInjectionStrategy:
             self.total_cache_injections += 1
             
             logger.info(f"[DIRECT_COPY] Copied cached frame {cache_entry.cache_id}")
-            
+
             metadata = {
                 "type": "direct_cache_copy",
-                "cache_id": cache_entry.cache_id
+                **self._memory_info(cache_entry),
             }
             
             return target_path, metadata
@@ -373,6 +383,16 @@ class CacheInjectionStrategy:
             logger.error(f"Direct copy fallback failed: {e}")
             return None
     
+    @staticmethod
+    def _memory_info(entry) -> Dict[str, Any]:
+        """Which memory was recalled: id, its prompt, and the keyframe it came from."""
+        params = getattr(entry, "generation_params", None) or {}
+        return {
+            "cache_id": entry.cache_id,
+            "memory_prompt": getattr(entry, "prompt", "") or "",
+            "memory_keyframe": params.get("keyframe_num"),
+        }
+
     def get_stats(self) -> Dict[str, Any]:
         """
         Get injection statistics

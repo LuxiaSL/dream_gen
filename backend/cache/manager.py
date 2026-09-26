@@ -131,6 +131,11 @@ class CacheManager:
         self.fresh_cache_per_era = bool(
             config.get("generation", {}).get("cache", {}).get("fresh_cache_per_era", False)
         )
+        # First keyframe of the current era (set by switch_template). Admission
+        # is asynchronous (the worker waits up to latent_wait_s for a latent),
+        # so a frame from the old era can land a second after the fresh start;
+        # add() refuses those, or the new era's first recall is the old era.
+        self.era_start_kf: Optional[int] = None
 
         # Active cache directories (where current template's frames live)
         self.active_dir = self.cache_dir / "active"
@@ -341,9 +346,9 @@ class CacheManager:
         embedding: Optional[Union[Dict[str, Any], List[float]]] = None,
         template_id: Optional[str] = None,
         components: Optional[Dict[str, str]] = None,
-    ) -> str:
+    ) -> Optional[str]:
         """
-        Add image to cache
+        Add image to cache (None if refused as a stale admission from a previous era)
         
         Process:
         1. Generate unique cache ID
@@ -369,6 +374,19 @@ class CacheManager:
         if not image_path.exists():
             logger.error(f"Cannot cache non-existent image: {image_path}")
             raise FileNotFoundError(f"Image not found: {image_path}")
+
+        kf = (generation_params or {}).get("keyframe_num")
+        if (
+            self.fresh_cache_per_era
+            and self.era_start_kf is not None
+            and isinstance(kf, int)
+            and kf < self.era_start_kf
+        ):
+            logger.info(
+                f"Cache admission refused: keyframe {kf} predates this era "
+                f"(started at keyframe {self.era_start_kf})"
+            )
+            return None
 
         # Generate cache ID
         cache_id = f"cache_{len(self.entries):05d}_{int(datetime.now().timestamp())}"
@@ -848,7 +866,8 @@ class CacheManager:
         self,
         new_template_id: str,
         archive_current_template: bool = True,
-        restore_if_archived: bool = True
+        restore_if_archived: bool = True,
+        era_start_kf: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Handle template switch with automatic archive/restore
@@ -892,6 +911,7 @@ class CacheManager:
             return result
         
         logger.info(f"Switching template: '{self._current_template_id}' -> '{new_template_id}'")
+        self.era_start_kf = era_start_kf
 
         # Per-era cache: no archive written, no archive restored — the new
         # era accumulates only its own recalls.
