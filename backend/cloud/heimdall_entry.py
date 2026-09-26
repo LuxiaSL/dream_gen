@@ -213,7 +213,8 @@ async def main():
     )
     args = parser.parse_args()
 
-    # Logging
+    # Logging (bootstrap only: DreamController.setup_logging replaces this
+    # handler with its own rotating file + console handlers)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",

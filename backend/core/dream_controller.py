@@ -37,13 +37,15 @@ from utils.vae_source import vae_source
 from utils.perf_stats import get_perf_stats
 
 # Setup logging
-def setup_logging(log_dir: Path, log_level: str = "INFO"):
+def setup_logging(log_dir: Path, log_level: str = "INFO", console_level: str = "INFO"):
     """
     Configure logging system with rotation
-    
-    Console: Shows INFO+ by default (important events, warnings, errors)
+
+    Console: INFO+ by default (system.console_log_level). Under Heimdall the
+      console IS the job log, which nothing rotates; WARNING keeps it small.
+      The 'heartbeat' logger always reaches the console.
     File: Captures everything (DEBUG+) for post-mortem analysis
-    
+
     Noisy loggers (urllib3, websockets, etc.) are quieted to WARNING
     """
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -71,13 +73,23 @@ def setup_logging(log_dir: Path, log_level: str = "INFO"):
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(file_formatter)
     
-    # Console handler - always INFO+ regardless of config (file gets DEBUG)
+    # Console handler (file gets DEBUG). Level from system.console_log_level;
+    # the heartbeat logger passes regardless so a quiet console still shows life.
+    min_console = getattr(logging, str(console_level).upper(), logging.INFO)
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(logging.INFO)
+    console_handler.addFilter(
+        lambda r: r.levelno >= min_console or r.name == "heartbeat"
+    )
     console_handler.setFormatter(console_formatter)
-    
-    # Root logger
+
+    # Root logger. Drop handlers installed before us (e.g. an entry point's
+    # logging.basicConfig): with the root at DEBUG, a level-less bootstrap
+    # handler copies every DEBUG line and a second copy of every INFO line to
+    # the console (~108 MB/hour in the Heimdall job log, 2026-09-25).
     root_logger = logging.getLogger()
+    for h in list(root_logger.handlers):
+        root_logger.removeHandler(h)
     root_logger.setLevel(logging.DEBUG)
     root_logger.addHandler(file_handler)
     root_logger.addHandler(console_handler)
@@ -131,7 +143,8 @@ class DreamController:
         
         # Setup logging
         log_dir = Path(self.config['system']['log_dir'])
-        self.logger = setup_logging(log_dir, self.config['system']['log_level'])
+        self.logger = setup_logging(log_dir, self.config['system']['log_level'],
+                                    self.config['system'].get('console_log_level', 'INFO'))
         
         self.logger.info("=" * 70)
         self.logger.info("DREAM WINDOW CONTROLLER INITIALIZING")

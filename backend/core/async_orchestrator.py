@@ -257,6 +257,8 @@ class AsyncGenerationOrchestrator:
         self.pg_swap_chroma = float(pg.get('swap_chroma_strength', 0.85))
         self.pg_swap_luma = float(pg.get('swap_luma_strength', 0.4))
         self._grounded_files: deque = deque(maxlen=2)  # a queued job may hold the older one
+        self._unfillable_gaps: set = set()  # keyframe pairs whose gap can never be filled (warned once)
+        self._last_heartbeat: float = 0.0   # monotonic time of the last heartbeat line
         if self.palette_grounding:
             logger.info(
                 f"Palette grounding ENABLED: re-anchor chroma {self.pg_chroma} / "
@@ -947,8 +949,12 @@ class AsyncGenerationOrchestrator:
                             end_kf_path=end_path,
                             interp_sequence_nums=sequence_nums
                         )
-                    else:
-                        logger.warning(f"  Cannot fill gap {start_kf}->{end_kf}: missing keyframe paths")
+                    elif missing_pair not in self._unfillable_gaps:
+                        # e.g. the session's first pair after a resume: its start
+                        # keyframe never existed in this process. Say so once.
+                        self._unfillable_gaps.add(missing_pair)
+                        logger.warning(f"  Cannot fill gap {start_kf}->{end_kf}: missing keyframe paths "
+                                       f"(not repeated for this pair)")
                 
                 # === 4. Check if Adjacent Interpolations Need Submission ===
                 # If previous keyframe exists and its interpolations to current are registered
@@ -1250,7 +1256,22 @@ class AsyncGenerationOrchestrator:
                         logger.info(f"    Avg gen time: {fresh_stats.get('avg_generation_time', 0):.2f}s")
                     logger.info(f"  Cache injections: {self.cache_injections}")
                     logger.info("=" * 60)
-                
+
+                # === HEARTBEAT (one line every 5 min; reaches the console even
+                # when the console is set to WARNING, so the job log stays small
+                # but still shows the dream is alive) ===
+                now = time.monotonic()
+                if now - self._last_heartbeat >= 300:
+                    self._last_heartbeat = now
+                    try:
+                        ps = self.prompt_manager.get_stats() if hasattr(self.prompt_manager, 'get_stats') else {}
+                        logging.getLogger("heartbeat").info(
+                            f"alive: kf {next_kf} · template {ps.get('current_template', 'N/A')} · "
+                            f"mutations {ps.get('total_mutations', 0)} · injections {self.cache_injections}"
+                        )
+                    except Exception:
+                        logger.debug("heartbeat failed", exc_info=True)
+
                 # === INTERVENTION STATS (every 50 keyframes) ===
                 # Logs intervention breakdown for tuning collapse prevention parameters
                 if next_kf % 50 == 0 and self.use_combinatorial:

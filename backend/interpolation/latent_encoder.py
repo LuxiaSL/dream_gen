@@ -74,6 +74,9 @@ class LatentEncoder:
         self.vae_path = vae_path
         self.vae_model = vae_model
         self.vae_cache_dir = vae_cache_dir
+        # Frames per full-VAE decode call (see _decode_batch_vae); overridable
+        # by the owner after construction, e.g. from config.
+        self.max_decode_batch = 24
         self.enable_torch_compile = enable_torch_compile
         self.vae_compiled = False  # Track if compilation was successful
         
@@ -690,12 +693,18 @@ class LatentEncoder:
                 pass
         
         with torch.no_grad():
-            decoder_output = self.vae.decode(scaled_latents)
-            # Handle both tensor and DecoderOutput return types
-            if hasattr(decoder_output, 'sample'):
-                image_tensors = decoder_output.sample
-            else:
-                image_tensors = decoder_output
+            # Decode in chunks: a whole swap glide (150 frames + the keyframe)
+            # at 1024x512 in one call peaked at ~155 GB of the B200's 183 GB.
+            # Chunks keep the peak to one chunk's activations; outputs match.
+            chunk = max(1, int(getattr(self, "max_decode_batch", 24)))
+            parts = []
+            for start in range(0, scaled_latents.shape[0], chunk):
+                decoder_output = self.vae.decode(scaled_latents[start:start + chunk])
+                # Handle both tensor and DecoderOutput return types
+                parts.append(decoder_output.sample if hasattr(decoder_output, 'sample')
+                             else decoder_output)
+            image_tensors = parts[0] if len(parts) == 1 else torch.cat(parts, dim=0)
+            del parts
             
             # Sync to get accurate timing
             if torch.cuda.is_available():

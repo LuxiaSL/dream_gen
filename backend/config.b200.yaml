@@ -16,6 +16,10 @@ system:
     unet: 0                       # Keyframe generation (UNet + scheduler)
     vae: 1                        # VAE encode/decode (interpolation)
   log_level: "INFO"
+  # Under Heimdall the console is the job log (/tmp on node1's root disk, not
+  # rotated). WARNING+ plus a 5-minute heartbeat line; the rotating file under
+  # log_dir keeps full DEBUG detail.
+  console_log_level: "WARNING"
 
 generation:
   use_async_orchestrator: true
