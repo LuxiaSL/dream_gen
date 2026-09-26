@@ -114,3 +114,48 @@ def test_latent_selection_blends_and_names_the_memory(tmp_path, src):
     assert meta["memory_prompt"] == "a door in the fog" and meta["memory_keyframe"] == 7
     assert vae.decoded == [pytest.approx(0.35)], "35% memory, 65% present"
     assert path.exists()
+
+
+class VecVAE:
+    """encode() returns a 1x4x4x8 latent whose pooled embedding is a given vector."""
+
+    def __init__(self, vecs: dict):
+        self.vecs = vecs
+        self.encodes = []
+
+    async def encode_async(self, path, for_interpolation=True):
+        self.encodes.append(Path(path).name)
+        return torch.tensor(self.vecs[Path(path).name]).reshape(1, 4, 4, 8)
+
+    async def decode_async(self, latent, upscale_to_target=True):
+        return Image.new("RGB", (8, 4))
+
+
+def test_selection_uses_the_present_frame_itself_when_no_pooled_latent_is_ready(tmp_path, src):
+    # The interpolation worker usually lags generation, so the orchestrator
+    # often has no pooled latent to pass: the strategy must encode the
+    # present frame itself (once, reused for the blend).
+    cfg = per_era_cfg(tmp_path)
+    mgr = CacheManager(cfg)
+    mgr.switch_template("liminal", era_start_kf=0)
+    cur = unit(30)
+    near = cur + 0.01 * unit(31)
+    near /= np.linalg.norm(near)
+    id_far = mgr.add(src, "far memory", {"keyframe_num": 3}, emb(-cur))
+    id_near = mgr.add(src, "near memory", {"keyframe_num": 4}, emb(near))
+
+    current = tmp_path / "current.png"
+    Image.new("RGB", (8, 4)).save(current)
+    vae = VecVAE({"current.png": cur,
+                  mgr.entries[id_far].image_path.name: -cur,
+                  mgr.entries[id_near].image_path.name: near})
+    sim = SimpleNamespace(encode_image=lambda p: {"color": [0.0] * 96, "struct": "ab" * 8})
+    out = tmp_path / "out"
+    out.mkdir()
+    strat = CacheInjectionStrategy(cfg, mgr, sim, vae_access=vae,
+                                   buffer=SimpleNamespace(keyframe_dir=out))
+
+    _, meta = asyncio.run(strat.inject_dissimilar_keyframe(current, 9, current_latent_vec=None))
+    assert meta["selection"] == "latent"
+    assert meta["cache_id"] == id_far, "the near memory is under min_dist and never eligible"
+    assert vae.encodes.count("current.png") == 1, "present encoded once, reused for the blend"

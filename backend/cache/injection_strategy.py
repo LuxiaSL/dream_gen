@@ -147,6 +147,22 @@ class CacheInjectionStrategy:
                 logger.debug("Cache is empty")
                 return None
 
+            # The blend needs the present's latent anyway: encode it first and
+            # pool it, so selection sees the frame actually being replaced.
+            # (The interpolation worker usually runs several keyframes behind
+            # generation, so a pooled latent for the current keyframe was
+            # almost never ready and latent selection never ran.)
+            current_latent = None
+            if self.vae_access or self.latent_encoder:
+                try:
+                    current_latent = await self._encode(current_image_path)
+                    from cache.latent_pool import pool_latent
+                    fresh_vec = pool_latent(current_latent)
+                    if fresh_vec is not None:
+                        current_latent_vec = fresh_vec
+                except Exception:
+                    logger.debug("Present-frame encode for selection failed", exc_info=True)
+
             selected_entry = None
             # What picked the memory (filled by whichever path selects it)
             selection_info: Dict[str, Any] = {}
@@ -277,29 +293,10 @@ class CacheInjectionStrategy:
                 return self._direct_copy_fallback(selected_entry, target_keyframe_num)
             
             try:
-                # Use async VAE access if available (thread-safe)
-                if self.vae_access:
-                    current_latent = await self.vae_access.encode_async(
-                        current_image_path,
-                        for_interpolation=True
-                    )
-                    cached_latent = await self.vae_access.encode_async(
-                        selected_entry.image_path,
-                        for_interpolation=True
-                    )
-                else:
-                    # Dedicated VAE mode (no lock - runs in executor to avoid blocking)
-                    import asyncio
-                    loop = asyncio.get_event_loop()
-                    current_latent = await loop.run_in_executor(
-                        None,
-                        lambda: self.latent_encoder.encode(current_image_path, for_interpolation=True)
-                    )
-                    cached_latent = await loop.run_in_executor(
-                        None,
-                        lambda: self.latent_encoder.encode(selected_entry.image_path, for_interpolation=True)
-                    )
-                
+                if current_latent is None:
+                    current_latent = await self._encode(current_image_path)
+                cached_latent = await self._encode(selected_entry.image_path)
+
                 # Blend: weighted towards cached (breaking collapse)
                 blend_weight = self.cache_config.get('blend_weight', 0.6)
                 blended_latent = (
@@ -315,6 +312,8 @@ class CacheInjectionStrategy:
                     )
                 else:
                     # Dedicated VAE mode (runs in executor to avoid blocking event loop)
+                    import asyncio
+                    loop = asyncio.get_event_loop()
                     blended_image = await loop.run_in_executor(
                         None,
                         lambda: self.latent_encoder.decode(blended_latent, upscale_to_target=True)
@@ -383,6 +382,16 @@ class CacheInjectionStrategy:
             logger.error(f"Direct copy fallback failed: {e}")
             return None
     
+    async def _encode(self, path: Path):
+        """VAE-encode an image for blending (async shared VAE, or legacy encoder in an executor)."""
+        if self.vae_access:
+            return await self.vae_access.encode_async(path, for_interpolation=True)
+        import asyncio
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, lambda: self.latent_encoder.encode(path, for_interpolation=True)
+        )
+
     @staticmethod
     def _memory_info(entry) -> Dict[str, Any]:
         """Which memory was recalled: id, its prompt, and the keyframe it came from."""
