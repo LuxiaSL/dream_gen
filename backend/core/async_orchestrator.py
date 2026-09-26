@@ -1308,11 +1308,20 @@ class AsyncGenerationOrchestrator:
                         del self.keyframe_sequences[old_kf]
                 
                 # === 10. Backpressure Check ===
+                # Throttling is the normal state once the display buffer is
+                # full (~60 s ahead), so it is DEBUG; only a queue that keeps
+                # growing (interpolation falling behind) is worth a warning.
                 interp_depth = self.interpolation_worker.pair_queue.qsize()
                 if interp_depth > 5:
-                    logger.warning(
-                        f"Interpolation queue depth high ({interp_depth}), throttling..."
-                    )
+                    if interp_depth > 30:
+                        logger.warning(
+                            f"Interpolation queue depth very high ({interp_depth}): "
+                            f"interpolation is falling behind generation"
+                        )
+                    else:
+                        logger.debug(
+                            f"Interpolation queue depth high ({interp_depth}), throttling..."
+                        )
                     await asyncio.sleep(0.5)
                 
             except asyncio.CancelledError:
