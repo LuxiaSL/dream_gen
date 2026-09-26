@@ -1586,7 +1586,33 @@ class AsyncGenerationOrchestrator:
                 # This creates smoother visual transitions than direct copy
                 keyframe_path = self.buffer.keyframe_dir / f"keyframe_{keyframe_num:03d}.png"
                 
-                if current_path and current_path.exists():
+                # Era swap as a merge (generation.cache.merge.swap): the fresh
+                # frame keeps the new era's composition, words and palette;
+                # the outgoing picture is its image prompt, so the new era
+                # opens made partly of the old one's material.
+                swap_cfg = None
+                swap_fn = getattr(self.generator, "swap_merge_settings", None)
+                if swap_fn is not None:
+                    try:
+                        swap_cfg = swap_fn()
+                    except Exception:
+                        swap_cfg = None
+                merged_swap = False
+                if swap_cfg is not None and current_path and current_path.exists():
+                    try:
+                        loop = asyncio.get_event_loop()
+                        merged_swap = await loop.run_in_executor(
+                            None, self.generator.merge_memory,
+                            Path(fresh_frame.path), Path(current_path), keyframe_path,
+                            fresh_frame.prompt, getattr(fresh_frame, 'negative_prompt', None) or None,
+                            abs(hash(keyframe_path.name)) % (2**32), swap_cfg,
+                        )
+                    except Exception:
+                        logger.warning("Swap merge raised; blending instead", exc_info=True)
+                if merged_swap:
+                    logger.info(f"  [TEMPLATE_SWITCH] Merged: fresh frame with the outgoing picture as image prompt {swap_cfg}")
+                    target_path = keyframe_path
+                elif current_path and current_path.exists():
                     try:
                         # Encode both frames to latent space
                         current_latent = await self.vae_access.encode_async(

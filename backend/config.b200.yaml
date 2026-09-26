@@ -124,6 +124,15 @@ generation:
       palette_luma: 0.2
       ip_weight: "ip-adapter-plus_sd15.safetensors"
       cache_dir: "/mnt/beegfs/luxia/hf-cache"   # weights already here (home disk is full)
+      # Era swaps too: the new era's fresh frame is re-dreamed with the
+      # outgoing picture as a light image prompt (roles reversed, gentler),
+      # replacing the 70/30 latent dissolve. Falls back to it on failure.
+      swap:
+        enabled: true
+        ip_scale: 0.4
+        strength: 0.5
+        palette_chroma: 0.2
+        palette_luma: 0.1
     injection_cooldown: 15        # was 5 — at most every ~2.5 seconds
     seed_injection_cooldown: 15   # was 5
     embedding_history_reset: "partial"

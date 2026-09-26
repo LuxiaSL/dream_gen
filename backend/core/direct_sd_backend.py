@@ -568,6 +568,14 @@ class DirectSDBackend:
             "cache_dir": m.get("cache_dir"),
         }
 
+    def swap_merge_settings(self) -> Optional[Dict[str, float]]:
+        """Overrides for era swaps (merge.swap), or None when swaps keep the blend."""
+        m = self.config.get("generation", {}).get("cache", {}).get("merge", {}) or {}
+        sw = m.get("swap") or {}
+        if not self.merge_enabled or not sw.get("enabled", False):
+            return None
+        return {k: float(sw[k]) for k in ("ip_scale", "strength", "palette_chroma", "palette_luma") if k in sw}
+
     @property
     def merge_enabled(self) -> bool:
         return self._merge_settings()["method"] == "ip_plus_palette" and not getattr(self, "_merge_broken", False)
@@ -616,6 +624,7 @@ class DirectSDBackend:
         prompt: str,
         negative_prompt: Optional[str] = None,
         seed: Optional[int] = None,
+        overrides: Optional[Dict[str, float]] = None,
     ) -> bool:
         """
         Fold a recalled frame into the present: recolour the present toward
@@ -630,7 +639,7 @@ class DirectSDBackend:
                 from utils.palette import transfer_palette
             except ImportError:
                 from backend.utils.palette import transfer_palette
-            cfg = self._merge_settings()
+            cfg = {**self._merge_settings(), **(overrides or {})}
             size = (self.target_width, self.target_height)
             present = Image.open(present_path).convert("RGB").resize(size, Image.Resampling.LANCZOS)
             memory = Image.open(memory_path).convert("RGB")
@@ -653,7 +662,7 @@ class DirectSDBackend:
                     generator=torch.Generator(device=self.device).manual_seed(seed),
                 ).images[0]
             image.save(output_path, "PNG", optimize=False, compress_level=1)
-            logger.info(f"[MERGE] memory folded in (ip {cfg['ip_scale']}, palette) in {time.time() - t0:.2f}s")
+            logger.info(f"[MERGE] folded in (ip {cfg['ip_scale']}, strength {cfg['strength']}) in {time.time() - t0:.2f}s")
             return True
         except Exception:
             if getattr(self, "_merge_pipe", None) is None:
