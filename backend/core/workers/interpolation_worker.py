@@ -530,8 +530,16 @@ class InterpolationWorker:
                 )
                 
                 # Submit to cache worker (will handle encoding & selective caching)
-                # In cloud mode, midpoint may not have a file_path (in-memory only)
-                if self.cache_worker and midpoint_frame.file_path:
+                # In cloud mode frames stay in memory: file_path is set but the
+                # file is never written, and every submission failed with
+                # "No such file" (~6k log lines/hour, all of 2026-09-25).
+                mid_path = midpoint_frame.file_path
+                on_disk = bool(mid_path) and Path(mid_path).exists()
+                if mid_path and not on_disk and not getattr(self, "_warned_midpoint_in_memory", False):
+                    self._warned_midpoint_in_memory = True
+                    logger.warning("[INTERP_CACHE] Interpolation frames are in memory only; "
+                                   "midpoint cache submissions are skipped (said once)")
+                if self.cache_worker and on_disk:
                     # Pool the midpoint's own latent so admission can gate it
                     midpoint_vec = None
                     try:
