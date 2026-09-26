@@ -169,6 +169,12 @@ class AsyncGenerationOrchestrator:
                     buffer=frame_buffer
                 )
                 logger.info("Injection strategy initialized (shared VAE with lock)")
+
+        # Memory merge (generation.cache.merge): recalls are re-dreamed with the
+        # memory as an IP-Adapter image prompt instead of latent-blended
+        if self.injection_strategy is not None and getattr(generator, "merge_enabled", False):
+            self.injection_strategy.merger = self._merge_memory
+            logger.info(f"Memory merge enabled: {self.config['generation']['cache'].get('merge')}")
         
         # === Denoising State Machine (Phase 2) ===
         # Detect if using CombinatorialPromptSystem (has should_mutate method)
@@ -740,6 +746,22 @@ class AsyncGenerationOrchestrator:
         except Exception:
             pass
 
+    async def _merge_memory(self, present_path, memory_path, target_path) -> bool:
+        """Fold a recalled frame into the present via the backend (in an executor)."""
+        get_neg = getattr(self.prompt_manager, "get_current_negative", None)
+        negative = None
+        try:
+            negative = get_neg() if get_neg else None
+        except Exception:
+            negative = None
+        seed = abs(hash(Path(target_path).name)) % (2**32)
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, self.generator.merge_memory,
+            Path(present_path), Path(memory_path), Path(target_path),
+            self._current_prompt_text(), negative or None, seed,
+        )
+
     def _current_prompt_text(self) -> str:
         """The prompt in force right now ('' if unavailable). Never raises."""
         try:
@@ -1104,6 +1126,8 @@ class AsyncGenerationOrchestrator:
                                 detail += f" d={meta['latent_dist']:.2f}"
                             if meta.get('memory_prompt'):
                                 detail += f": {meta['memory_prompt'][:160]}"
+                            if meta.get('type') == 'memory_merge':
+                                detail = "merged · " + detail
                             self._chronicle_note(next_kf, "cache_injection", detail)
                         
                         logger.info(f"  [OK] Injection completed, proceeding to next iteration")

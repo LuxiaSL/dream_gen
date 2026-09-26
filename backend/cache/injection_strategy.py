@@ -88,6 +88,11 @@ class CacheInjectionStrategy:
             self.is_async = False
         
         self.buffer = buffer
+
+        # Optional memory merger (set by the orchestrator): an async callable
+        # (present_path, memory_path, target_path) -> bool that re-dreams the
+        # present with the memory folded in. None / False -> latent blend.
+        self.merger = None
         
         # Determine output directory
         if buffer:
@@ -292,6 +297,19 @@ class CacheInjectionStrategy:
                 logger.warning("No VAE access available, falling back to direct copy")
                 return self._direct_copy_fallback(selected_entry, target_keyframe_num)
             
+            target_path = self.output_dir / f"keyframe_{target_keyframe_num:03d}.png"
+            if self.merger is not None:
+                try:
+                    if await self.merger(current_image_path, selected_entry.image_path, target_path):
+                        self.total_cache_injections += 1
+                        return target_path, {
+                            "type": "memory_merge",
+                            **self._memory_info(selected_entry),
+                            **selection_info,
+                        }
+                except Exception:
+                    logger.warning("Memory merge raised; blending instead", exc_info=True)
+
             try:
                 if current_latent is None:
                     current_latent = await self._encode(current_image_path)
@@ -320,7 +338,6 @@ class CacheInjectionStrategy:
                     )
                 
                 # Save blended frame
-                target_path = self.output_dir / f"keyframe_{target_keyframe_num:03d}.png"
                 blended_image.save(target_path, "PNG", optimize=False, compress_level=1)
                 
                 self.total_cache_injections += 1

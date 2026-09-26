@@ -552,6 +552,116 @@ class DirectSDBackend:
         )
 
     # ================================================================
+    # Memory merge (cache injection): the present re-dreamed with a
+    # recalled frame as an image prompt (IP-Adapter Plus)
+    # ================================================================
+
+    def _merge_settings(self) -> Dict[str, Any]:
+        m = self.config.get("generation", {}).get("cache", {}).get("merge", {}) or {}
+        return {
+            "method": m.get("method", "blend"),
+            "ip_scale": float(m.get("ip_scale", 0.7)),
+            "strength": float(m.get("strength", 0.6)),
+            "palette_chroma": float(m.get("palette_chroma", 0.6)),
+            "palette_luma": float(m.get("palette_luma", 0.2)),
+            "ip_weight": m.get("ip_weight", "ip-adapter-plus_sd15.safetensors"),
+            "cache_dir": m.get("cache_dir"),
+        }
+
+    @property
+    def merge_enabled(self) -> bool:
+        return self._merge_settings()["method"] == "ip_plus_palette" and not getattr(self, "_merge_broken", False)
+
+    def _ensure_merge_pipe(self):
+        """
+        A separate img2img pipeline for memory merges. Its UNet is a COPY with
+        IP-Adapter attention processors; the main UNet is untouched, because
+        once IP processors are loaded every call on that UNet must carry image
+        embeddings. VAE / text encoder / tokenizer are shared. ~3 GB extra.
+        """
+        if getattr(self, "_merge_pipe", None) is not None:
+            return self._merge_pipe
+        self._ensure_loaded()
+        import copy
+        from diffusers import EulerDiscreteScheduler, StableDiffusionImg2ImgPipeline
+
+        cfg = self._merge_settings()
+        t0 = time.time()
+        base = self._txt2img_pipe
+        pipe = StableDiffusionImg2ImgPipeline(
+            vae=base.vae,
+            text_encoder=base.text_encoder,
+            tokenizer=base.tokenizer,
+            unet=copy.deepcopy(base.unet),
+            scheduler=EulerDiscreteScheduler.from_config(
+                base.scheduler.config, use_karras_sigmas=self.scheduler_name == "karras"),
+            safety_checker=None,
+            feature_extractor=None,
+        )
+        pipe.set_progress_bar_config(disable=True)
+        kwargs = {"subfolder": "models", "weight_name": cfg["ip_weight"]}
+        if cfg["cache_dir"]:
+            kwargs["cache_dir"] = str(Path(cfg["cache_dir"]).expanduser())
+        pipe.load_ip_adapter("h94/IP-Adapter", **kwargs)
+        pipe.to(self.device, dtype=torch.float16)
+        self._merge_pipe = pipe
+        logger.info(f"[MERGE] IP-Adapter pipeline ready ({cfg['ip_weight']}) in {time.time() - t0:.1f}s")
+        return pipe
+
+    def merge_memory(
+        self,
+        present_path: Path,
+        memory_path: Path,
+        output_path: Path,
+        prompt: str,
+        negative_prompt: Optional[str] = None,
+        seed: Optional[int] = None,
+    ) -> bool:
+        """
+        Fold a recalled frame into the present: recolour the present toward
+        the memory, then img2img it with the present's words and the memory as
+        an IP-Adapter image prompt. Returns False (caller blends instead) on
+        any failure; a pipeline that fails to build is not retried.
+        """
+        if not self.merge_enabled:
+            return False
+        try:
+            try:
+                from utils.palette import transfer_palette
+            except ImportError:
+                from backend.utils.palette import transfer_palette
+            cfg = self._merge_settings()
+            size = (self.target_width, self.target_height)
+            present = Image.open(present_path).convert("RGB").resize(size, Image.Resampling.LANCZOS)
+            memory = Image.open(memory_path).convert("RGB")
+            init = transfer_palette(present, memory.resize(size), cfg["palette_chroma"], cfg["palette_luma"])
+            if negative_prompt is None:
+                negative_prompt = self._default_negative_prompt()
+            if seed is None:
+                seed = random.randint(0, 2**32 - 1)
+            t0 = time.time()
+            with self._pipeline_lock:
+                pipe = self._ensure_merge_pipe()
+                pipe.set_ip_adapter_scale(cfg["ip_scale"])
+                image = pipe(
+                    prompt=prompt, negative_prompt=negative_prompt, image=init,
+                    # whole frame into the square the image encoder sees
+                    # (its processor would otherwise centre-crop half away)
+                    ip_adapter_image=memory.resize((512, 512), Image.Resampling.BICUBIC),
+                    strength=cfg["strength"], num_inference_steps=self.default_steps,
+                    guidance_scale=self.default_cfg,
+                    generator=torch.Generator(device=self.device).manual_seed(seed),
+                ).images[0]
+            image.save(output_path, "PNG", optimize=False, compress_level=1)
+            logger.info(f"[MERGE] memory folded in (ip {cfg['ip_scale']}, palette) in {time.time() - t0:.2f}s")
+            return True
+        except Exception:
+            if getattr(self, "_merge_pipe", None) is None:
+                self._merge_broken = True  # don't rebuild a pipeline that can't load
+            logger.warning("[MERGE] memory merge failed; falling back to blend", exc_info=True)
+            return False
+
+    # ================================================================
     # Compatibility Stubs (match DreamGenerator interface)
     # ================================================================
 

@@ -159,3 +159,46 @@ def test_selection_uses_the_present_frame_itself_when_no_pooled_latent_is_ready(
     assert meta["selection"] == "latent"
     assert meta["cache_id"] == id_far, "the near memory is under min_dist and never eligible"
     assert vae.encodes.count("current.png") == 1, "present encoded once, reused for the blend"
+
+
+def _strategy_with(tmp_path, src, merger):
+    cfg = per_era_cfg(tmp_path)
+    mgr = CacheManager(cfg)
+    mgr.switch_template("liminal", era_start_kf=0)
+    cur = unit(40)
+    mid = mgr.add(src, "a lantern", {"keyframe_num": 2}, emb([-x for x in cur]))
+    current = tmp_path / "current.png"
+    Image.new("RGB", (8, 4)).save(current)
+    vae = VecVAE({"current.png": cur, mgr.entries[mid].image_path.name: [-x for x in cur]})
+    sim = SimpleNamespace(encode_image=lambda p: {"color": [0.0] * 96, "struct": "ab" * 8})
+    out = tmp_path / "out"
+    out.mkdir(exist_ok=True)
+    strat = CacheInjectionStrategy(cfg, mgr, sim, vae_access=vae, buffer=SimpleNamespace(keyframe_dir=out))
+    strat.merger = merger
+    return strat, current, vae
+
+
+def test_merger_replaces_the_blend_when_it_succeeds(tmp_path, src):
+    calls = []
+
+    async def merger(present, memory, target):
+        calls.append((Path(present).name, Path(target).name))
+        Image.new("RGB", (8, 4)).save(target)
+        return True
+
+    strat, current, vae = _strategy_with(tmp_path, src, merger)
+    path, meta = asyncio.run(strat.inject_dissimilar_keyframe(current, 7, current_latent_vec=None))
+    assert meta["type"] == "memory_merge" and meta["memory_prompt"] == "a lantern"
+    assert calls == [("current.png", "keyframe_007.png")] and path.exists()
+
+
+@pytest.mark.parametrize("behaviour", ["declines", "raises"])
+def test_blend_is_the_fallback_when_the_merge_does_not_happen(tmp_path, src, behaviour):
+    async def merger(present, memory, target):
+        if behaviour == "raises":
+            raise RuntimeError("no ip adapter")
+        return False
+
+    strat, current, _ = _strategy_with(tmp_path, src, merger)
+    path, meta = asyncio.run(strat.inject_dissimilar_keyframe(current, 8, current_latent_vec=None))
+    assert meta["type"] == "dissimilar_cache_injection" and path.exists()

@@ -109,6 +109,21 @@ generation:
     injection_mode: "dissimilar"
     injection_probability: 0.08   # was 0.15 — less random injection at higher keyframe rate
     blend_weight: 0.35            # cached frame suggests (~1/3); anchor promotion makes it durable anyway
+
+    # How a recalled memory enters the present (2026-09-26, chosen by Luxia
+    # from experiments/model_lab/inject_lab.py). "ip_plus_palette": the
+    # present is recoloured toward the memory, then re-dreamed at `strength`
+    # with its own words and the memory as an IP-Adapter Plus image prompt.
+    # A true merge instead of the blend's double exposure. "blend" = the
+    # legacy latent mix above; any merge failure falls back to it.
+    merge:
+      method: "ip_plus_palette"
+      ip_scale: 0.7               # 0.6 read muted, 0.8 let the memory win
+      strength: 0.6
+      palette_chroma: 0.6
+      palette_luma: 0.2
+      ip_weight: "ip-adapter-plus_sd15.safetensors"
+      cache_dir: "/mnt/beegfs/luxia/hf-cache"   # weights already here (home disk is full)
     injection_cooldown: 15        # was 5 — at most every ~2.5 seconds
     seed_injection_cooldown: 15   # was 5
     embedding_history_reset: "partial"
