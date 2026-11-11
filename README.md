@@ -1,305 +1,129 @@
+<div align="center">
+
 # dream_gen
 
-**A truly infinite diffusion stream — continuous AI art that systematically explores latent space without ever collapsing.**
+**A dream that never stops.**
 
-> *Watch it live at [aetherawi.red/dreams](https://aetherawi.red/dreams)*
-> 
-> *Part of the [Aethera](https://github.com/LuxiaSL/aethera) platform*
->
-> *Made by [luxia](https://x.com/slLuxia) & [celeste](https://x.com/parafactual)*
+Stable Diffusion 1.5 in an endless loop. Every frame grows out of the one before,<br>
+and the words steering the loop come from ten trillion possible prompts, so dream_gen never repeats itself.
 
-<p align="center">
-  <img src="examples/loop/Screenshot From 2026-01-27 04-27-22.png" alt="dream_gen output — plume through crystal" width="48%">
-  <img src="examples/loop/Screenshot From 2026-01-24 04-02-49.png" alt="dream_gen output — neural membranes" width="48%">
-</p>
+[**Watch dreams live**](https://aetherawi.red/dreams) · [Read the chronicle](https://aetherawi.red/dreams/chronicle) · [The site](https://github.com/LuxiaSL/aethera) · [The vocabulary](https://github.com/LuxiaSL/apeiron)
 
-This isn't just morphing images. It's a self-sustaining generation loop that drifts through aesthetic space indefinitely — combining diffusion, interpolation, and a three-layer collapse prevention system that ensures it never gets stuck. The techniques all exist independently; diffusion, img2img feedback, VAE interpolation, perceptual hashing. But they haven't been put together quite like this before.
+<img src="docs/images/stage.jpg" alt="dreams, live on its stage at aetherawi.red/dreams: the picture's edges fold outward into a hand-made stage of curtains and glittering floor." width="100%">
 
-The result: a stream that runs for hours, days, weeks — producing frames that are fire-and-forget ephemeral, each one unique, systematically exploring combinations that emerge from the interplay of prompts, mutations, cache injections, and template swaps. All for about a dollar an hour.
+</div>
 
----
+## How it works
 
-## The Core Loop
+Feed an image model its own output and it collapses. The picture drifts toward the
+model's favourite mush, and the colours slide into magenta. dream_gen is built to
+keep wandering instead.
 
 ```
-                        ┌────────────────────────────────────────┐
-                        │         COLLAPSE PREVENTION            │
-                        │                                        │
-                        │  Layer 1: Mutation   → BEND mode 0.7   │
-                        │  Layer 2: Cache      → blend in ~60%   │
-                        │  Layer 3: Swap       → fresh txt2img ──┼───┐
-                        │                                        │   │
-                        └────────────────────────────────────────┘   │
-                                                                     │
-╔════════════════════════════════════════════════════════════════════╪════════╗
-║                                                                    │        ║
-║                                                                    ▼        ║
-║   ┌─────────────────────────────────────────────────────────────────────┐   ║
-║   │                          KEYFRAME GENERATION                        │   ║
-║   │                                                                     │   ║
-║   │   KEYFRAME N-1  ───img2img───►  KEYFRAME N  ◄───  FRESH FRAME       │   ║
-║   │        │          (0.2 drift      │              (txt2img on        │   ║
-║   │        │           or 0.7 BEND)   │               startup/swap)     │   ║
-║   │        │                          │                                 │   ║
-║   └────────┼──────────────────────────┼─────────────────────────────────┘   ║
-║            │                          │                                     ║
-║            │                          │                                     ║
-║            ▼                          ▼                                     ║
-║   ┌──────────────────────────────────────────────────────────────────────┐  ║
-║   │                           INTERPOLATION                              │  ║
-║   │                                                                      │  ║
-║   │        VAE encode ──► LATENT N-1 ◄──slerp──► LATENT N ◄── VAE encode │  ║
-║   │                              │                                       │  ║
-║   │                              ▼                                       │  ║
-║   │                      12 blended latents                              │  ║
-║   │                              │                                       │  ║
-║   │                              ▼                                       │  ║
-║   │                         VAE decode                                   │  ║
-║   │                              │                                       │  ║
-║   └──────────────────────────────┼───────────────────────────────────────┘  ║
-║                                  │                                          ║
-║                                  ▼                                          ║
-║   ┌─────────────────────────────────────────────────────────────────────┐   ║
-║   │                         OUTPUT STREAM                               │   ║
-║   │                                                                     │   ║
-║   │        12 interpolated frames  +  keyframe  ───►  WebSocket ───►    │   ║
-║   │                                                                     │   ║
-║   └─────────────────────────────────────────────────────────────────────┘   ║
-║                                          │                                  ║
-║                                          ▼                                  ║
-║                                 (keyframe N becomes N-1)                    ║
-║                                          │                                  ║
-║                                          │                                  ║
-╚══════════════════════════════════════════╪══════════════════════════════════╝
-                                           │
-                                     ┌─────┘
-                                     │
-                                     ▼
-                               (loop continues)
+   prompt = a template with 3–7 slots, each filled from one of 12 visual axes
+                                    │
+   anchor ──img2img 0.18──► keyframe ──► keyframe ──► …     about 1 keyframe a second,
+     ▲                                                       20 interpolated frames between each,
+     │                                                       streamed at 30 fps
+     │  a word mutates every few seconds:
+     └─ re-dream the anchor at 0.70 with the new words ──► the new anchor
+
+        about every 45 s   a memory is recalled and merged into the present
+        about every 15 min a new era begins from a fresh txt2img
 ```
 
-1. **Startup**: txt2img generates a fresh frame from the combinatorial prompt system
-2. **img2img**: Each keyframe evolves from the previous (denoise 0.2 DRIFT, or 0.7 BEND after mutations)
-3. **Slerp**: VAE encodes both keyframes, spherically interpolates 12 latents, decodes all
-4. **Stream**: All frames push to viewers — interpolations for smoothness, keyframes for evolution
-5. **Collapse prevention**: Triggers at frame-count intervals, escalating through three layers
+- **dream_gen walks from anchor to anchor.** Most keyframes are small img2img steps from the
+  one before. When a word changes, dream_gen goes back to the last anchor and re-dreams
+  it at high denoise with the new words. That keyframe becomes the new anchor, and the
+  small steps since the last one are dropped from the lineage. They never pile up for
+  long, so the picture never dissolves.
+- **Words mutate one at a time.** Each mutation trades one word for a neighbour that is
+  near, but not too near. Nearness is measured in two embedding spaces: CLIP for the
+  look of a word, and T5 for its meaning. A word can't return while it is among the last six held in its slot.
+- **Memories are re-dreamed, not crossfaded.** dream_gen keeps a small cache of frames
+  that were truly different, in structure, colour and latent distance. To recall one,
+  dream_gen redraws the present with the memory as an
+  [IP-Adapter](https://github.com/tencent-ailab/IP-Adapter) image prompt, after
+  shifting the present's palette toward it. A crossfade made a ghostly double
+  exposure. This makes one picture that remembers.
+- **Eras.** Every 1,000 keyframes a new template and a fresh txt2img frame open a new
+  era, merged in the same way so the last era leaves a trace. Each era has its own
+  noise seed and its own memories.
+- **Colour stays honest.** Each new anchor is recoloured toward a fresh render of its
+  own prompt, which keeps the loop from drifting into magenta.
 
-Each keyframe at 1024×512. Each interpolation frame decoded from blended latents. Frames stream to the VPS via WebSocket, broadcast to any browsers watching. Nothing stored permanently — it's all ephemeral, except for the screenshots I save.
+Between keyframes, frames are spherical interpolations in the VAE's latent space. They
+are encoded to H.264 on the GPU machine and streamed to the site, which passes them on
+to every viewer. dream_gen saves its state as it runs, so a restart picks up where the last run
+left off.
 
----
+## Ten trillion prompts
 
-## The Combinatorial Prompt System (designed & inspired by [celeste](https://x.com/parafactual))
+14 templates, 12 visual axes and 741 words make 1.06 × 10¹³ distinct prompts. More than
+400,000 keyframes in, dream_gen has used a few billionths of them.
 
-This is where infinity comes from.
+The words were chosen, not brainstormed, in [apeiron](https://github.com/LuxiaSL/apeiron):
 
-### Templates × Components = Billions of Prompts
+1. **Generate.** Four model families (Claude, Kimi K2, DeepSeek and GPT) take turns
+   proposing words for each axis. Each is told to avoid everything already said. That
+   yields about 3,700 candidates.
+2. **Select.** Every candidate is embedded twice: in OpenCLIP ViT-bigG for its look,
+   and in T5-XXL for its meaning. A word has to sit closest to its own axis in both
+   spaces. Near-duplicates in either space are cut, and farthest-point sampling keeps
+   the words that are far apart in either.
+3. **Fill the gaps.** Empty regions of the space are decoded back into words through
+   T5, to find what is missing.
+4. **Curate** by hand, down to 741.
 
-**Templates** define prompt structure with slot placeholders:
+The axes were checked against each other the same way, so no two say the same thing.
+The templates range from three-word haiku (`essence`) to seven-slot collisions of two
+materials.
 
-```
-"{subject_form} made of {material_substance}, {texture_density} surface, 
- {light_behavior}, {color_logic}, {medium_render}"
-```
+## The chronicle
 
-**Components** fill those slots from curated word pools:
+dream_gen records its own history. Each keyframe sends its prompt, its events and a small
+thumbnail to the site. The site groups keyframes into eras and scenes. It paints the whole
+history as one strip, a slit-scan in which every era is its own band of colour and
+structure. The detail is kept for two weeks. The strip, and one picture from every
+scene, are kept for good.
 
-```yaml
-color_logic:
-  - word: "split complementary palette"
-    opposite: "monochrome"
-  - word: "analogous warm tones"  
-    opposite: "cool discord"
-  - word: "iridescent color shift"
-    opposite: "matte single hue"
-  # ... 17 more
-```
+[**aetherawi.red/dreams/chronicle**](https://aetherawi.red/dreams/chronicle)
 
-Each component has a **semantic opposite** — used both for negative prompt generation and for forced mutations during collapse prevention.
+## Run your own
 
-### 12 Visual Axes, ~20 Components Each
-
-| Category | Examples | Role |
-|----------|----------|------|
-| `subject_form` | crystalline figure, weathered monument, recursive fractal | Primary visual entity |
-| `material_substance` | oxidized copper, liquid mercury, volcanic glass | What it's made of |
-| `texture_density` | eroded granular, tessellated geometric, fibrous organic | Surface quality |
-| `light_behavior` | caustic light rays, subsurface scattering, light bleeding | How light interacts |
-| `color_logic` | split complementary, triadic neon, monochrome with accent | Palette relationships |
-| `atmosphere_field` | volumetric fog layers, particle suspension, heat distortion | Environmental media |
-| `phenomenon_pattern` | crystalline growth, digital corruption, fluid dynamics | Visual processes |
-| `spatial_logic` | golden spiral composition, radial symmetry, isometric grid | Compositional arrangement |
-| `scale_perspective` | electron microscope view, aerial survey, macro lens | Viewing position |
-| `temporal_state` | mid-dissolution, fossilizing, time-lapse bloom | Moment in transformation |
-| `setting_location` | submerged cathedral, volcanic vent, abandoned server room | Environmental context |
-| `medium_render` | cyanotype print, thermal imaging, oil paint impasto | Artistic technique |
-
-### How the Word Lists Were Built
-
-The components weren't just brainstormed — they were systematically expanded:
-
-1. **Seed terms**: Hand-picked initial set per category with descriptions of what belongs
-2. **LLM expansion**: Prompted Claude Opus 4.5 and Kimi-K2 to generate novel terms fitting each category's semantics
-3. **Iteration**: Continued the loop until ~200 candidates per category
-4. **Farthest-point sampling**: Computed CLIP text embeddings, selected 40 maximally-distant samples
-5. **Manual curation**: Cleaned down to ~20 per category, ensuring semantic opposites exist
-
-The result: word pools that are both diverse (far apart in embedding space) and coherent (all genuinely belong to their category). Each template uses 5-7 categories, meaning billions of possible prompt combinations — and that's before mutations start shifting things mid-stream.
-
----
-
-## Three-Layer Collapse Prevention
-
-The fundamental problem with img2img feedback loops: they converge. Small biases amplify. Everything trends toward a single color, a single composition, a fixed point.
-
-dream_gen fights this with three escalating intervention layers, each with cooldowns that force variety from the layers above.
-
-### Layer 1: Mutations (DRIFT → BEND)
-
-During normal operation, the system runs in **DRIFT mode** — img2img at 0.2 denoise, slow aesthetic evolution within the current prompt.
-
-Periodically (via modulo frame counting tuned from testing), a **mutation** triggers:
-- Select a component category (weighted by visual impact)
-- Swap the current word for its **semantic opposite** (or random if none)
-- Enter **BEND mode** — denoise jumps to 0.7 for ~5 keyframes
-- The new prompt takes effect quickly, pushing the image in a genuinely new direction
-
-Then: cooldown. The mutation layer locks out, forcing any further intervention to come from Layer 2.
-
-### Layer 2: Cache Injection
-
-Over time, the system collects frames into a cache:
-- **Keyframes** that show high uniqueness (via pHash-8 + ColorHist)
-- **t=0.5 interpolation midpoints** — transitional states not present in keyframes
-
-When Layer 2 triggers, a cached frame is selected for **maximum dissimilarity** to the current aesthetic and blended in at ~60% weight. The old visual trace remains, but the injection drags things toward a different region of color/structure space.
-
-pHash-8 captures structural/compositional similarity. ColorHist (32 bins × HSV) captures palette. Together they cover the two main axes of mode collapse. Both run on CPU, leaving GPU free for diffusion and interpolation.
-
-Then: longer cooldown. If this layer triggers too frequently within a time window, it "breaks" — escalating to Layer 3.
-
-### Layer 3: Template Swap
-
-The emergency reset. When mutations and cache injections aren't enough:
-
-1. **Fresh frame** generated via txt2img from a new template + random components
-2. Blended in at **~90% weight** — almost complete replacement, trace of the old
-3. The cache carries forward (those unique frames are still valuable)
-4. New prompt, new structure, new starting point
-5. The exploration continues down a completely different branch
-
-To make this instant, fresh frames are **pre-generated** at startup — one per template, with their prompts ready for downstream mutations. As each gets used, it regenerates in the background. The system never waits.
-
----
-
-## What Makes This Interesting
-
-> "I expected morphing images. But this is genuinely exploring latent space in a systematic manner. Continuously."
-
-The emergent behaviors are what make it worth watching:
-
-- **Visible shifts**: You can *see* when the lighting component changes, when color logic mutates, when structure reorganizes. It's like watching what an image would look like if generated with a different prompt — while maintaining information from the original.
-
-- **Pseudo-determinism**: Even at full denoising, img2img carries a trace of its source. The starting frame propagates forward as a kind of seed. Mutations push against it but never fully escape. Template swaps are the only true breaks.
-
-- **Backwards engineering**: Knowing all the templates and components, try to guess the prompt from a frame. It's surprisingly hard — even for 1-2 components. The combinatorial explosion and mutation history make each frame's lineage opaque.
-
-- **Cache hits**: The frames that make it into the cache (high uniqueness in both color AND structure) tend to be the most visually striking. When they get reinjected later, they bring back moments that worked.
-
-- **Infinite without repetition**: Before the combinatorial system, things hovered around the static seed images. Now every fresh frame is genuinely novel, every mutation pathway unexplored, every template swap a new beginning. The flywheel is off.
-
----
-
-## Technical Details
-
-| Spec | Value |
-|------|-------|
-| Resolution | 1024×512 |
-| Keyframe generation | ~1.5s (SD 1.5 via ComfyUI) |
-| Interpolation | 12 frames via VAE slerp, ~0.15s each |
-| Effective FPS | ~5 frames/second streamed |
-| Cache metrics | pHash-8 (structure) + ColorHist (color), CPU-based |
-| Cloud cost | Runs on dedicated B200 via Heimdall |
-| Storage | None — frames are ephemeral |
-
-### Architecture
-
-```
-┌─────────────────┐     WebSocket       ┌─────────────────┐     WebSocket       ┌─────────────────┐
-│  GPU (B200)     │ ──────────────────► │  VPS (Aethera)  │ ──────────────────► │  Browsers       │
-│  dream_gen      │   Binary frames     │  Frame Hub      │   Binary frames     │  /dreams        │
-└─────────────────┘                     └─────────────────┘                     └─────────────────┘
-```
-
-The GPU runs autonomously. Frames push to the VPS. The VPS broadcasts to any connected viewers and manages GPU lifecycle (spin up when viewers arrive, spin down after grace period). State syncs periodically for resume across restarts.
-
----
-
-## Project Structure
-
-```
-dream_gen/
-├── backend/
-│   ├── core/                    # Generation loop, orchestration
-│   ├── cache/                   # pHash + ColorHist similarity, LRU cache
-│   ├── cloud/                   # WebSocket client, frame pushing, state sync
-│   ├── interpolation/           # VAE encode/decode, slerp
-│   ├── prompts/                 # CombinatorialPromptSystem
-│   └── config.yaml              # All the knobs
-├── prompts/
-│   ├── templates.yaml           # 12+ prompt structures
-│   ├── components.yaml          # 12 categories × ~20 words each
-│   └── components_embeddings.npz # Pre-computed for similarity selection
-├── daemon.py                    # Production process manager
-└── docker/                      # Calibration image + deployment docs
-```
-
-### Running Locally
+dream_gen is cheap to run: about a dollar an hour on a GPU rented from RunPod.
+You need Linux, Python 3.11 or 3.12, an NVIDIA GPU and [uv](https://docs.astral.sh/uv/).
+SD 1.5 and the weights for IP-Adapter download from Hugging Face on first run.
+To keep them somewhere other than the default cache, set `DREAMGEN_HF_CACHE`.
 
 ```bash
-# Clone
-git clone https://github.com/LuxiaSL/dream_gen.git
-cd dream_gen
-
-# Install (requires Python 3.11+, NVIDIA GPU, ComfyUI)
-uv venv && .venv/Scripts/activate  # or source .venv/bin/activate
+git clone https://github.com/LuxiaSL/dream_gen && cd dream_gen
 uv sync
-
-# Configure
-cp backend/config.yaml backend/config.local.yaml
-# Edit paths, enable/disable cloud mode
-
-# Run
-uv run daemon.py  # Manages ComfyUI + generation loop
+uv run python backend/cloud/heimdall_entry.py \
+  --config backend/config.b200.yaml \
+  --vps-url wss://your-site/ws/gpu --auth-token "$DREAM_GEN_AUTH_TOKEN"
 ```
 
-See [docs/INSTALLATION_GUIDE.md](docs/INSTALLATION_GUIDE.md) for detailed Windows desktop setup.
-See [docs/CONFIG_REFERENCE.md](docs/CONFIG_REFERENCE.md) for all configuration options.
+The frames go to an [aethera](https://github.com/LuxiaSL/aethera) server, which serves
+them to browsers at `/dreams`. The config runs the UNet and the VAE on two GPUs. To use
+one GPU, give `system.gpu_devices` the same id twice. Every setting is commented in
+[`backend/config.b200.yaml`](backend/config.b200.yaml).
 
----
+## Further reading
 
-## Gallery
+| | |
+|---|---|
+| [SPEC-anchor.md](SPEC-anchor.md) | anchor walking: why the loop stopped dissolving |
+| [SPEC-chronicle.md](SPEC-chronicle.md) | how dream_gen records its own history |
+| [SPEC-resume.md](SPEC-resume.md) | saving and resuming where dream_gen left off |
+| [SPEC-multi-gpu-pipeline.md](SPEC-multi-gpu-pipeline.md) | splitting the work across two GPUs |
+| [SPEC-webcodecs-streaming.md](SPEC-webcodecs-streaming.md) | H.264 from the GPU to the browser |
 
-<p align="center">
-  <img src="examples/loop/1.png" alt="bioluminescent mangrove swamp" width="100%">
-  <br>
-  <img src="examples/loop/Screenshot%20From%202026-01-26%2018-30-52.png" alt="voronoi zebra pattern" width="100%">
-  <br>
-  <img src="examples/loop/Screenshot%20From%202026-01-27%2003-48-13.png" alt="pastel interference clouds" width="100%">
-  <br>
-  <img src="examples/loop/2.png" alt="crimson crepuscular rays" width="100%">
-  <br>
-  <em>Frames captured from the stream — each one ephemeral, each one unique</em>
-</p>
+dream_gen started in November 2025 as a desktop wallpaper, rendered through ComfyUI on a
+home PC.
 
----
+## Credits
 
-## License
+Made by [luxia](https://x.com/slLuxia).
 
-MIT License — see [LICENSE](LICENSE) for details.
-
-## Acknowledgments
-
-- **[celeste](https://x.com/parafactual)**, my muse and co-conspirator
-- **[ComfyUI](https://github.com/comfyanonymous/ComfyUI)** — The generation backend
-- **Stable Diffusion** — Making this level of AI art accessible
-- **Claude** — Component list expansion and curation assistance
+MIT licensed. See [LICENSE](LICENSE).
