@@ -19,6 +19,7 @@ Production config: SD 1.5, euler sampler, karras scheduler, CFG 8.0, 15 steps.
 """
 
 import asyncio
+import os
 import logging
 import random
 import threading
@@ -565,7 +566,9 @@ class DirectSDBackend:
             "palette_chroma": float(m.get("palette_chroma", 0.6)),
             "palette_luma": float(m.get("palette_luma", 0.2)),
             "ip_weight": m.get("ip_weight", "ip-adapter-plus_sd15.safetensors"),
-            "cache_dir": m.get("cache_dir"),
+            # where the IP-Adapter weights are cached; DREAMGEN_HF_CACHE wins over
+            # the config, so a host can point at its own disk without editing it
+            "cache_dir": os.environ.get("DREAMGEN_HF_CACHE") or m.get("cache_dir"),
         }
 
     def swap_merge_settings(self) -> Optional[Dict[str, float]]:

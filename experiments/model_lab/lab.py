@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Dreamgen model lab — measurement experiments run as Heimdall jobs on node1.
+Dreamgen model lab — measurement experiments, run as jobs on the GPU host.
 
     python experiments/model_lab/lab.py dupe   # resolution -> duplicated-subject test
     python experiments/model_lab/lab.py vae    # decoder study: color bias, sharpness,
@@ -271,7 +271,7 @@ def run_preview() -> None:
     except Exception:
         font = ImageFont.load_default()
 
-    import av  # node1 has no ffmpeg binary; PyAV bundles libx264 (as cloud/video_encoder.py)
+    import av  # the GPU host has no ffmpeg binary; PyAV bundles libx264 (as cloud/video_encoder.py)
     video = out / "vae_preview_stock_top_ftema_bottom.mp4"
     container = av.open(str(video), mode="w")
     stream = container.add_stream("libx264", rate=30)

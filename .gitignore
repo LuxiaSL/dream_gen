@@ -107,5 +107,5 @@ fsampler/
 
 # Local stream captures + rendered videos (multi-GB)
 recordings/
-# Pre-reset state snapshots on node1
+# Pre-reset state snapshots on the GPU host
 state_backups/

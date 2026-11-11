@@ -18,9 +18,9 @@ def test_stock_when_unset():
 
 def test_model_and_expanded_cache_dir():
     model, cache = vae_source({"generation": {"vae": {
-        "model": "stabilityai/sd-vae-ft-ema", "cache_dir": "~/luxi-files/model-cache"}}})
+        "model": "stabilityai/sd-vae-ft-ema", "cache_dir": "~/model-cache"}}})
     assert model == "stabilityai/sd-vae-ft-ema"
-    assert cache == os.path.expanduser("~/luxi-files/model-cache")
+    assert cache == os.path.expanduser("~/model-cache")
 
 
 def test_malformed_config_falls_back_to_stock():

@@ -11,7 +11,7 @@ round trips. The encoder is unchanged, so the UNet's latent space is too.
     generation:
       vae:
         model: "stabilityai/sd-vae-ft-ema"   # null = the pipeline's stock VAE
-        cache_dir: "~/luxi-files/model-cache"
+        cache_dir: "~/model-cache"           # null = the Hugging Face default
 """
 
 from __future__ import annotations

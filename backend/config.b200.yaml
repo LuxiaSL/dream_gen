@@ -16,7 +16,7 @@ system:
     unet: 0                       # Keyframe generation (UNet + scheduler)
     vae: 1                        # VAE encode/decode (interpolation)
   log_level: "INFO"
-  # Under Heimdall the console is the job log (/tmp on node1's root disk, not
+  # Under Heimdall the console is the job log (/tmp on the GPU host's root disk, not
   # rotated). WARNING+ plus a 5-minute heartbeat line; the rotating file under
   # log_dir keeps full DEBUG detail.
   console_log_level: "WARNING"
@@ -33,7 +33,7 @@ generation:
   # fine-tune "stabilityai/sd-vae-ft-ema" stays neutral (0.00 -> 0.05).
   vae:
     model: null
-    cache_dir: "~/luxi-files/model-cache"
+    cache_dir: null               # null = the Hugging Face default cache
 
   sd:
     steps: 10
@@ -123,7 +123,7 @@ generation:
       palette_chroma: 0.6
       palette_luma: 0.2
       ip_weight: "ip-adapter-plus_sd15.safetensors"
-      cache_dir: "/mnt/beegfs/luxia/hf-cache"   # weights already here (home disk is full)
+      cache_dir: null             # null = HF default cache; DREAMGEN_HF_CACHE overrides
       # Era swaps too: the new era's fresh frame is re-dreamed with the
       # outgoing picture as a light image prompt (roles reversed, gentler),
       # replacing the 70/30 latent dissolve. Falls back to it on failure.

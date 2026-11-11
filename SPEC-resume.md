@@ -16,7 +16,7 @@ long the dream has actually lived.
 ## Design: local-first checkpoint + lifetime epoch
 
 The RunPod-era state round-trip (GPU→VPS→GPU via SCP/CTRL_LOAD_STATE) is
-obsolete — node1's disk persists between runs. Resume is therefore
+obsolete — the GPU host's disk persists between runs. Resume is therefore
 **GPU-local**: a small checkpoint under `output/resume/`, written
 periodically and at shutdown, loaded at boot if compatible.
 
@@ -33,7 +33,7 @@ periodically and at shutdown, loaded at boot if compatible.
 Deliberately **not** persisted: frame buffer, interpolation state, H.264
 encoder state (ephemeral; refill in seconds), BEND mode (resume in DRIFT),
 collapse-detector histories (re-baseline is safer than stale history).
-The injection cache already persists on node1 disk (startup sweep leaves
+The injection cache already persists on the GPU host's disk (startup sweep leaves
 `cache/` untouched).
 
 ### Boot behavior

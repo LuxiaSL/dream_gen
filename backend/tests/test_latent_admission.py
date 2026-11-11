@@ -6,7 +6,7 @@ within-motif difference, so the cache flooded with near-copies and injection
 became self-reinforcing. Admission now gates on pooled-latent cosine distance
 plus a metric-free temporal floor.
 
-Requires torch (pool_latent) — runs on node1 / CI, not the minimal local venv.
+Requires torch (pool_latent) — runs on the GPU host / CI, not the minimal local venv.
 """
 
 import tempfile

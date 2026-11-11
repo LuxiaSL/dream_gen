@@ -38,6 +38,7 @@ and metrics.json.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -54,7 +55,7 @@ from cache.latent_pool import cosine_dist, pool_latent  # noqa: E402  (backend/ 
 from utils.palette import transfer_palette  # noqa: E402
 
 IP_REPO = "h94/IP-Adapter"
-IP_CACHE = Path("/mnt/beegfs/luxia/hf-cache")
+IP_CACHE = os.environ.get("DREAMGEN_HF_CACHE") or None  # None = the Hugging Face default cache
 W, H = 1024, 512
 BLEND = 0.35           # production generation.cache.blend_weight
 MIN_DIST = 0.20        # production latent_admission.min_dist

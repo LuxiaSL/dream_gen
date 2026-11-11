@@ -24,7 +24,7 @@
 ## Architecture
 
 ```
-GPU (node1)                          VPS (aetherawi.red)                   Browser
+GPU host                             VPS (aetherawi.red)                   Browser
 ─────────────────────────────────────────────────────────────────────────────────
 PIL Image                            DreamWebSocketHub                     DreamViewer
   │                                    │                                     │
@@ -1695,7 +1695,7 @@ Transfer-Encoding: chunked
 15. Update `/api/dreams/embed` response
 16. Add static OG preview image
 17. Update `DREAMS_API.md` documentation
-18. Verify `pyav` available on B200 node1
+18. Verify `pyav` available on the B200 host
 19. Deploy and test
 
 ---

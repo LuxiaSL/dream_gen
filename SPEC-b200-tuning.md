@@ -78,7 +78,7 @@ The goal: at 6-7 FPS keyframes with 20 interpolation frames each, viewer sees ~2
 
 ### How to test
 1. Update `config.b200.yaml` with the values above
-2. Push to DreamGen repo, pull on node1
+2. Push to DreamGen repo, pull on the GPU host
 3. Cancel + resubmit Heimdall job
 4. Watch `aetherawi.red/dreams` for 2-3 minutes — should feel meditative, not frenetic
 5. Adjust `drift` denoise (0.08-0.15) and `base_probability` (0.03-0.06) by feel
@@ -89,7 +89,7 @@ The goal: at 6-7 FPS keyframes with 20 interpolation frames each, viewer sees ~2
 
 ### Current architecture
 ```
-DreamGen (node1)                    VPS (aetherawi.red)              Browser
+DreamGen (GPU host)                 VPS (aetherawi.red)              Browser
   PIL image                           WebSocket hub                    JS client
   → JPEG encode (25ms)                → playback queue (pacing)        → receive JPEG
   → WS binary frame                   → broadcast to viewers           → decode
@@ -105,7 +105,7 @@ DreamGen (node1)                    VPS (aetherawi.red)              Browser
 
 ### Proposed architecture
 ```
-DreamGen (node1)                    VPS (aetherawi.red)              Browser
+DreamGen (GPU host)                 VPS (aetherawi.red)              Browser
   PIL image                           WebSocket relay                  WebCodecs
   → H.264 encode (pyav/ffmpeg)        → pass through                   → VideoDecoder
   → I-frame every 2s, P-frames        → (no decode/re-encode)          → canvas render
