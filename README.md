@@ -9,7 +9,7 @@ and the words steering the loop come from ten trillion possible prompts, so drea
 
 [**Watch dreams live**](https://aetherawi.red/dreams) · [Read the chronicle](https://aetherawi.red/dreams/chronicle) · [The site](https://github.com/LuxiaSL/aethera) · [The vocabulary](https://github.com/LuxiaSL/apeiron)
 
-<img src="docs/images/stage.jpg" alt="dreams, live on its stage at aetherawi.red/dreams: the picture's edges fold outward into a hand-made stage of curtains and glittering floor." width="100%">
+<img src="docs/images/stage.jpg" alt="dreams, live on its stage at aetherawi.red/dreams: gem-coloured polyhedra in a pale fog, the picture's edges folding outward into curtains and a glittering floor." width="100%">
 
 </div>
 
@@ -88,6 +88,21 @@ structure. The detail is kept for two weeks. The strip, and one picture from eve
 scene, are kept for good.
 
 [**aetherawi.red/dreams/chronicle**](https://aetherawi.red/dreams/chronicle)
+
+## Gallery
+
+Frames from [aetherawi.red/dreams](https://aetherawi.red/dreams), on the stage.
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/gallery-iridescent.jpg" alt="Two iridescent, oil-slick forms, orange at the edges, hanging over a pale blue floor."></td>
+    <td width="50%"><img src="docs/images/gallery-red-cells.jpg" alt="A white membrane of cells, each with a dark red nucleus, cracked by fine black lines."></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/images/gallery-ink-cells.jpg" alt="The same membrane gone to black and white: ink-dark cells in a pale web."></td>
+    <td width="50%"><img src="docs/images/gallery-shards.jpg" alt="A dense heap of white shards and bones, mirrored into a near-symmetric pattern."></td>
+  </tr>
+</table>
 
 ## Run your own
 
